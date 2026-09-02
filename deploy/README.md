@@ -1,5 +1,27 @@
 # Deploying Shot Explorer
 
+**The short version:**
+
+```bash
+git clone https://github.com/Sosnowsky/fusion_ui.git /tmp/fusion-ui
+sudo SERVER_NAME=<host> CAMPUS_SUBNET=<subnet> bash /tmp/fusion-ui/deploy/install.sh
+```
+
+`install.sh` is every step below, in order and idempotent — re-run it after a
+`git pull` and it updates in place. It stops twice for you: to edit `.env`, and
+to set the shared password. Override any path on the command line
+(`APP_DIR`, `SRC_DIR`, `STATE_DIR`, `SERVICE_USER`, `REPO_URL`, `BRANCH`).
+
+To check a deployment at any time, from the server or a laptop:
+
+```bash
+bash deploy/verify.sh <host>
+```
+
+The rest of this file is what the script does, for when it goes wrong.
+
+---
+
 Every command here needs sudo and is run by the maintainer on the group server.
 The app itself never sees the password: nginx terminates TLS and basic auth, and
 Streamlit only listens on loopback.
@@ -100,11 +122,19 @@ A timeout instead means the campus firewall; those are different tickets.
 
 ## 7. Verify — including the websocket
 
-A plain `curl` proving the HTML arrives is **not** enough. If the proxy eats the
-`Upgrade` header, the page loads and then hangs forever with no error message.
-Test the websocket handshake explicitly:
+```bash
+bash deploy/verify.sh <host>
+```
+
+That runs the four checks below. The last one is the one that matters: a plain
+`curl` proving the HTML arrives is **not** enough, because if the proxy eats the
+`Upgrade` header the page loads and then hangs forever with no error message.
 
 ```bash
+curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8501/   # 200 — streamlit is up
+curl -sk -o /dev/null -w '%{http_code}' https://<host>/         # 401 — password enforced
+curl -sk -o /dev/null -w '%{http_code}' -u fusion:<password> https://<host>/   # 200
+
 curl -k -u fusion:<password> -i -N \
   -H "Connection: Upgrade" -H "Upgrade: websocket" \
   -H "Sec-WebSocket-Version: 13" \
