@@ -1,25 +1,26 @@
-"""Single shot -- frames, click-a-pixel time series, movie export, probes.
+"""Single shot: pick a shot, pick a plot, get the plot.
 
-Written directly against Streamlit and Plotly, deliberately before the
-``PlotSpec`` registry exists (phase 02): this page and the shot browser are
-the two real, different consumers the registry gets designed against, rather
-than one imagined one.
+This page knows nothing about any individual analysis. It resolves a
+:class:`~fusion_ui.core.registry.Target`, asks the registry what can be drawn
+for that diagnostic, renders the chosen spec's parameter panel, hands the whole
+lot to the store, and draws whatever comes back. Adding a plot is a new module
+in :mod:`fusion_ui.plots`; nothing here changes.
+
+What the page does own is the chrome every plot should have and none should
+have to write: the time-window caption, the figure container, the error surface
+for a failed run, and the provenance line -- because a result computed by last
+month's ``imaging_methods`` is the trap that makes people distrust the tool.
 """
 
-import math
 import os
 
-import numpy as np
-import plotly.graph_objects as go
 import streamlit as st
 
-from fusion_ui import config, ui
-from fusion_ui.core import catalog, decimate, loader, probes
+import fusion_ui.plots  # noqa: F401 - importing the package registers every spec
+from fusion_ui import ui
+from fusion_ui.core import catalog, loader, params_ui, registry, store
 
 st.set_page_config(page_title="Single shot · Shot Explorer", layout="wide")
-
-IMAGING = {"apd", "phantom"}
-PROBES = {"asp", "fsp"}
 
 
 # ---------------------------------------------------------------------------
@@ -76,12 +77,7 @@ def pick_shot_and_target(table):
     else:
         preprocessed = has_preprocessed
 
-    return {
-        "machine": str(row["machine"]),
-        "shot": int(shot),
-        "diagnostic": diagnostic,
-        "preprocessed": preprocessed,
-    }
+    return str(row["machine"]), int(shot), diagnostic, preprocessed
 
 
 def discharge_for_shot(shot):
@@ -91,293 +87,104 @@ def discharge_for_shot(shot):
     return catalog.load_discharges(path).get(shot)
 
 
-# ---------------------------------------------------------------------------
-# APD / phantom: frame view, click-a-pixel, movie export
-# ---------------------------------------------------------------------------
+def open_target(machine, shot, diagnostic, preprocessed):
+    """``(Target, dataset)`` -- the file, already restricted to its window.
 
-
-def frame_view(target, discharge):
-    path = loader.dataset_path(
-        target["machine"], target["shot"], target["diagnostic"], target["preprocessed"]
-    )
+    Imaging files are sliced to the discharge DB's ``t_start..t_end`` before
+    anything downstream sees them: they are ~500 MB over 583k samples, and no
+    view has a reason to touch the whole record. Probe files have no shared time
+    axis to slice on -- every quantity x position carries its own -- so they are
+    handed over whole and the probe adapter does the indexing.
+    """
+    path = loader.dataset_path(machine, shot, diagnostic, preprocessed)
     if not os.path.exists(path):
         st.error(f"File not found: `{path}`", icon="⚠️")
-        return
+        return None, None
     ds = loader.open_dataset(path)
 
-    t_start, t_end, source = loader.time_window(ds, discharge)
+    if loader.TIME_DIM in ds.dims:
+        t_start, t_end, source = loader.time_window(ds, discharge_for_shot(shot))
+        windowed = loader.sliced(ds, t_start, t_end)
+    else:
+        t_start = t_end = float("nan")
+        source = "none"
+        windowed = ds
+
+    target = registry.Target(
+        machine=machine,
+        shot=shot,
+        diagnostic=diagnostic,
+        preprocessed=preprocessed,
+        path=path,
+        t_start=t_start,
+        t_end=t_end,
+        window_source=source,
+    )
+    return target, windowed
+
+
+def window_caption(target):
+    if target.window_source == "none":
+        return
     st.caption(
-        f"Window {t_start:.4f}–{t_end:.4f} s — "
+        f"Window {target.t_start:.4f}–{target.t_end:.4f} s — "
         + (
             "from the discharge DB."
-            if source == "metadata"
+            if target.window_source == "metadata"
             else "no discharge-DB entry yet, showing a centred 0.2 s default."
         )
     )
 
-    times = loader.cached_frame_times(path, t_start, t_end)
-    if times.size == 0:
-        st.warning("No samples in this window.", icon="⚠️")
-        return
-    windowed = loader.sliced(ds, t_start, t_end)
 
-    state_key = (
-        f"frame_index_{target['machine']}_{target['shot']}_"
-        f"{target['diagnostic']}_{int(target['preprocessed'])}"
-    )
-    if times.size == 1:
-        index = 0
-    else:
-        jump_key = f"{state_key}_jump"
-
-        def _jump_to_nearest_frame():
-            # Only fires on an actual edit (Streamlit's on_change semantics),
-            # so it cannot fight the slider on an ordinary drag rerun.
-            st.session_state[state_key] = loader.nearest_index(
-                times, st.session_state[jump_key]
-            )
-
-        st.session_state.setdefault(state_key, times.size // 2)
-        slider_col, jump_col = st.columns([4, 1])
-        index = slider_col.slider("Frame", 0, times.size - 1, key=state_key)
-        jump_col.number_input(
-            "Jump to t [s]",
-            min_value=float(times[0]),
-            max_value=float(times[-1]),
-            value=float(times[index]),
-            format="%.6f",
-            key=jump_key,
-            on_change=_jump_to_nearest_frame,
-        )
-    st.caption(f"t = {times[index]:.6f} s · frame {index + 1} / {times.size}")
-
-    frame_da = loader.frame(windowed, index)
-    values = frame_da.values
-    r_grid, z_grid = loader.pixel_grid(windowed)
-    if r_grid is not None:
-        r_axis, z_axis = r_grid[0, :], z_grid[:, 0]
-        x_label, y_label = "R [cm]", "Z [cm]"
-    else:
-        r_axis, z_axis = np.arange(values.shape[1]), np.arange(values.shape[0])
-        x_label, y_label = "x", "y"
-
-    pixel_key = f"pixel_{target['machine']}_{target['shot']}_{target['diagnostic']}"
-    default_pixel = (values.shape[0] // 2, values.shape[1] // 2)
-    iy, ix = st.session_state.get(pixel_key, default_pixel)
-    iy = min(iy, values.shape[0] - 1)
-    ix = min(ix, values.shape[1] - 1)
-
-    fig = go.Figure(
-        go.Heatmap(
-            z=values,
-            x=r_axis,
-            y=z_axis,
-            colorscale="Plasma",
-            colorbar=dict(title="signal"),
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=[r_axis[ix]],
-            y=[z_axis[iy]],
-            mode="markers",
-            marker=dict(color="white", size=12, symbol="x", line=dict(width=2)),
-            showlegend=False,
-            hoverinfo="skip",
-        )
-    )
-    fig.update_layout(
-        xaxis_title=x_label,
-        yaxis_title=y_label,
-        height=420,
-        margin=dict(l=10, r=10, t=20, b=10),
-    )
-
-    event = st.plotly_chart(
-        fig, on_select="rerun", selection_mode="points", key=f"{pixel_key}_click"
-    )
-    points = event.selection["points"] if event else []
-    clicked = [p for p in points if p.get("curve_number", 0) == 0]
-    if clicked:
-        new_ix = int(np.argmin(np.abs(r_axis - clicked[0]["x"])))
-        new_iy = int(np.argmin(np.abs(z_axis - clicked[0]["y"])))
-        if (new_iy, new_ix) != (iy, ix):
-            st.session_state[pixel_key] = (new_iy, new_ix)
-            st.rerun()
-
-    location = (
-        f" (R={r_axis[ix]:.2f}, Z={z_axis[iy]:.2f})" if r_grid is not None else ""
-    )
-    st.caption(
-        f"Selected pixel: y={iy}, x={ix}{location} — click the frame to move it."
-    )
-
-    pixel_time, pixel_values = loader.pixel_series(windowed, iy, ix)
-    x_dec, y_dec = decimate.envelope(pixel_time, pixel_values)
-    trace_fig = go.Figure(go.Scatter(x=x_dec, y=y_dec, mode="lines"))
-    trace_fig.update_layout(
-        xaxis_title="time [s]",
-        yaxis_title="signal",
-        height=280,
-        margin=dict(l=10, r=10, t=20, b=10),
-    )
-    st.plotly_chart(trace_fig, use_container_width=True)
-    st.caption(
-        f"{pixel_time.size} samples in window, "
-        f"{x_dec.size} plotted after min/max-envelope decimation."
-    )
-
-    movie_export(windowed, times, target)
+# ---------------------------------------------------------------------------
+# Plot selection and the chrome around a result
+# ---------------------------------------------------------------------------
 
 
-def _movie_extent(r_grid, z_grid):
-    """``(r0, r1, z0, z1)`` for ``imshow(..., origin='lower')``, or ``None``."""
-    if r_grid is None:
+def pick_spec(diagnostic):
+    specs = registry.for_diagnostic(diagnostic)
+    if not specs:
+        st.error(f"No plot is registered for diagnostic {diagnostic!r}.", icon="⚠️")
         return None
-    return (
-        float(r_grid[0, 0]),
-        float(r_grid[0, -1]),
-        float(z_grid[0, 0]),
-        float(z_grid[-1, 0]),
+    spec = st.sidebar.selectbox(
+        "Plot", specs, format_func=lambda s: s.label, key=f"spec.{diagnostic}"
     )
+    if spec.description:
+        st.sidebar.caption(spec.description)
+    return spec
 
 
-def render_movie(ds, stride, fps, target):
-    import matplotlib
+def provenance(run, conn):
+    """What produced this figure, and the button to do it again.
 
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib import animation
-
-    n_total = ds.sizes[loader.TIME_DIM]
-    indices = list(range(0, n_total, stride))
-    times = ds[loader.TIME_DIM].values
-    r_grid, z_grid = loader.pixel_grid(ds)
-    extent = _movie_extent(r_grid, z_grid)
-
-    first = loader.frame(ds, indices[0]).values
-    vmin, vmax = float(np.nanmin(first)), float(np.nanmax(first))
-
-    fig, ax = plt.subplots(figsize=(4, 4))
-    im = ax.imshow(
-        first, origin="lower", cmap="plasma", vmin=vmin, vmax=vmax, extent=extent
-    )
-    title = ax.set_title(f"t = {times[indices[0]]:.5f} s")
-    ax.set_xticks([])
-    ax.set_yticks([])
-    fig.colorbar(im, ax=ax)
-
-    def update(i):
-        idx = indices[i]
-        im.set_data(loader.frame(ds, idx).values)
-        title.set_text(f"t = {times[idx]:.5f} s")
-        return im, title
-
-    animation_obj = animation.FuncAnimation(fig, update, frames=len(indices))
-
-    out_dir = os.path.join(config.CACHE_DIR, "movies")
-    os.makedirs(out_dir, exist_ok=True)
-    suffix = "_preprocessed" if target["preprocessed"] else ""
-    out_path = os.path.join(
-        out_dir,
-        f"{target['machine']}_{target['shot']}_{target['diagnostic']}{suffix}.mp4",
-    )
-    animation_obj.save(out_path, writer="ffmpeg", fps=fps)
-    plt.close(fig)
-    return out_path
-
-
-def movie_export(windowed, times, target):
-    with st.expander("Movie export"):
-        max_frames = st.number_input(
-            "Max frames",
-            min_value=20,
-            max_value=2000,
-            value=300,
-            step=20,
-            help="The window is strided down to stay under this frame count.",
-        )
-        fps = st.number_input("Frames per second", min_value=1, max_value=60, value=20)
-        stride = max(1, math.ceil(times.size / max_frames))
-        n_frames = math.ceil(times.size / stride)
-        st.caption(
-            f"{times.size} frames in the window → stride {stride} → "
-            f"{n_frames} frames, {n_frames / fps:.1f} s of video at {fps} fps."
-        )
-        if st.button(
-            "Render movie", key=f"render_{target['shot']}_{target['diagnostic']}"
-        ):
-            with st.spinner("Rendering…"):
-                try:
-                    out_path = render_movie(windowed, stride, fps, target)
-                except Exception as error:  # noqa: BLE001 - surfaced to the user
-                    st.error(f"Movie export failed: {error}", icon="⚠️")
-                else:
-                    st.video(out_path)
-
-
-# ---------------------------------------------------------------------------
-# ASP / FSP: the ragged probe adapter
-# ---------------------------------------------------------------------------
-
-
-def probe_view(target):
-    path = loader.dataset_path(
-        target["machine"], target["shot"], target["diagnostic"], target["preprocessed"]
-    )
-    if not os.path.exists(path):
-        st.error(f"File not found: `{path}`", icon="⚠️")
+    ``code_version`` is stored but deliberately not part of the cache key --
+    hashing it would invalidate every result on every commit. Showing it, and
+    offering Recompute next to it, leaves the judgement with the person looking
+    at the plot.
+    """
+    if run is None:
         return
-    ds = loader.open_dataset(path)
-
-    available = probes.quantities_and_positions(ds)
-    if not available:
-        st.warning("No probe quantities found in this file.", icon="⚠️")
-        return
-
-    left, right = st.columns(2)
-    quantity = left.selectbox("Quantity", list(available))
-    position = right.selectbox("Probe position", available[quantity])
-
-    trace = probes.load_trace(ds, quantity, position)
-    x_dec, y_dec = decimate.envelope(trace.time, trace.value)
-
-    fig = go.Figure(go.Scatter(x=x_dec, y=y_dec, mode="lines"))
-    fig.update_layout(
-        xaxis_title="time [s]",
-        yaxis_title=f"{quantity}_{position}",
-        height=380,
-        margin=dict(l=10, r=10, t=20, b=10),
+    left, right = st.columns([5, 1])
+    elapsed = f" in {run['seconds']:.1f} s" if run["seconds"] is not None else ""
+    left.caption(
+        f"Computed {run['created_at']}{elapsed} · "
+        f"{run['code_version'] or 'version unknown'} · "
+        f"params `{run['params_hash'][:12]}`"
     )
-    st.plotly_chart(fig, use_container_width=True)
+    if right.button("Recompute", key=f"recompute.{run['id']}"):
+        store.delete_run(conn, run)
+        st.rerun()
+
+
+def show_failure(run, conn):
+    st.error(run["error"], icon="⚠️")
     st.caption(
-        f"{trace.time.size} samples on this position's own time base, "
-        f"{x_dec.size} plotted after min/max-envelope decimation."
+        f"Failed {run['created_at']} · {run['code_version'] or 'version unknown'}. "
+        "The failure is recorded, so this will not retry on its own."
     )
-
-    if trace.rho is not None:
-        with st.expander("Flux coordinate ρ for this position"):
-            st.caption(
-                "ρ is computed on its own, coarser time base -- not a resampling "
-                "of the trace above."
-            )
-            rho_x, rho_y = decimate.envelope(trace.rho_time, trace.rho)
-            rho_fig = go.Figure(go.Scatter(x=rho_x, y=rho_y, mode="lines"))
-            rho_fig.update_layout(
-                xaxis_title="time [s]",
-                yaxis_title="ρ",
-                height=280,
-                margin=dict(l=10, r=10, t=20, b=10),
-            )
-            st.plotly_chart(rho_fig, use_container_width=True)
-
-    geometry = probes.probe_geometry(ds)
-    if geometry["probe_type"]:
-        origin = geometry["probe_origin"]
-        st.caption(
-            f"{geometry['probe_type']}"
-            + (f" · origin {origin}" if origin is not None else "")
-        )
+    if st.button("Retry", key=f"retry.{run['id']}"):
+        store.delete_run(conn, run)
+        st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -397,16 +204,41 @@ def main():
         )
         return
 
-    target = pick_shot_and_target(table)
+    picked = pick_shot_and_target(table)
+    if picked is None:
+        return
+
+    target, ds = open_target(*picked)
     if target is None:
         return
 
-    if target["diagnostic"] in IMAGING:
-        frame_view(target, discharge_for_shot(target["shot"]))
-    elif target["diagnostic"] in PROBES:
-        probe_view(target)
-    else:
-        st.error(f"No viewer for diagnostic {target['diagnostic']!r}.", icon="⚠️")
+    spec = pick_spec(target.diagnostic)
+    if spec is None:
+        return
+
+    window_caption(target)
+
+    params, ready = params_ui.panel(spec, target, ds=ds)
+    if not ready:
+        st.info(
+            f"Press **Compute** in the sidebar to run {spec.label.lower()} on "
+            f"{target.label}.",
+            icon="▶️",
+        )
+        return
+
+    conn = ui.get_connection()
+    with st.spinner(f"Computing {spec.label.lower()}…" if spec.cached else ""):
+        result, run = store.result(conn, spec, target, params, ds)
+
+    if run is not None and run["status"] == "failed":
+        show_failure(run, conn)
+        return
+
+    figure = spec.render(result, params, target)
+    if figure is not None:
+        st.plotly_chart(figure, use_container_width=True)
+    provenance(run, conn)
 
 
 main()

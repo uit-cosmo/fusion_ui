@@ -21,10 +21,61 @@ the analysis code in [`imaging_methods`](https://github.com/Sosnowsky/imaging-me
 
 ## Status
 
-Phase 00 is in: the config module, the SQLite schema, the `rescan` catalog job,
-the shot browser and the deployment path. The single-shot and multi-shot views
-land in phases 01 and 04. See [`docs/PLAN.md`](docs/PLAN.md) for the
+Phases 00-02 are in: the config module, the SQLite schema, the `rescan` catalog
+job, the shot browser, the single-shot view, and the plot registry that view is
+built on — parameter forms generated from a dataclass, a content-addressed
+result cache, and the scalar store the multi-shot view will read. The
+multi-shot view lands in phase 04. See [`docs/PLAN.md`](docs/PLAN.md) for the
 architecture, the database schema, and the phase order.
+
+## Adding a plot
+
+One file in `fusion_ui/plots/`, one line in its `__init__.py`. No page changes,
+no new storage, and it appears in the single-shot view immediately.
+
+```python
+from dataclasses import dataclass
+import plotly.graph_objects as go
+import xarray as xr
+from fusion_ui.core import registry
+
+
+@dataclass
+class MyParams:
+    """
+    threshold: What counts as an event, in standard deviations.
+    """
+    threshold: float = 2.5
+
+
+def compute(ds, params):          # -> xr.Dataset. Cached; omit for a live view.
+    return xr.Dataset({"y": ("t", ...)})
+
+
+def render(result, params, target):   # -> go.Figure, or draw and return None
+    return go.Figure(go.Scatter(y=result["y"].values))
+
+
+def scalars(result):              # -> {name: value} or {(x, y, name): value}
+    return {"my_number": float(result["y"].mean())}
+
+
+SPEC = registry.register(
+    registry.PlotSpec(
+        key="my_plot",            # permanent: it is part of the cache key
+        label="My plot",
+        diagnostics=("apd",),
+        params=MyParams,
+        render=render,
+        compute=compute,
+        scalars=scalars,
+    )
+)
+```
+
+The parameter form, the cache key, the netCDF blob, the run ledger and the
+scalar rows all follow from that. The rules the contract depends on are in
+[`CLAUDE.md`](CLAUDE.md).
 
 ## Development
 
@@ -45,9 +96,10 @@ cp .env.example .env          # then edit for your machine
 ## Commands
 
 ```bash
-fusion-ui init-db    # create or migrate the app's SQLite database
-fusion-ui rescan     # index the data tree into the `shots` table (cron this)
-fusion-ui status     # resolved paths and index counts — run after deploying
+fusion-ui init-db          # create or migrate the app's SQLite database
+fusion-ui rescan           # index the data tree into `shots` (cron this)
+fusion-ui import-results   # seed `scalars` from density_scan/results.json (once)
+fusion-ui status           # resolved paths, index and result counts
 ```
 
 New shots appear in the browser only after a rescan; the server runs it on cron

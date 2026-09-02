@@ -78,7 +78,8 @@ def main():
 Point-and-click access to the group's fusion diagnostic data.
 
 - **Shot browser** — every shot on disk, joined to the discharge metadata.
-- **Single shot** — frames, time series, velocity fields, movies. *(phase 01)*
+- **Single shot** — pick a plot and its parameters; frames and pixel traces,
+  probe traces, duration times, movies.
 - **Multi shot** — a scalar against shot number, f_GW or line-averaged density. *(phase 04)*
 
 The discharge database is read-only here and stays hand-curated; shots with

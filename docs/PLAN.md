@@ -215,7 +215,7 @@ APIs rather than reaching into scripts.
 Ordered so something usable is deployed at the end of the first phase, and each
 later phase adds a view without reworking the last.
 
-### Phase 00 — Skeleton, deployed (1–2 days)
+### Phase 00 — Skeleton, deployed (1–2 days) — **done**
 
 *Schema: Opus 5, in plan mode. Scaffolding: Sonnet 5. Deployment steps: you.*
 
@@ -228,7 +228,7 @@ files but no metadata. Then the full deployment path — systemd, nginx, passwor
 
 **Ships: a URL the group can already open.**
 
-### Phase 01 — Raw data browser (2–3 days)
+### Phase 01 — Raw data browser (2–3 days) — **done**
 
 *Sonnet 5, except `core/probes.py` — Opus 5.*
 
@@ -240,7 +240,7 @@ consumers rather than one imagined one.
 
 **Ships: the view people will use daily.**
 
-### Phase 02 — Registry, parameter forms, result store (2–3 days)
+### Phase 02 — Registry, parameter forms, result store (2–3 days) — **done**
 
 *Opus 5, in plan mode.*
 
@@ -251,7 +251,36 @@ views onto it and delete the bespoke wiring. Import
 multi-shot view has data before any heavy compute runs.
 
 **Ships: adding a plot becomes a one-file job.**
-**On landing: write the `PlotSpec` contract into `CLAUDE.md`.**
+**On landing: write the `PlotSpec` contract into `CLAUDE.md`.** — done; it is
+the section of that file phase 03 should read first.
+
+Four things came out differently from the sketch above, all deliberate:
+
+- **`render` may draw, and `compute` is optional.** `render(result, params,
+  target) -> go.Figure | None`; returning `None` means it drew into Streamlit
+  itself. `compute is None` marks a *live* spec whose result is the time-sliced
+  dataset — no run row, no blob. Without this the frame viewer, with its
+  slider, click target, movie expander and two figures, could not have been a
+  spec at all, and the registry would have been designed against one imagined
+  consumer instead of the two real ones phase 01 was written to provide.
+- **Diagnostics are strings, not `Diagnostic` members.** Every other part of the
+  app already used the string (`catalog.DIAGNOSTICS`, `shots.diagnostic`,
+  `loader.dataset_path`); the enum stays inside `loader`.
+- **The params hash includes the plot key.** `param_sets.hash` is the primary
+  key while `plot` is an ordinary column, so two plots sharing a default
+  parameter set — easy, since several will use bare `TwoDcaParams()` — would
+  have collided on it.
+- **Schema v2 adds `runs.preprocessed`.** The original UNIQUE key could not tell
+  a result computed from the raw file from one computed from the preprocessed
+  one, so the second silently returned the first's cached result under its own
+  label. Caught by a test before any real data was written.
+
+Phase 02 also shipped one real cached analysis rather than infrastructure alone:
+`plots/spectra.py`, the PSD duration-time fit ported from
+`density_scan/utils.py:get_taud_from_psd`. It reproduces the stored value for
+shot 1160616027 at pixel (6, 6) exactly — `1.9861501630052958e-05` from both —
+which is the end-to-end proof that params → compute → blob → scalars works, and
+it is the file phase 03's ports should be copied from.
 
 ### Phase 03 — Velocity and conditional averaging (1 week)
 

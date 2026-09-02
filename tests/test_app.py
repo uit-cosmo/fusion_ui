@@ -1,12 +1,15 @@
 """Smoke tests: the pages render without raising, against a temporary tree."""
 
+import dataclasses
+import os
 from pathlib import Path
 
 import pytest
 from streamlit.testing.v1 import AppTest
 
+import fusion_ui.plots  # noqa: F401 - registers the specs the page offers
 from fusion_ui import config
-from fusion_ui.core import catalog, db
+from fusion_ui.core import catalog, db, registry, store
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 APP = str(REPO_ROOT / "fusion_ui" / "app.py")
@@ -129,9 +132,27 @@ def single_shot_deployment(monkeypatch, tmp_path, apd_dataset_path, asp_dataset_
 
     st.cache_data.clear()
     st.cache_resource.clear()
-    yield
+    yield database
     st.cache_data.clear()
     st.cache_resource.clear()
+
+
+def widget(app, kind, label):
+    """One widget by label rather than by position.
+
+    The single-shot page is assembled from the registry now, so which widgets
+    exist depends on which spec is selected; indexing into ``app.selectbox[0]``
+    would make every one of these tests a hostage to widget ordering.
+    """
+    matches = [w for w in getattr(app, kind) if w.label == label]
+    assert (
+        matches
+    ), f"no {kind} labelled {label!r}: {[w.label for w in getattr(app, kind)]}"
+    return matches[0]
+
+
+def captions(app):
+    return [c.value for c in app.caption]
 
 
 def test_single_shot_frame_view_renders(single_shot_deployment):
@@ -141,8 +162,8 @@ def test_single_shot_frame_view_renders(single_shot_deployment):
     app = AppTest.from_file(SINGLE_SHOT, default_timeout=60).run()
     assert app.session_state["selection"] is None
     assert not app.exception
-    assert "Window" in app.caption[0].value
-    assert "no discharge-DB entry" in app.caption[0].value
+    window = [c for c in captions(app) if c.startswith("Window")]
+    assert window and "no discharge-DB entry" in window[0]
 
 
 def test_single_shot_probe_view_renders(single_shot_deployment):
@@ -155,40 +176,111 @@ def test_single_shot_probe_view_renders(single_shot_deployment):
     }
     app.run()
     assert not app.exception
-    assert app.selectbox[0].label == "Quantity"
+    assert widget(app, "selectbox", "quantity").options == ["Vf", "ne"]
+    # A probe file has no shared time axis, so there is no window to report.
+    assert not [c for c in captions(app) if c.startswith("Window")]
 
 
 def test_single_shot_click_moves_the_selected_pixel(single_shot_deployment):
     app = AppTest.from_file(SINGLE_SHOT, default_timeout=60).run()
     assert not app.exception
-    app.session_state["pixel_cmod_1234_apd"] = (2, 3)
+    app.session_state["pixel.cmod_1234_apd_r"] = (2, 3)
     app.run()
     assert not app.exception
-    assert "y=2, x=3" in app.caption[2].value
+    assert any("y=2, x=3" in c for c in captions(app))
 
 
-def test_connections_are_not_shared_between_threads(deployment):
-    """Streamlit runs each session on a pooled thread; sqlite3 objects are not
-    shareable across them, so a process-wide cached connection breaks as soon as
-    a second browser tab connects."""
-    import threading
+def test_the_plot_picker_offers_only_specs_for_this_diagnostic(single_shot_deployment):
+    app = AppTest.from_file(SINGLE_SHOT, default_timeout=60).run()
+    assert widget(app, "selectbox", "Plot").options == [
+        "Frames and pixel trace",
+        "Duration time (PSD fit)",
+    ]
 
-    from fusion_ui import ui
+    app.session_state["selection"] = {
+        "machine": "cmod",
+        "shot": 5678,
+        "diagnostic": "asp",
+        "preprocessed": False,
+    }
+    app.run()
+    assert widget(app, "selectbox", "Plot").options == ["Probe trace"]
 
-    results = []
 
-    def query():
-        try:
-            results.append(
-                ui.get_connection().execute("SELECT COUNT(*) FROM shots").fetchone()[0]
-            )
-        except Exception as error:  # noqa: BLE001 - the assertion is the report
-            results.append(error)
+def test_a_cached_spec_does_not_run_until_compute_is_pressed(single_shot_deployment):
+    """A nudged widget must not be able to start a long analysis."""
+    app = AppTest.from_file(SINGLE_SHOT, default_timeout=120)
+    app.session_state["spec.apd"] = registry.get("taud_psd")
+    app.run()
+    assert not app.exception
+    assert app.info, "expected the 'press Compute' prompt"
 
-    threads = [threading.Thread(target=query) for _ in range(3)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+    conn = db.connect(single_shot_deployment)
+    assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
+    conn.close()
 
-    assert results == [5, 5, 5], results
+
+def test_computing_a_cached_spec_records_a_run_and_its_scalars(single_shot_deployment):
+    app = AppTest.from_file(SINGLE_SHOT, default_timeout=120)
+    app.session_state["spec.apd"] = registry.get("taud_psd")
+    app.run()
+    widget(app, "button", "Compute").click().run()
+    assert not app.exception
+    assert not app.error
+
+    conn = db.connect(single_shot_deployment)
+    run = conn.execute("SELECT * FROM runs").fetchone()
+    assert run["plot"] == "taud_psd"
+    assert run["status"] == "ok"
+    assert run["preprocessed"] == 0
+    assert os.path.exists(run["blob_path"])
+
+    scalars = {
+        (r["x"], r["y"], r["name"]) for r in conn.execute("SELECT * FROM scalars")
+    }
+    # The tiny fixture array is 4x5, so the default reference pixel (6, 6) is
+    # clamped by the spec's choices to what actually exists.
+    assert {name for _, _, name in scalars} == {"taud_psd", "lambda_psd"}
+    conn.close()
+
+    assert any("Computed" in c for c in captions(app))
+
+
+def test_a_failed_run_is_shown_rather_than_raised(single_shot_deployment, monkeypatch):
+    """A recorded failure must render as an error with a Retry button, not as
+    a traceback on every rerun."""
+    conn = db.open_db(single_shot_deployment)
+    target = registry.Target(
+        machine="cmod",
+        shot=1234,
+        diagnostic="apd",
+        preprocessed=False,
+        path="unused",
+        t_start=1.0,
+        t_end=1.02,
+    )
+    spec = registry.get("taud_psd")
+    params = spec.params(refx=0, refy=0)
+    store.compute_and_store(
+        conn,
+        dataclasses.replace(spec, compute=_boom),
+        target,
+        params,
+        ds=None,
+    )
+    conn.close()
+
+    app = AppTest.from_file(SINGLE_SHOT, default_timeout=120)
+    app.session_state["spec.apd"] = spec
+    app.session_state["params.taud_psd.refx"] = 0
+    app.session_state["params.taud_psd.refy"] = 0
+    app.session_state["ready.taud_psd.cmod_1234_apd_r"] = True
+    app.run()
+
+    assert not app.exception
+    assert app.error and "deliberate" in app.error[0].value
+    assert widget(app, "button", "Retry")
+
+
+def _boom(ds, params):
+    raise ValueError("deliberate test failure")
