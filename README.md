@@ -21,19 +21,45 @@ the analysis code in [`imaging_methods`](https://github.com/Sosnowsky/imaging-me
 
 ## Status
 
-Under construction. See [`docs/PLAN.md`](docs/PLAN.md) for the architecture,
-the database schema, and the phase order.
+Phase 00 is in: the config module, the SQLite schema, the `rescan` catalog job,
+the shot browser and the deployment path. The single-shot and multi-shot views
+land in phases 01 and 04. See [`docs/PLAN.md`](docs/PLAN.md) for the
+architecture, the database schema, and the phase order.
 
 ## Development
 
 ```bash
 python -m venv .venv
+# imaging_methods, experimental_database, fusion_scripts, velocity_estimation
+# and fppanalysis are not on PyPI — install each editable from its checkout
+# first, then the pinned versions below are already satisfied.
+.venv/bin/pip install -e ../imaging-methods -e ../experimental_database \
+  -e ../fusion_scripts -e ../velocity-estimation -e ../fpp-analysis-tools
 .venv/bin/pip install -e ".[dev]"
 cp .env.example .env          # then edit for your machine
+.venv/bin/fusion-ui init-db
+.venv/bin/fusion-ui rescan    # index the data tree
 .venv/bin/streamlit run fusion_ui/app.py
 ```
 
-`imaging_methods` is not on PyPI — install it editable from a local checkout.
+## Commands
+
+```bash
+fusion-ui init-db    # create or migrate the app's SQLite database
+fusion-ui rescan     # index the data tree into the `shots` table (cron this)
+fusion-ui status     # resolved paths and index counts — run after deploying
+```
+
+New shots appear in the browser only after a rescan; the server runs it on cron
+and the browser page has a button for it.
+
+## Tests
+
+```bash
+.venv/bin/pytest
+```
+
+The suite uses a temporary tree of empty files and never touches the real data.
 
 ## Deployment
 

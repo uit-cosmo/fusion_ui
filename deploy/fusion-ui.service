@@ -1,0 +1,35 @@
+# /etc/systemd/system/fusion-ui.service
+#
+# Streamlit bound to loopback only: nginx is the only thing that talks to it,
+# and the shared password lives there, so an unauthenticated request never
+# reaches Python at all.
+
+[Unit]
+Description=Shot Explorer (fusion_ui)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fusionui
+Group=fusionui
+WorkingDirectory=/opt/fusion-ui
+Environment=PYTHONUNBUFFERED=1
+# Machine-specific paths come from /opt/fusion-ui/.env, read by fusion_ui.config.
+# Anything set here would override that file, so keep this list empty.
+ExecStart=/opt/fusion-ui/.venv/bin/streamlit run fusion_ui/app.py \
+  --server.port 8501 --server.address 127.0.0.1 \
+  --server.headless true --browser.gatherUsageStats false \
+  --server.fileWatcherType none
+Restart=on-failure
+RestartSec=5
+
+# The service reads the data tree and writes only its own state.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/hdd1/fusion_ui
+
+[Install]
+WantedBy=multi-user.target
