@@ -56,9 +56,55 @@ The installer chowns it to the service user (editable installs write `.egg-info`
 into the source tree) and skips the clone. The same applies to any dependency
 whose `git pull` fails: the checkout on disk is what gets installed.
 
-The durable fix is a **read-only deploy key** on the server for that repository —
-add the server's `~/.ssh/id_ed25519.pub` under the repo's Settings → Deploy keys,
-set `REPO_URL` style SSH remotes, and updates work like every other dependency.
+The durable fix is a **read-only deploy key**, below. Set that up once and the
+installer updates this dependency like every other one.
+
+### Deploy key for a private dependency
+
+The key belongs to the user that does the cloning — the service user, not you.
+
+```bash
+# 1. A key for this server, no passphrase (nothing interactive can unlock it)
+sudo -u fusionui -H ssh-keygen -t ed25519 -N "" -C "fusion-ui@$(hostname -f)" \
+  -f /var/lib/fusionui/.ssh/id_ed25519
+sudo -u fusionui -H cat /var/lib/fusionui/.ssh/id_ed25519.pub
+```
+
+2. On GitHub: the repository → **Settings → Deploy keys → Add deploy key**.
+   Paste the public key, title it after the server, and **leave "Allow write
+   access" unchecked**. A deploy key grants access to exactly one repository, and
+   GitHub refuses to reuse the same key on a second one — if another dependency
+   turns out to be private too, generate a second key for it.
+
+```bash
+# 3. Trust github.com, so a clone from cron never waits on a prompt
+sudo -u fusionui -H sh -c 'ssh-keyscan github.com >> ~/.ssh/known_hosts'
+```
+
+Compare what that recorded against the fingerprints GitHub publishes at
+<https://docs.github.com/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints>
+before relying on it:
+
+```bash
+sudo -u fusionui -H ssh-keygen -lf /var/lib/fusionui/.ssh/known_hosts
+```
+
+```bash
+# 4. Send just this one repository over SSH, leaving the committed https URL alone
+sudo -u fusionui -H git config --global \
+  url."git@github.com:uit-cosmo/experimental_database.git".insteadOf \
+  "https://github.com/uit-cosmo/experimental_database.git"
+
+# 5. Check it
+sudo -u fusionui -H git ls-remote https://github.com/uit-cosmo/experimental_database.git >/dev/null \
+  && echo "deploy key works"
+```
+
+Step 4 is why `install.sh` needs no edit: the machine-specific credential lives
+in the service user's git config, and the URL in the script stays the public
+https one. If `/opt/src/experimental_database` was copied in by hand earlier,
+delete it so the next run clones properly — or just point its remote at the
+SSH URL and leave it.
 
 ## 2. Environment
 
