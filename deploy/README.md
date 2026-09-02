@@ -71,6 +71,16 @@ to reuse a key across repositories. So repeat this per private repo, with a
 different `-f` filename each time. If that becomes more than two or three, use a
 machine user or a fine-grained token with read access to all of them instead.
 
+`deploy/add-deploy-key.sh` does all of the below for one repository:
+
+```bash
+sudo bash deploy/add-deploy-key.sh https://github.com/uit-cosmo/experimental_database.git
+```
+
+It generates the key, wires up the ssh alias and the `insteadOf` rule, prints
+the public key with the URL to paste it at, and verifies access afterwards.
+Run it once per private repository. The rest of this section is what it does.
+
 The key belongs to the user that does the cloning — the service user, not you.
 
 ```bash
