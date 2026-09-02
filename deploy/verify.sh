@@ -38,13 +38,19 @@ check "https page"           "200" "$(http_code -u "$USER_NAME:$PASSWORD" "https
 check "password required"    "401" "$(http_code "https://$HOST/")"
 
 # 101 Switching Protocols, or the page loads and then hangs with no error.
-handshake=$(curl -sk -i -N --max-time 10 \
+# A successful upgrade leaves the connection open, so `head -1` closes the pipe
+# and curl dies of SIGPIPE. Under pipefail that non-zero status must not be
+# read as a failed check -- swallow it inside the pipeline, and let an empty
+# result stand for "no answer" instead.
+handshake=$({ curl -sk -i -N --max-time 10 \
   -u "$USER_NAME:$PASSWORD" \
   --http1.1 \
   -H "Connection: Upgrade" -H "Upgrade: websocket" \
   -H "Sec-WebSocket-Version: 13" \
   -H "Sec-WebSocket-Key: $(openssl rand -base64 16)" \
-  "https://$HOST/_stcore/stream" 2>/dev/null | head -1 | grep -oE '[0-9]{3}' || echo 000)
+  "https://$HOST/_stcore/stream" 2>/dev/null || true; } |
+  head -1 | grep -oE '[0-9]{3}' | head -1)
+handshake=${handshake:-000}
 check "websocket handshake"  "101" "$handshake"
 
 echo
