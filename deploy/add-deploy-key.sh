@@ -28,6 +28,10 @@ HOME_DIR=$(getent passwd "$SERVICE_USER" | cut -d: -f6)
 KEY="$HOME_DIR/.ssh/id_$(tr -c 'a-zA-Z0-9' '_' <<<"$REPO" | sed 's/_*$//')"
 
 run() { sudo -u "$SERVICE_USER" -H "$@"; }
+# sudo drops the environment, so anything git needs has to ride along
+# inside the command rather than being exported by the caller.
+run_git() { run env GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="ssh -o BatchMode=yes" \
+  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.version GIT_CONFIG_VALUE_0=HTTP/1.1 git "$@"; }
 
 if [[ -f "$KEY" ]]; then
   echo "Key already exists: $KEY"
@@ -77,7 +81,7 @@ run cat "$KEY.pub"
 echo
 read -rp "Press enter once the key is added … "
 
-if GIT_TERMINAL_PROMPT=0 run git ls-remote "https://github.com/$SLUG.git" >/dev/null 2>&1; then
+if run_git ls-remote "https://github.com/$SLUG.git" >/dev/null 2>&1; then
   echo "OK — $SERVICE_USER can now read $SLUG."
 else
   echo "Still no access to $SLUG." >&2

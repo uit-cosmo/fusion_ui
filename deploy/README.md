@@ -51,17 +51,34 @@ at all — `fusion_ui` itself, `imaging-methods`, `velocity-estimation` and
 `fpp-analysis-tools`. Only **`experimental_database`** and **`fusion_scripts`**
 are private, so those are the only two that need a deploy key or a hand copy.
 
-If a *public* one prompts for a username, the problem is not access. Check what
-git on the server is being told to do:
+If a *public* one prompts for a username, the problem is not access.
+
+The cause seen on this server is a git bug, not a permission: **git 2.43 built
+against a GnuTLS curl gets a spurious `401 Basic realm="GitHub"` on the
+protocol-v2 `POST /git-upload-pack`**, because it re-uses the multiplexed
+HTTP/2 connection left over from the ref advertisement. The first request
+returns 200 and the second returns 401, so an anonymous clone of a public
+repository turns into a credential prompt. `install.sh` pins `http.version` to
+HTTP/1.1 to avoid it. To confirm you are looking at this and not something else:
+
+```bash
+sudo -u fusionui -H env GIT_TERMINAL_PROMPT=0 \
+  git ls-remote https://github.com/uit-cosmo/velocity-estimation.git   # 401
+sudo -u fusionui -H env GIT_TERMINAL_PROMPT=0 \
+  git -c http.version=HTTP/1.1 \
+  ls-remote https://github.com/uit-cosmo/velocity-estimation.git       # works
+```
+
+If the second one fails too, then it really is configuration — look for an
+`insteadOf` line that catches more than its own repository:
 
 ```bash
 sudo -u fusionui -H git config --list --show-origin | grep -iE 'url\.|insteadof|credential'
-sudo -u fusionui -H env GIT_TERMINAL_PROMPT=0 \
-  git ls-remote https://github.com/uit-cosmo/velocity-estimation.git >/dev/null && echo ok
 ```
 
-A stale `insteadOf` line pointing a public repository at SSH is the usual cause;
-so is running a copy of `install.sh` from before it set `GIT_TERMINAL_PROMPT=0`.
+Note that `sudo` does not forward the environment: `GIT_TERMINAL_PROMPT=0 sudo -u
+fusionui git …` silently loses the variable, which is why every git call in
+these scripts goes through `sudo -u … env VAR=… git`.
 
 `experimental_database` is private and the server has no credentials for it.
 Copy it in before running the installer — a directory already present in
@@ -81,9 +98,9 @@ installer updates this dependency like every other one.
 
 ### Deploy keys for private repositories
 
-Anything private — the app repo itself included — needs a key, because the
-service user has no GitHub credentials and `install.sh` never prompts for any
-(`GIT_TERMINAL_PROMPT=0`). GitHub has not accepted account passwords for git
+The two private repositories need a key, because the service user has no
+GitHub credentials and `install.sh` never prompts for any
+(`GIT_TERMINAL_PROMPT=0`). `fusion_ui` itself is public and needs none. GitHub has not accepted account passwords for git
 since 2021, so a prompt would be a dead end regardless.
 
 **One deploy key grants access to exactly one repository**, and GitHub refuses
@@ -146,22 +163,26 @@ https one. If `/opt/src/experimental_database` was copied in by hand earlier,
 delete it so the next run clones properly — or just point its remote at the
 SSH URL and leave it.
 
-For a **second** private repo, generate a second key and add its own
-`insteadOf` line, plus a `Host` alias so ssh picks the right key:
+For the **second** private repo, `fusion_scripts`, generate a second key and add
+its own `insteadOf` line, plus a `Host` alias so ssh picks the right key:
 
 ```bash
-sudo -u fusionui -H ssh-keygen -t ed25519 -N "" -f /var/lib/fusionui/.ssh/id_fusion_ui
+sudo -u fusionui -H ssh-keygen -t ed25519 -N "" -f /var/lib/fusionui/.ssh/id_fusion_scripts
 sudo -u fusionui -H tee -a /var/lib/fusionui/.ssh/config >/dev/null <<'EOF'
-Host github-fusion_ui
+Host github-fusion_scripts
     HostName github.com
     User git
-    IdentityFile ~/.ssh/id_fusion_ui
+    IdentityFile ~/.ssh/id_fusion_scripts
     IdentitiesOnly yes
 EOF
 sudo -u fusionui -H git config --global \
-  url."github-fusion_ui:uit-cosmo/fusion_ui.git".insteadOf \
-  "https://github.com/uit-cosmo/fusion_ui.git"
+  url."github-fusion_scripts:Sosnowsky/fusion_scripts.git".insteadOf \
+  "https://github.com/Sosnowsky/fusion_scripts.git"
 ```
+
+Rewriting to a bare `git@github.com:…` instead of a `Host` alias, as step 4
+above does for the first repo, works only while there is exactly one key — it
+uses the default identity. Prefer the alias form for both.
 
 Without `IdentitiesOnly yes` ssh offers every key it has and GitHub answers with
 whichever repository the *first accepted* key belongs to — which is how a deploy

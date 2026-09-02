@@ -21,6 +21,27 @@ set -euo pipefail
 export GIT_TERMINAL_PROMPT=0
 export GIT_SSH_COMMAND="ssh -o BatchMode=yes"
 
+# git 2.43 against a curl built on GnuTLS gets a spurious "401 Basic realm"
+# from GitHub on the protocol-v2 POST to /git-upload-pack when it re-uses the
+# multiplexed HTTP/2 connection from the ref advertisement -- which turns a
+# public, anonymous clone into a credential prompt. Pinning the transport to
+# HTTP/1.1 avoids it and keeps protocol v2. Passed as GIT_CONFIG_* rather than
+# a config file so it applies to every git call here and changes nothing
+# permanent on the host.
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0=http.version
+export GIT_CONFIG_VALUE_0=HTTP/1.1
+
+# sudo does not forward the environment, so the variables above have to be
+# handed to git explicitly or they are silently lost.
+GIT_ENV=(
+  GIT_TERMINAL_PROMPT="$GIT_TERMINAL_PROMPT"
+  GIT_SSH_COMMAND="$GIT_SSH_COMMAND"
+  GIT_CONFIG_COUNT="$GIT_CONFIG_COUNT"
+  GIT_CONFIG_KEY_0="$GIT_CONFIG_KEY_0"
+  GIT_CONFIG_VALUE_0="$GIT_CONFIG_VALUE_0"
+)
+
 APP_DIR=${APP_DIR:-/opt/fusion-ui}
 SRC_DIR=${SRC_DIR:-/opt/src}                 # sibling checkouts live here
 STATE_DIR=${STATE_DIR:-/hdd1/fusion_ui}      # SQLite file + result cache
@@ -104,7 +125,7 @@ detect_subnet() {
   [[ -n "$cidr" ]] || return 1
   python3 -c 'import ipaddress,sys; print(ipaddress.ip_network(sys.argv[1], strict=False))' "$cidr"
 }
-as_service_user() { sudo -u "$SERVICE_USER" "$@"; }
+as_service_user() { sudo -u "$SERVICE_USER" env "${GIT_ENV[@]}" "$@"; }
 
 [[ $EUID -eq 0 ]] || { echo "Run me as root: sudo bash $0" >&2; exit 1; }
 
