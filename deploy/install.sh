@@ -2,15 +2,15 @@
 #
 # Install or update Shot Explorer on the group server. Run as root:
 #
-#   sudo bash deploy/install.sh
+#   sudo bash deploy/install.sh --branch phase-00-skeleton
 #
 # Every step is idempotent, so re-running it after a `git pull` is the normal
-# way to deploy an update. Override any of the settings below on the command
-# line, e.g.  sudo STATE_DIR=/hdd2/fusion_ui bash deploy/install.sh
+# way to deploy an update. `--help` lists every setting; each also works as an
+# environment variable, though whether sudo passes those through depends on the
+# sudoers config, so the flags are the reliable form.
 #
-# What it will NOT do without you: set the shared password (step 6 prompts),
-# fill in .env (step 3 opens it in an editor), or touch the firewall unless
-# CAMPUS_SUBNET is set.
+# What it will NOT do without you: fill in .env (step 3 opens an editor), set
+# the shared password (step 7 prompts), or change the firewall (step 8 asks).
 
 set -euo pipefail
 
@@ -48,6 +48,45 @@ DEPENDENCIES=(
   "velocity-estimation=https://github.com/uit-cosmo/velocity-estimation.git"
   "fpp-analysis-tools=https://github.com/uit-cosmo/fpp-analysis-tools.git"
 )
+
+usage() {
+  cat <<USAGE
+Install or update Shot Explorer. Run as root.
+
+Usage: sudo bash $0 [options]
+
+  --branch NAME       branch to deploy                 [$BRANCH]
+  --repo-url URL      where to clone the app from      [$REPO_URL]
+  --app-dir PATH      the checkout to run from         [$APP_DIR]
+  --src-dir PATH      where dependency checkouts live  [$SRC_DIR]
+  --state-dir PATH    SQLite file and result cache     [$STATE_DIR]
+  --user NAME         service account                  [$SERVICE_USER]
+  --server-name NAME  hostname in the certificate/nginx[$SERVER_NAME]
+  --subnet CIDR       allow 443 from this range        [${CAMPUS_SUBNET:-ask}]
+  --htpasswd-user U   shared login name                [$HTPASSWD_USER]
+  -h, --help          this text
+
+Each option also reads from the matching environment variable
+(BRANCH, REPO_URL, APP_DIR, SRC_DIR, STATE_DIR, SERVICE_USER,
+SERVER_NAME, CAMPUS_SUBNET, HTPASSWD_USER).
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --branch)        BRANCH=$2; shift 2 ;;
+    --repo-url)      REPO_URL=$2; shift 2 ;;
+    --app-dir)       APP_DIR=$2; shift 2 ;;
+    --src-dir)       SRC_DIR=$2; shift 2 ;;
+    --state-dir)     STATE_DIR=$2; shift 2 ;;
+    --user)          SERVICE_USER=$2; shift 2 ;;
+    --server-name)   SERVER_NAME=$2; shift 2 ;;
+    --subnet)        CAMPUS_SUBNET=$2; shift 2 ;;
+    --htpasswd-user) HTPASSWD_USER=$2; shift 2 ;;
+    -h|--help)       usage; exit 0 ;;
+    *)               echo "Unknown option: $1" >&2; echo >&2; usage >&2; exit 1 ;;
+  esac
+done
 
 PIP="$APP_DIR/.venv/bin/pip"
 FUSION_UI="$APP_DIR/.venv/bin/fusion-ui"
@@ -129,7 +168,7 @@ elif ! as_service_user git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"; then
 
   Then re-run with the SSH URL:
 
-      sudo REPO_URL=git@github.com:uit-cosmo/fusion_ui.git bash $0
+      sudo bash $0 --repo-url git@github.com:uit-cosmo/fusion_ui.git
 
 MSG
   exit 1

@@ -4,15 +4,18 @@
 
 ```bash
 git clone https://github.com/uit-cosmo/fusion_ui.git /tmp/fusion-ui
-sudo bash /tmp/fusion-ui/deploy/install.sh
+sudo bash /tmp/fusion-ui/deploy/install.sh --branch phase-00-skeleton
 ```
 
 `install.sh` is every step below, in order and idempotent — re-run it after a
 `git pull` and it updates in place. It stops three times for you: to edit `.env`,
 to set the shared password, and to confirm the firewall rule, for which it
-offers the subnet the server is itself on. Everything else has a default you can
-override on the command line (`APP_DIR`, `SRC_DIR`, `STATE_DIR`, `SERVICE_USER`,
-`REPO_URL`, `BRANCH`, `SERVER_NAME`, `CAMPUS_SUBNET`).
+offers the subnet the server is itself on.
+
+`--help` lists every setting: `--branch`, `--repo-url`, `--app-dir`, `--src-dir`,
+`--state-dir`, `--user`, `--server-name`, `--subnet`, `--htpasswd-user`. Each
+also reads the matching environment variable, but prefer the flags — whether
+`sudo VAR=value bash …` passes a variable through depends on the sudoers config.
 
 To check a deployment at any time, from the server or a laptop:
 
