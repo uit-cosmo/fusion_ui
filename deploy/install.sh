@@ -21,7 +21,8 @@ SERVICE_USER=${SERVICE_USER:-fusionui}
 REPO_URL=${REPO_URL:-https://github.com/Sosnowsky/fusion_ui.git}
 BRANCH=${BRANCH:-main}
 SERVER_NAME=${SERVER_NAME:-$(hostname -f)}
-CAMPUS_SUBNET=${CAMPUS_SUBNET:-}             # e.g. 10.228.0.0/16; empty = skip ufw
+CAMPUS_SUBNET=${CAMPUS_SUBNET:-}             # e.g. 10.228.0.0/16; empty = ask, offering
+                                             # the subnet the server is itself on
 HTPASSWD_USER=${HTPASSWD_USER:-fusion}
 
 # name=url for the packages that are not on PyPI
@@ -36,6 +37,17 @@ DEPENDENCIES=(
 PIP="$APP_DIR/.venv/bin/pip"
 FUSION_UI="$APP_DIR/.venv/bin/fusion-ui"
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
+
+# The network the server itself sits on -- the laptops are almost always on it
+# too. Offered as a default, never applied silently: a firewall rule is about
+# who gets in, and the interface prefix can be wider than you meant.
+detect_subnet() {
+  local iface cidr
+  iface=$(ip -4 route show default | awk '{print $5; exit}') || return 1
+  cidr=$(ip -4 -o addr show dev "$iface" | awk '{print $4; exit}') || return 1
+  [[ -n "$cidr" ]] || return 1
+  python3 -c 'import ipaddress,sys; print(ipaddress.ip_network(sys.argv[1], strict=False))' "$cidr"
+}
 as_service_user() { sudo -u "$SERVICE_USER" "$@"; }
 
 [[ $EUID -eq 0 ]] || { echo "Run me as root: sudo bash $0" >&2; exit 1; }
@@ -149,11 +161,23 @@ rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl reload nginx
 
 step "8. Firewall"
+if ufw status 2>/dev/null | grep -q '443.*ALLOW'; then
+  echo "  A rule for 443 already exists:"
+  ufw status | grep '443' | sed 's/^/    /'
+elif [[ -z "$CAMPUS_SUBNET" ]]; then
+  detected=$(detect_subnet 2>/dev/null || true)
+  echo "  This server is on ${detected:-an undetermined network}."
+  read -rp "  Allow 443 from [${detected:-none}] (or type a subnet, or 'skip'): " reply
+  CAMPUS_SUBNET=${reply:-$detected}
+  [[ "$CAMPUS_SUBNET" == "skip" || "$CAMPUS_SUBNET" == "none" ]] && CAMPUS_SUBNET=""
+fi
+
 if [[ -n "$CAMPUS_SUBNET" ]]; then
   ufw allow from "$CAMPUS_SUBNET" to any port 443 proto tcp
+  ufw status | sed 's/^/    /'
 else
-  echo "  CAMPUS_SUBNET not set — skipping. To open it:"
-  echo "    sudo ufw allow from <campus-subnet> to any port 443 proto tcp"
+  echo "  Skipped. To open it later:"
+  echo "    sudo ufw allow from <subnet> to any port 443 proto tcp"
 fi
 
 step "9. Verify"

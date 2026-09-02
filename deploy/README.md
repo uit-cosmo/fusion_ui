@@ -4,13 +4,15 @@
 
 ```bash
 git clone https://github.com/Sosnowsky/fusion_ui.git /tmp/fusion-ui
-sudo SERVER_NAME=<host> CAMPUS_SUBNET=<subnet> bash /tmp/fusion-ui/deploy/install.sh
+sudo bash /tmp/fusion-ui/deploy/install.sh
 ```
 
 `install.sh` is every step below, in order and idempotent — re-run it after a
-`git pull` and it updates in place. It stops twice for you: to edit `.env`, and
-to set the shared password. Override any path on the command line
-(`APP_DIR`, `SRC_DIR`, `STATE_DIR`, `SERVICE_USER`, `REPO_URL`, `BRANCH`).
+`git pull` and it updates in place. It stops three times for you: to edit `.env`,
+to set the shared password, and to confirm the firewall rule, for which it
+offers the subnet the server is itself on. Everything else has a default you can
+override on the command line (`APP_DIR`, `SRC_DIR`, `STATE_DIR`, `SERVICE_USER`,
+`REPO_URL`, `BRANCH`, `SERVER_NAME`, `CAMPUS_SUBNET`).
 
 To check a deployment at any time, from the server or a laptop:
 
@@ -112,9 +114,16 @@ sudo nginx -t && sudo systemctl reload nginx
 ## 6. Firewall
 
 ```bash
-sudo ufw allow from <campus-subnet> to any port 443 proto tcp
+ip -4 route show default                 # which interface faces the network
+ip -4 -o addr show dev <iface>           # its address and prefix
+sudo ufw allow from <subnet> to any port 443 proto tcp
 sudo ufw status
 ```
+
+The server's own subnet is the right answer in almost every case — the laptops
+are on the same network. `install.sh` works it out and offers it, but never
+applies it without you saying so: the interface prefix can be wider than you
+meant, and a firewall rule is about who gets in.
 
 The failure seen while verifying reachability was the *host* firewall rejecting
 with ICMP host-unreachable — an immediate "No route to host", not a timeout.
