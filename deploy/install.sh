@@ -293,7 +293,16 @@ sed -e "s|server_name _;|server_name $SERVER_NAME;|" -e "$http2_fix" \
   "$APP_DIR/deploy/nginx.conf" > /etc/nginx/sites-available/fusion-ui
 ln -sf /etc/nginx/sites-available/fusion-ui /etc/nginx/sites-enabled/fusion-ui
 rm -f /etc/nginx/sites-enabled/default
-nginx -t && systemctl reload nginx
+if ! nginx -t; then
+  echo >&2
+  echo "  The nginx site is invalid -- see the error above. nginx has been left" >&2
+  echo "  as it was; fix /etc/nginx/sites-available/fusion-ui and re-run." >&2
+  exit 1
+fi
+# enable --now rather than reload: a previous failed `nginx -t` leaves the
+# service stopped, and reload cannot start a dead service.
+systemctl enable --now nginx
+systemctl reload nginx
 
 step "8. Firewall"
 if ufw status 2>/dev/null | grep -q '443.*ALLOW'; then
