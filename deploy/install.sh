@@ -281,7 +281,15 @@ if [[ ! -f /etc/nginx/ssl/fusion-ui.crt ]]; then
     -keyout /etc/nginx/ssl/fusion-ui.key -out /etc/nginx/ssl/fusion-ui.crt \
     -subj "/CN=$SERVER_NAME" 2>/dev/null
 fi
-sed "s|server_name _;|server_name $SERVER_NAME;|" \
+nginx_version=$(nginx -v 2>&1 | sed 's|.*/||')
+if [[ "$(printf '%s\n' 1.25.1 "$nginx_version" | sort -V | head -1)" == "1.25.1" ]]; then
+  # 1.25.1+ deprecated the listen parameter in favour of its own directive.
+  http2_fix='s|listen 443 ssl http2;|listen 443 ssl;\n    http2 on;|'
+else
+  http2_fix=''
+  echo "  nginx $nginx_version: keeping the legacy 'listen ... http2' form."
+fi
+sed -e "s|server_name _;|server_name $SERVER_NAME;|" -e "$http2_fix" \
   "$APP_DIR/deploy/nginx.conf" > /etc/nginx/sites-available/fusion-ui
 ln -sf /etc/nginx/sites-available/fusion-ui /etc/nginx/sites-enabled/fusion-ui
 rm -f /etc/nginx/sites-enabled/default
@@ -302,6 +310,11 @@ fi
 if [[ -n "$CAMPUS_SUBNET" ]]; then
   ufw allow from "$CAMPUS_SUBNET" to any port 443 proto tcp
   ufw status | sed 's/^/    /'
+  if ufw status 2>/dev/null | grep -qi 'inactive'; then
+    echo "  Note: ufw is inactive, so this rule filters nothing yet. To turn it"
+    echo "  on without locking yourself out of ssh:"
+    echo "    sudo ufw allow OpenSSH && sudo ufw enable"
+  fi
 else
   echo "  Skipped. To open it later:"
   echo "    sudo ufw allow from <subnet> to any port 443 proto tcp"
