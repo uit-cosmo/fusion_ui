@@ -16,10 +16,15 @@ This file holds only the conventions that apply while writing code.
 
 ## Current state
 
-Phase 00 (skeleton, deployed) — **done**. Config, schema, `rescan`, the shot
-browser and the deploy files are in. Phase 01 (raw data browser) is next:
-`core/loader.py`, `core/decimate.py`, `core/probes.py` and
-`pages/2_single_shot.py`. Nothing in `fusion_ui/plots/` exists yet.
+Phase 00 (skeleton, deployed) and Phase 01 (raw data browser) — **done**.
+Config, schema, `rescan`, the shot browser, the deploy files, and
+`core/loader.py` / `core/decimate.py` / `core/probes.py` /
+`pages/2_single_shot.py` are in: frame view with a time slider and
+jump-to-time, click-a-pixel decimated time series, mp4 movie export, and the
+ASP/FSP (quantity, position) probe trace view. Written directly against
+Streamlit and Plotly, ahead of the registry on purpose. Phase 02 (registry,
+parameter forms, result store) is next. Nothing in `fusion_ui/plots/` exists
+yet.
 
 ## Setup
 

@@ -11,6 +11,7 @@ from fusion_ui.core import catalog, db
 REPO_ROOT = Path(__file__).resolve().parent.parent
 APP = str(REPO_ROOT / "fusion_ui" / "app.py")
 BROWSER = str(REPO_ROOT / "fusion_ui" / "pages" / "1_shot_browser.py")
+SINGLE_SHOT = str(REPO_ROOT / "fusion_ui" / "pages" / "2_single_shot.py")
 
 
 @pytest.fixture
@@ -103,6 +104,67 @@ def test_browser_says_so_when_the_index_is_empty(monkeypatch, tmp_path, discharg
     assert app.warning
     st.cache_data.clear()
     st.cache_resource.clear()
+
+
+@pytest.fixture
+def single_shot_deployment(monkeypatch, tmp_path, apd_dataset_path, asp_dataset_path):
+    """A data tree with one real (tiny) APD file and one real ASP file.
+
+    Unlike ``deployment``, no discharge DB is set up -- the point is to also
+    exercise the single-shot page's "no metadata yet" default-window path.
+    """
+    import streamlit as st
+
+    data_folder = apd_dataset_path.parent.parent  # .../alcator, shared with asp
+    database = tmp_path / "state" / "shot_explorer.sqlite"
+    monkeypatch.setenv("FUSION_DATA_FOLDER", str(data_folder))
+    monkeypatch.setenv("FUSION_DISCHARGE_DB", str(tmp_path / "no_such_discharges.json"))
+    monkeypatch.setenv("FUSION_UI_DB", str(database))
+    monkeypatch.setenv("FUSION_UI_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setenv("FUSION_MACHINE", "cmod")
+
+    conn = db.open_db(database)
+    catalog.rescan(conn, str(data_folder), "cmod", None)
+    conn.close()
+
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    yield
+    st.cache_data.clear()
+    st.cache_resource.clear()
+
+
+def test_single_shot_frame_view_renders(single_shot_deployment):
+    # Shot 1234 (apd) sorts before 5678 (asp), so it is the default pick with
+    # no need to touch the sidebar -- exercises the "standalone" path where no
+    # browser selection has been made yet.
+    app = AppTest.from_file(SINGLE_SHOT, default_timeout=60).run()
+    assert app.session_state["selection"] is None
+    assert not app.exception
+    assert "Window" in app.caption[0].value
+    assert "no discharge-DB entry" in app.caption[0].value
+
+
+def test_single_shot_probe_view_renders(single_shot_deployment):
+    app = AppTest.from_file(SINGLE_SHOT, default_timeout=60)
+    app.session_state["selection"] = {
+        "machine": "cmod",
+        "shot": 5678,
+        "diagnostic": "asp",
+        "preprocessed": False,
+    }
+    app.run()
+    assert not app.exception
+    assert app.selectbox[0].label == "Quantity"
+
+
+def test_single_shot_click_moves_the_selected_pixel(single_shot_deployment):
+    app = AppTest.from_file(SINGLE_SHOT, default_timeout=60).run()
+    assert not app.exception
+    app.session_state["pixel_cmod_1234_apd"] = (2, 3)
+    app.run()
+    assert not app.exception
+    assert "y=2, x=3" in app.caption[2].value
 
 
 def test_connections_are_not_shared_between_threads(deployment):
