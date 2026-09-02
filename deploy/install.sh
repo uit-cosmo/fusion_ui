@@ -281,6 +281,19 @@ if [[ ! -f /etc/nginx/ssl/fusion-ui.crt ]]; then
     -keyout /etc/nginx/ssl/fusion-ui.key -out /etc/nginx/ssl/fusion-ui.crt \
     -subj "/CN=$SERVER_NAME" 2>/dev/null
 fi
+# nginx binds every listen directive at startup, so one taken port stops the
+# whole service -- including the 443 vhost that is the actual deployment.
+if ss -tln '( sport = :80 )' 2>/dev/null | grep -q LISTEN &&
+   ! systemctl is-active --quiet nginx; then
+  holder=$(ss -tlnp '( sport = :80 )' 2>/dev/null |
+           sed -n 's/.*users:(("\([^"]*\)".*/\1/p' | head -1)
+  echo "  Port 80 is held by ${holder:-another process}; serving 443 only."
+  echo "  http://$SERVER_NAME will keep going wherever it goes today."
+  redirect_fix='/# BEGIN http-redirect/,/# END http-redirect/d'
+else
+  redirect_fix=''
+fi
+
 nginx_version=$(nginx -v 2>&1 | sed 's|.*/||')
 if [[ "$(printf '%s\n' 1.25.1 "$nginx_version" | sort -V | head -1)" == "1.25.1" ]]; then
   # 1.25.1+ deprecated the listen parameter in favour of its own directive.
@@ -290,6 +303,7 @@ else
   echo "  nginx $nginx_version: keeping the legacy 'listen ... http2' form."
 fi
 sed -e "s|server_name _;|server_name $SERVER_NAME;|" -e "$http2_fix" \
+  -e "$redirect_fix" \
   "$APP_DIR/deploy/nginx.conf" > /etc/nginx/sites-available/fusion-ui
 ln -sf /etc/nginx/sites-available/fusion-ui /etc/nginx/sites-enabled/fusion-ui
 rm -f /etc/nginx/sites-enabled/default

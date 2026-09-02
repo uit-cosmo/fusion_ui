@@ -188,6 +188,16 @@ Without `IdentitiesOnly yes` ssh offers every key it has and GitHub answers with
 whichever repository the *first accepted* key belongs to — which is how a deploy
 key setup ends up cloning the wrong repository and looking haunted.
 
+### Port 80 is already taken
+
+If another service (apache, on this server) owns port 80, `install.sh` drops the
+http→https redirect block and serves 443 only. nginx binds every `listen`
+directive at startup, so leaving the block in would take down the 443 vhost too
+— the whole deployment — for the sake of a convenience redirect. `https://<host>`
+works either way; `http://<host>` keeps going wherever it goes today.
+
+To take port 80 back, stop the other service and re-run the installer.
+
 ## 2. Environment
 
 ```bash
