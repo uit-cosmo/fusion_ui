@@ -44,7 +44,24 @@ sudo mkdir -p /opt/fusion-ui && sudo chown fusionui:fusionui /opt/fusion-ui
 sudo -u fusionui git clone https://github.com/uit-cosmo/fusion_ui /opt/fusion-ui
 ```
 
-### A private dependency the server cannot clone
+### Private dependencies the server cannot clone
+
+Of the six repositories involved, four are public and clone with no credentials
+at all — `fusion_ui` itself, `imaging-methods`, `velocity-estimation` and
+`fpp-analysis-tools`. Only **`experimental_database`** and **`fusion_scripts`**
+are private, so those are the only two that need a deploy key or a hand copy.
+
+If a *public* one prompts for a username, the problem is not access. Check what
+git on the server is being told to do:
+
+```bash
+sudo -u fusionui -H git config --list --show-origin | grep -iE 'url\.|insteadof|credential'
+sudo -u fusionui -H env GIT_TERMINAL_PROMPT=0 \
+  git ls-remote https://github.com/uit-cosmo/velocity-estimation.git >/dev/null && echo ok
+```
+
+A stale `insteadOf` line pointing a public repository at SSH is the usual cause;
+so is running a copy of `install.sh` from before it set `GIT_TERMINAL_PROMPT=0`.
 
 `experimental_database` is private and the server has no credentials for it.
 Copy it in before running the installer — a directory already present in

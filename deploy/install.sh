@@ -32,7 +32,9 @@ CAMPUS_SUBNET=${CAMPUS_SUBNET:-}             # e.g. 10.228.0.0/16; empty = ask, 
                                              # the subnet the server is itself on
 HTPASSWD_USER=${HTPASSWD_USER:-fusion}
 
-# name=url for the packages that are not on PyPI. A checkout already present in
+# name=url for the packages that are not on PyPI. Only experimental_database and
+# fusion_scripts are private; the rest clone anonymously and need no credentials.
+# A checkout already present in
 # $SRC_DIR is used as it stands and never overwritten, so a private repository
 # the server cannot reach is handled by copying it in first:
 #
@@ -42,7 +44,7 @@ HTPASSWD_USER=${HTPASSWD_USER:-fusion}
 # The durable fix is a read-only deploy key on the server for that repository,
 # which lets this script update it like the others.
 DEPENDENCIES=(
-  "imaging-methods=https://github.com/uit-cosmo/phantom.git"
+  "imaging-methods=https://github.com/uit-cosmo/imaging-methods.git"
   "experimental_database=https://github.com/uit-cosmo/experimental_database.git"
   "fusion_scripts=https://github.com/Sosnowsky/fusion_scripts.git"
   "velocity-estimation=https://github.com/uit-cosmo/velocity-estimation.git"
