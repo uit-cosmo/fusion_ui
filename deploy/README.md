@@ -59,7 +59,17 @@ whose `git pull` fails: the checkout on disk is what gets installed.
 The durable fix is a **read-only deploy key**, below. Set that up once and the
 installer updates this dependency like every other one.
 
-### Deploy key for a private dependency
+### Deploy keys for private repositories
+
+Anything private — the app repo itself included — needs a key, because the
+service user has no GitHub credentials and `install.sh` never prompts for any
+(`GIT_TERMINAL_PROMPT=0`). GitHub has not accepted account passwords for git
+since 2021, so a prompt would be a dead end regardless.
+
+**One deploy key grants access to exactly one repository**, and GitHub refuses
+to reuse a key across repositories. So repeat this per private repo, with a
+different `-f` filename each time. If that becomes more than two or three, use a
+machine user or a fine-grained token with read access to all of them instead.
 
 The key belongs to the user that does the cloning — the service user, not you.
 
@@ -105,6 +115,27 @@ in the service user's git config, and the URL in the script stays the public
 https one. If `/opt/src/experimental_database` was copied in by hand earlier,
 delete it so the next run clones properly — or just point its remote at the
 SSH URL and leave it.
+
+For a **second** private repo, generate a second key and add its own
+`insteadOf` line, plus a `Host` alias so ssh picks the right key:
+
+```bash
+sudo -u fusionui -H ssh-keygen -t ed25519 -N "" -f /var/lib/fusionui/.ssh/id_fusion_ui
+sudo -u fusionui -H tee -a /var/lib/fusionui/.ssh/config >/dev/null <<'EOF'
+Host github-fusion-ui
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/id_fusion_ui
+    IdentitiesOnly yes
+EOF
+sudo -u fusionui -H git config --global \
+  url."github-fusion-ui:Sosnowsky/fusion_ui.git".insteadOf \
+  "https://github.com/Sosnowsky/fusion_ui.git"
+```
+
+Without `IdentitiesOnly yes` ssh offers every key it has and GitHub answers with
+whichever repository the *first accepted* key belongs to — which is how a deploy
+key setup ends up cloning the wrong repository and looking haunted.
 
 ## 2. Environment
 

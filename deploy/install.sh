@@ -14,6 +14,13 @@
 
 set -euo pipefail
 
+# Never let git stop at an interactive credential prompt: this script may run
+# unattended, and GitHub has not accepted account passwords for git operations
+# since 2021, so there is nothing useful to type anyway. A private repository
+# fails immediately instead, and the handler below says how to grant access.
+export GIT_TERMINAL_PROMPT=0
+export GIT_SSH_COMMAND="ssh -o BatchMode=yes"
+
 APP_DIR=${APP_DIR:-/opt/fusion-ui}
 SRC_DIR=${SRC_DIR:-/opt/src}                 # sibling checkouts live here
 STATE_DIR=${STATE_DIR:-/hdd1/fusion_ui}      # SQLite file + result cache
@@ -88,8 +95,10 @@ for entry in "${DEPENDENCIES[@]}"; do
       cat >&2 <<MSG
 
   Could not clone $name from $url.
-  If it is private and this server has no credentials, copy it over and
-  re-run -- an existing directory is used as it stands:
+
+  If it is private, this server has no access to it. Either give it one --
+  a read-only deploy key for the service user, see deploy/README.md -- or
+  copy the checkout in and re-run; an existing directory is used as it stands:
 
       rsync -a --exclude .venv <your machine>:path/to/$name /tmp/
       sudo mv /tmp/$name $SRC_DIR/
@@ -109,8 +118,21 @@ if [[ -d "$APP_DIR/.git" ]]; then
   as_service_user git -C "$APP_DIR" fetch origin "$BRANCH"
   as_service_user git -C "$APP_DIR" checkout "$BRANCH"
   as_service_user git -C "$APP_DIR" pull --ff-only
-else
-  as_service_user git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
+elif ! as_service_user git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"; then
+  cat >&2 <<MSG
+
+  Could not clone the app from $REPO_URL (branch $BRANCH).
+
+  If the repository is private, the service user needs its own read-only
+  deploy key -- one key grants access to exactly one repository, so this
+  needs a separate one from any dependency key. See deploy/README.md.
+
+  Then re-run with the SSH URL:
+
+      sudo REPO_URL=git@github.com:Sosnowsky/fusion_ui.git bash $0
+
+MSG
+  exit 1
 fi
 
 step "3. Configuration"
