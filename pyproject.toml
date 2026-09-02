@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fusion_ui"
+version = "0.1.0"
+description = "Shot Explorer: a web UI over the group's fusion diagnostic data"
+authors = [
+  { name = "Juan Manuel Losada", email = "juan.m.losada@uit.no" }
+]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.10"
+# imaging_methods, experimental_database and fusion_scripts are not on PyPI:
+# install each editable from its local checkout (see README).
+dependencies = [
+    "streamlit>=1.40",
+    "plotly>=5.24",
+    "xarray>=2025.01.2",
+    "netcdf4>=1.7.2",
+    "numpy>=1.26.4",
+    "scipy>=1.15.1",
+    "matplotlib>=3.10.0",
+    "imaging_methods>=0.1.0",
+    "velocity_estimation>=1.0.0",
+    "fppanalysis>=0.2.0",
+    "experimental_database>=0.0.1",
+    "fusion_scripts>=0.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "black>=24.0",
+]
+
+[project.scripts]
+fusion-ui = "fusion_ui.cli:main"
+
+[tool.setuptools]
+packages = [
+    "fusion_ui",
+    "fusion_ui.core",
+    "fusion_ui.plots",
+]

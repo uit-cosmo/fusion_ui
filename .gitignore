@@ -1,0 +1,28 @@
+# Environment
+.env
+.venv/
+venv/
+
+# Byte-compiled
+__pycache__/
+*.py[cod]
+*.so
+
+# Packaging
+build/
+dist/
+*.egg-info/
+
+# App state — never commit the database or cached results
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+cache/
+
+# Tooling
+.pytest_cache/
+.coverage
+
+# Editors
+.idea/
+.vscode/
