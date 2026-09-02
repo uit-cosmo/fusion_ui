@@ -25,7 +25,15 @@ CAMPUS_SUBNET=${CAMPUS_SUBNET:-}             # e.g. 10.228.0.0/16; empty = ask, 
                                              # the subnet the server is itself on
 HTPASSWD_USER=${HTPASSWD_USER:-fusion}
 
-# name=url for the packages that are not on PyPI
+# name=url for the packages that are not on PyPI. A checkout already present in
+# $SRC_DIR is used as it stands and never overwritten, so a private repository
+# the server cannot reach is handled by copying it in first:
+#
+#   rsync -a --exclude .venv ~/Git/experimental_database server:/tmp/
+#   sudo mv /tmp/experimental_database $SRC_DIR/
+#
+# The durable fix is a read-only deploy key on the server for that repository,
+# which lets this script update it like the others.
 DEPENDENCIES=(
   "imaging-methods=https://github.com/uit-cosmo/phantom.git"
   "experimental_database=https://github.com/uit-cosmo/experimental_database.git"
@@ -63,14 +71,36 @@ step "2. Checkouts"
 mkdir -p "$SRC_DIR"
 chown "$SERVICE_USER:$SERVICE_USER" "$SRC_DIR"
 for entry in "${DEPENDENCIES[@]}"; do
-  name=${entry%%=*}; url=${entry#*=}
-  if [[ -d "$SRC_DIR/$name/.git" ]]; then
-    echo "  $name: pulling"
-    as_service_user git -C "$SRC_DIR/$name" pull --ff-only
+  name=${entry%%=*}; url=${entry#*=}; target="$SRC_DIR/$name"
+  if [[ -d "$target/.git" ]]; then
+    if as_service_user git -C "$target" pull --ff-only --quiet 2>/dev/null; then
+      echo "  $name: updated"
+    else
+      # No credentials for a private repository, a detached HEAD, local edits.
+      # Whatever is on disk is what the maintainer put there; use it.
+      echo "  $name: could not update, using the checkout as it stands"
+    fi
+  elif [[ -d "$target" ]]; then
+    echo "  $name: copied in by hand, using as is"
   else
     echo "  $name: cloning"
-    as_service_user git clone --depth 50 "$url" "$SRC_DIR/$name"
+    if ! as_service_user git clone --depth 50 --quiet "$url" "$target"; then
+      cat >&2 <<MSG
+
+  Could not clone $name from $url.
+  If it is private and this server has no credentials, copy it over and
+  re-run -- an existing directory is used as it stands:
+
+      rsync -a --exclude .venv <your machine>:path/to/$name /tmp/
+      sudo mv /tmp/$name $SRC_DIR/
+
+MSG
+      exit 1
+    fi
   fi
+  # pip install -e writes .egg-info into the source tree, so the service user
+  # needs to own it -- including anything copied in as root.
+  chown -R "$SERVICE_USER:$SERVICE_USER" "$target"
 done
 
 mkdir -p "$APP_DIR"

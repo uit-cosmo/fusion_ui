@@ -41,6 +41,25 @@ sudo mkdir -p /opt/fusion-ui && sudo chown fusionui:fusionui /opt/fusion-ui
 sudo -u fusionui git clone https://github.com/Sosnowsky/fusion_ui /opt/fusion-ui
 ```
 
+### A private dependency the server cannot clone
+
+`experimental_database` is private and the server has no credentials for it.
+Copy it in before running the installer — a directory already present in
+`$SRC_DIR` is used as it stands and never overwritten:
+
+```bash
+rsync -a --exclude .venv --exclude .git ~/Git/experimental_database <host>:/tmp/
+ssh <host> "sudo mkdir -p /opt/src && sudo mv /tmp/experimental_database /opt/src/"
+```
+
+The installer chowns it to the service user (editable installs write `.egg-info`
+into the source tree) and skips the clone. The same applies to any dependency
+whose `git pull` fails: the checkout on disk is what gets installed.
+
+The durable fix is a **read-only deploy key** on the server for that repository —
+add the server's `~/.ssh/id_ed25519.pub` under the repo's Settings → Deploy keys,
+set `REPO_URL` style SSH remotes, and updates work like every other dependency.
+
 ## 2. Environment
 
 ```bash
