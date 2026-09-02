@@ -174,6 +174,19 @@ MSG
   chown -R "$SERVICE_USER:$SERVICE_USER" "$target"
 done
 
+# Fail with the list of branches rather than git's bare "couldn't find remote
+# ref", which does not hint that --branch is the knob.
+if ! as_service_user git ls-remote --exit-code --heads "$REPO_URL" "$BRANCH" >/dev/null 2>&1; then
+  echo >&2
+  echo "  No branch '$BRANCH' on $REPO_URL. Available:" >&2
+  as_service_user git ls-remote --heads "$REPO_URL" 2>/dev/null \
+    | sed 's#.*refs/heads/#    #' >&2 \
+    || echo "    (could not list -- is the repository reachable?)" >&2
+  echo >&2
+  echo "  Pick one with:  sudo bash $0 --branch <name>" >&2
+  exit 1
+fi
+
 mkdir -p "$APP_DIR"
 chown "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
 if [[ -d "$APP_DIR/.git" ]]; then
