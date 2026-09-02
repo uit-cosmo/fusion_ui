@@ -7,6 +7,11 @@
 # The websocket handshake is the check that matters. Streamlit talks over a
 # websocket, so a proxy that drops the Upgrade header serves a page that loads
 # and then hangs forever with no error message -- a plain 200 proves nothing.
+#
+# The handshake is forced over HTTP/1.1: the site advertises h2 over ALPN, and
+# an Upgrade cannot be expressed in HTTP/2 at all, so curl would quietly drop
+# the headers and report a meaningless 200. Browsers are not affected -- the
+# WebSocket API opens its own HTTP/1.1 connection whatever the page used.
 
 set -uo pipefail
 HOST=${1:-$(hostname -f)}
@@ -35,6 +40,7 @@ check "password required"    "401" "$(http_code "https://$HOST/")"
 # 101 Switching Protocols, or the page loads and then hangs with no error.
 handshake=$(curl -sk -i -N --max-time 10 \
   -u "$USER_NAME:$PASSWORD" \
+  --http1.1 \
   -H "Connection: Upgrade" -H "Upgrade: websocket" \
   -H "Sec-WebSocket-Version: 13" \
   -H "Sec-WebSocket-Key: $(openssl rand -base64 16)" \
@@ -50,7 +56,9 @@ else
     echo
     echo "The handshake returned 200, not 101: nginx is swallowing the Upgrade"
     echo "header. The page will load and then hang for everyone. Check the"
-    echo "proxy_set_header Upgrade/Connection lines in the site config."
+    echo "proxy_set_header Upgrade/Connection lines in the site config -- and"
+    echo "that this script still passes --http1.1, since HTTP/2 cannot carry an"
+    echo "Upgrade and turns the check into a false alarm."
   fi
 fi
 exit $FAILED
