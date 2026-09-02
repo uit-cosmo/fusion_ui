@@ -3,7 +3,7 @@
 **The short version:**
 
 ```bash
-git clone https://github.com/Sosnowsky/fusion_ui.git /tmp/fusion-ui
+git clone https://github.com/uit-cosmo/fusion_ui.git /tmp/fusion-ui
 sudo bash /tmp/fusion-ui/deploy/install.sh
 ```
 
@@ -38,7 +38,7 @@ changes.
 ```bash
 sudo useradd --system --create-home --home-dir /var/lib/fusionui fusionui
 sudo mkdir -p /opt/fusion-ui && sudo chown fusionui:fusionui /opt/fusion-ui
-sudo -u fusionui git clone https://github.com/Sosnowsky/fusion_ui /opt/fusion-ui
+sudo -u fusionui git clone https://github.com/uit-cosmo/fusion_ui /opt/fusion-ui
 ```
 
 ### A private dependency the server cannot clone
@@ -132,15 +132,15 @@ For a **second** private repo, generate a second key and add its own
 ```bash
 sudo -u fusionui -H ssh-keygen -t ed25519 -N "" -f /var/lib/fusionui/.ssh/id_fusion_ui
 sudo -u fusionui -H tee -a /var/lib/fusionui/.ssh/config >/dev/null <<'EOF'
-Host github-fusion-ui
+Host github-fusion_ui
     HostName github.com
     User git
     IdentityFile ~/.ssh/id_fusion_ui
     IdentitiesOnly yes
 EOF
 sudo -u fusionui -H git config --global \
-  url."github-fusion-ui:Sosnowsky/fusion_ui.git".insteadOf \
-  "https://github.com/Sosnowsky/fusion_ui.git"
+  url."github-fusion_ui:uit-cosmo/fusion_ui.git".insteadOf \
+  "https://github.com/uit-cosmo/fusion_ui.git"
 ```
 
 Without `IdentitiesOnly yes` ssh offers every key it has and GitHub answers with

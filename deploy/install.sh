@@ -25,7 +25,7 @@ APP_DIR=${APP_DIR:-/opt/fusion-ui}
 SRC_DIR=${SRC_DIR:-/opt/src}                 # sibling checkouts live here
 STATE_DIR=${STATE_DIR:-/hdd1/fusion_ui}      # SQLite file + result cache
 SERVICE_USER=${SERVICE_USER:-fusionui}
-REPO_URL=${REPO_URL:-https://github.com/Sosnowsky/fusion_ui.git}
+REPO_URL=${REPO_URL:-https://github.com/uit-cosmo/fusion_ui.git}
 BRANCH=${BRANCH:-main}
 SERVER_NAME=${SERVER_NAME:-$(hostname -f)}
 CAMPUS_SUBNET=${CAMPUS_SUBNET:-}             # e.g. 10.228.0.0/16; empty = ask, offering
@@ -129,7 +129,7 @@ elif ! as_service_user git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"; then
 
   Then re-run with the SSH URL:
 
-      sudo REPO_URL=git@github.com:Sosnowsky/fusion_ui.git bash $0
+      sudo REPO_URL=git@github.com:uit-cosmo/fusion_ui.git bash $0
 
 MSG
   exit 1
