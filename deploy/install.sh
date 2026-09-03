@@ -344,4 +344,13 @@ else
 fi
 
 step "9. Verify"
-bash "$APP_DIR/deploy/verify.sh" "$SERVER_NAME"
+verify_status=0
+bash "$APP_DIR/deploy/verify.sh" "$SERVER_NAME" || verify_status=$?
+
+step "Done"
+printf '  Open \033[1mhttps://%s/\033[0m and log in as "%s".\n' \
+  "$SERVER_NAME" "$HTPASSWD_USER"
+if [[ $verify_status -ne 0 ]]; then
+  echo "  (That is the address once the failing checks above are fixed.)"
+fi
+exit $verify_status
