@@ -2,7 +2,8 @@
 
 ``rescan`` is the one that goes on cron; ``status`` is the one to run after
 deploying; ``import-results`` is run once, to seed the scalar store from
-``density_scan``. ``precompute`` and ``prune`` arrive with phases 04 and 05.
+``density_scan``; ``precompute`` (phase 04) warms the cache overnight.
+``prune`` arrives with phase 05.
 """
 
 import argparse
@@ -61,6 +62,46 @@ def cmd_import_results(args):
     except FileNotFoundError as error:
         print(str(error), file=sys.stderr)
         return 1
+    print(stats.summary())
+    return 0
+
+
+def cmd_precompute(args):
+    """Run one plot's compute over every matching shot, warming the cache.
+
+    ``fusion_ui.plots`` is imported here, not at module top, so the plain
+    maintenance commands stay importable on a machine without the analysis
+    packages installed.
+    """
+    import fusion_ui.plots  # noqa: F401 - importing the package registers specs
+
+    from fusion_ui.core import precompute, registry
+
+    if args.plot not in registry.REGISTRY:
+        known = ", ".join(sorted(registry.REGISTRY))
+        print(f"Unknown plot {args.plot!r}. Registered: {known}", file=sys.stderr)
+        return 1
+    spec = registry.get(args.plot)
+    if not spec.cached:
+        print(
+            f"{args.plot!r} is a live view; it has nothing to precompute.",
+            file=sys.stderr,
+        )
+        return 1
+
+    shots = set(args.shot) if args.shot else None
+    params = precompute.default_params(spec, args.pixel)
+    conn = db.open_db(args.database)
+    targets = precompute.targets_for(conn, spec, args.machine, shots=shots)
+    if not targets:
+        print(
+            f"No indexed shots match plot {args.plot!r} for machine "
+            f"{args.machine!r}. Run `fusion-ui rescan` first.",
+            file=sys.stderr,
+        )
+        return 1
+
+    stats = precompute.run(conn, spec, targets, params, force=args.force)
     print(stats.summary())
     return 0
 
@@ -150,6 +191,38 @@ def build_parser():
         help="data tree to walk (default: $FUSION_DATA_FOLDER)",
     )
     rescan.set_defaults(func=cmd_rescan)
+
+    precompute = subparsers.add_parser(
+        "precompute",
+        help="run a plot's compute over every matching shot to warm the cache",
+    )
+    precompute.add_argument("plot", help="plot key, e.g. velocity_contour")
+    precompute.add_argument(
+        "--machine",
+        default=None,
+        help="machine the data belongs to (default: $FUSION_MACHINE, else cmod)",
+    )
+    precompute.add_argument(
+        "--shot",
+        action="append",
+        type=int,
+        default=[],
+        metavar="N",
+        help="restrict to this shot number (repeatable; default: every shot)",
+    )
+    precompute.add_argument(
+        "--pixel",
+        nargs=2,
+        type=int,
+        metavar=("X", "Y"),
+        help="set the reference pixel (refx/refy) instead of the spec default",
+    )
+    precompute.add_argument(
+        "--force",
+        action="store_true",
+        help="recompute even when a cached result already exists",
+    )
+    precompute.set_defaults(func=cmd_precompute)
 
     seed_results = subparsers.add_parser(
         "import-results",

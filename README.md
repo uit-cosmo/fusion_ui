@@ -21,14 +21,15 @@ the analysis code in [`imaging_methods`](https://github.com/Sosnowsky/imaging-me
 
 ## Status
 
-Phases 00-02 are in: the config module, the SQLite schema, the `rescan` catalog
+Phases 00-04 are in: the config module, the SQLite schema, the `rescan` catalog
 job, the shot browser, the single-shot view, and the plot registry that view is
 built on — parameter forms generated from a dataclass, a content-addressed
-result cache, and the scalar store the multi-shot view will read. Phase 03, the
-physics, has started: two-dimensional conditional averaging and the
-contour-tracking blob velocity derived from it. The multi-shot view lands in
-phase 04. See [`docs/PLAN.md`](docs/PLAN.md) for the architecture, the database
-schema, and the phase order.
+result cache, and the scalar store. Phase 03 ported the twelve analyses; phase
+04 added the multi-shot scatter (one scalar against shot number, f_GW, density
+or I_p, coloured by confinement mode, click a point to open that shot) and
+`fusion-ui precompute` for overnight cache fills. Phase 05 (hardening) is next.
+See [`docs/PLAN.md`](docs/PLAN.md) for the architecture, the database schema,
+and the phase order.
 
 ## Adding a plot
 
@@ -119,6 +120,7 @@ cp .env.example .env          # then edit for your machine
 fusion-ui init-db          # create or migrate the app's SQLite database
 fusion-ui rescan           # index the data tree into `shots` (cron this)
 fusion-ui import-results   # seed `scalars` from density_scan/results.json (once)
+fusion-ui precompute PLOT  # run a plot's compute over every shot to warm the cache
 fusion-ui status           # resolved paths, index and result counts
 ```
 
