@@ -1,6 +1,7 @@
 """The precompute engine: targets from the index, params, and the run loop."""
 
 import dataclasses
+import os
 
 import pytest
 
@@ -76,6 +77,23 @@ def test_force_recomputes_an_existing_result(indexed):
     precompute.run(indexed, spec, targets, params)
     forced = precompute.run(indexed, spec, targets, params, force=True)
     assert (forced.computed, forced.cached) == (1, 0)
+
+
+def test_a_missing_blob_is_recomputed_not_skipped(indexed):
+    """An 'ok' run whose blob was cleared must be re-warmed, not skipped: the
+    ledger alone is not enough to count a cache hit."""
+    spec = registry.get("taud_psd")
+    params = precompute.default_params(spec, pixel=(2, 3))
+    targets = precompute.targets_for(indexed, spec, "cmod")
+
+    precompute.run(indexed, spec, targets, params)
+    params_hash, _ = store.record_params(indexed, spec.key, params)
+    run = store.find_run(indexed, targets[0], spec.key, params_hash)
+    assert run["status"] == "ok"
+    os.remove(run["blob_path"])
+
+    stats = precompute.run(indexed, spec, targets, params)
+    assert (stats.computed, stats.cached, stats.failed) == (1, 0, 0)
 
 
 def test_a_failed_compute_is_counted_not_raised(indexed):

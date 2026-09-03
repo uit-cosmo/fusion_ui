@@ -107,8 +107,22 @@ def test_pixel_choices_ignore_the_shot_level_sentinel():
             ("cmod", 2, "apd", 1, "plot", "h", -1, -1, "vx_c", 2.0),
         ]
     )
-    xs, ys = multishot.pixel_choices(rows, ("plot", "h", "apd", 1), "vx_c")
-    assert xs == [3] and ys == [4]
+    assert multishot.pixel_choices(rows, ("plot", "h", "apd", 1), "vx_c") == [(3, 4)]
+
+
+def test_pixel_choices_return_only_pairs_that_occur():
+    """xs=[0, 1] and ys=[0, 1] with only (0, 1) and (1, 0) present must not let a
+    picker offer the impossible (0, 0) / (1, 1)."""
+    rows = frame(
+        [
+            ("cmod", 1, "apd", 1, "plot", "h", 0, 1, "vx_c", 1.0),
+            ("cmod", 2, "apd", 1, "plot", "h", 1, 0, "vx_c", 2.0),
+        ]
+    )
+    assert multishot.pixel_choices(rows, ("plot", "h", "apd", 1), "vx_c") == [
+        (0, 1),
+        (1, 0),
+    ]
 
 
 def test_is_shot_level():

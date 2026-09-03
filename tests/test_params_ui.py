@@ -191,3 +191,12 @@ def test_seed_session_state_marks_optional_fields():
     params_ui.seed_session_state(state, "p", im.GaussFitParams(size_max=None))
     assert state["p.size_max.__auto__"] is True
     assert state["p.size_max"] == 0.0
+
+
+def test_seed_session_state_keeps_a_present_zero_value():
+    """``size_max=0.0`` is a real instruction, not the None placeholder: it must
+    not flip the ``.__auto__`` toggle or be swapped for a default."""
+    state = {}
+    params_ui.seed_session_state(state, "p", im.GaussFitParams(size_max=0.0))
+    assert state["p.size_max.__auto__"] is False
+    assert state["p.size_max"] == 0.0

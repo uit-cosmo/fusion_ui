@@ -92,18 +92,21 @@ def cmd_precompute(args):
     shots = set(args.shot) if args.shot else None
     params = precompute.default_params(spec, args.pixel)
     conn = db.open_db(args.database)
-    targets = precompute.targets_for(conn, spec, args.machine, shots=shots)
-    if not targets:
-        print(
-            f"No indexed shots match plot {args.plot!r} for machine "
-            f"{args.machine!r}. Run `fusion-ui rescan` first.",
-            file=sys.stderr,
-        )
-        return 1
+    try:
+        targets = precompute.targets_for(conn, spec, args.machine, shots=shots)
+        if not targets:
+            print(
+                f"No indexed shots match plot {args.plot!r} for machine "
+                f"{args.machine!r}. Run `fusion-ui rescan` first.",
+                file=sys.stderr,
+            )
+            return 1
 
-    stats = precompute.run(conn, spec, targets, params, force=args.force)
-    print(stats.summary())
-    return 0
+        stats = precompute.run(conn, spec, targets, params, force=args.force)
+        print(stats.summary())
+        return 0
+    finally:
+        conn.close()
 
 
 def cmd_status(args):

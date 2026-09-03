@@ -102,11 +102,23 @@ def main():
 
     pixel = None
     if how == "pixel":
-        xs, ys = multishot.pixel_choices(frame, source, name)
-        if not xs or not ys:
+        pairs = multishot.pixel_choices(frame, source, name)
+        if not pairs:
             st.sidebar.warning("No pixel-indexed values for this source.")
             return
+        xs = sorted({x for x, _ in pairs})
+        if (
+            "ms.pixel.x" in st.session_state
+            and st.session_state["ms.pixel.x"] not in xs
+        ):
+            st.session_state["ms.pixel.x"] = xs[0]
         x = st.sidebar.selectbox("x", xs, key="ms.pixel.x")
+        ys = sorted({y for px, y in pairs if px == x})
+        if (
+            "ms.pixel.y" in st.session_state
+            and st.session_state["ms.pixel.y"] not in ys
+        ):
+            st.session_state["ms.pixel.y"] = ys[0]
         y = st.sidebar.selectbox("y", ys, key="ms.pixel.y")
         pixel = (x, y)
 

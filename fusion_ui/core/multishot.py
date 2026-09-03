@@ -53,7 +53,7 @@ def distinct_sources(frame, name):
         tuple(row)
         for row in sub[columns]
         .drop_duplicates()
-        .sort_values("plot", kind="stable")
+        .sort_values(columns, kind="stable")
         .itertuples(index=False)
     ]
 
@@ -105,7 +105,12 @@ def aggregate(frame, source, name, how, pixel=None):
 
 
 def pixel_choices(frame, source, name):
-    """The ``(xs, ys)`` a fixed-pixel picker may offer for one source."""
+    """The ``(x, y)`` pairs a fixed-pixel picker may offer for one source.
+
+    Returned as the pairs that actually occur, sorted and de-duplicated -- the
+    page chains the two selectboxes on these, because offering x and y
+    independently would let someone pick a combination the data never has.
+    """
     plot, params_hash, diagnostic, preprocessed = source
     sub = frame[
         (frame["name"] == name)
@@ -115,7 +120,8 @@ def pixel_choices(frame, source, name):
         & (frame["preprocessed"] == preprocessed)
     ]
     sub = sub[(sub["x"] != -1) | (sub["y"] != -1)]
-    return sorted(sub["x"].unique()), sorted(sub["y"].unique())
+    pairs = sorted(zip(sub["x"], sub["y"]))
+    return [(int(x), int(y)) for x, y in dict.fromkeys(pairs)]
 
 
 def is_shot_level(frame, source, name):

@@ -113,7 +113,9 @@ def _set_pixel(params, x, y):
 def run(conn, spec, targets, params, force=False):
     """Compute ``spec`` with ``params`` on every target, skipping cache hits.
 
-    A cache hit is detected from the ledger alone, so it costs no file open.
+    A cache hit needs an ``ok`` run *and* its blob on disk: the ledger alone is
+    not enough, because a cleared cache directory would otherwise make a fill
+    skip a result it was asked to warm. Detecting it still costs no file open.
     A target whose compute raises still gets a ``failed`` row (via the store),
     so a broken shot does not stop the rest of the fill.
     """
@@ -125,7 +127,13 @@ def run(conn, spec, targets, params, force=False):
     for target in targets:
         stats.considered += 1
         existing = store.find_run(conn, target, spec.key, params_hash)
-        if existing is not None and existing["status"] == "ok" and not force:
+        if (
+            existing is not None
+            and existing["status"] == "ok"
+            and not force
+            and existing["blob_path"]
+            and os.path.exists(existing["blob_path"])
+        ):
             stats.cached += 1
             continue
         if force and existing is not None:

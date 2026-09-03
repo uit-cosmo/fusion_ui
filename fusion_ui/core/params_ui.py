@@ -559,7 +559,7 @@ def seed_session_state(state, key_prefix, params, prefix=""):
         key = f"{key_prefix}.{path}"
         if (cls.__name__, field.name) in OPTIONAL:
             state[f"{key}.__auto__"] = value is None
-            state[key] = value or 0.0
+            state[key] = 0.0 if value is None else value
         else:
             state[key] = value
 
