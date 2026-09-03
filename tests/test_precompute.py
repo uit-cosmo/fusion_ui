@@ -1,6 +1,5 @@
 """The precompute engine: targets from the index, params, and the run loop."""
 
-import dataclasses
 import os
 
 import pytest
@@ -106,3 +105,35 @@ def test_a_failed_compute_is_counted_not_raised(indexed):
 
     run = indexed.execute("SELECT status FROM runs").fetchone()
     assert run["status"] == "failed"
+
+
+def test_a_failed_run_is_counted_without_reopening_its_file(indexed, monkeypatch):
+    """``store.result`` would only hand a failed run straight back, so the fill
+    must not reopen a ~500 MB file to rediscover it."""
+    spec = registry.get("taud_psd")
+    params = precompute.default_params(spec)  # out-of-range pixel -> failed
+    targets = precompute.targets_for(indexed, spec, "cmod")
+
+    precompute.run(indexed, spec, targets, params)
+
+    def boom(*args, **kwargs):
+        raise AssertionError("a failed run must not reopen its dataset")
+
+    monkeypatch.setattr(precompute.xr, "open_dataset", boom)
+    stats = precompute.run(indexed, spec, targets, params)
+    assert (stats.failed, stats.computed, stats.cached) == (1, 0, 0)
+
+
+def test_an_unreadable_file_records_a_failure_and_continues(indexed):
+    """A file removed after rescan must not abort the whole overnight fill."""
+    spec = registry.get("taud_psd")
+    params = precompute.default_params(spec, pixel=(2, 3))
+    targets = precompute.targets_for(indexed, spec, "cmod")
+    os.remove(targets[0].path)
+
+    stats = precompute.run(indexed, spec, targets, params)
+    assert (stats.failed, stats.computed, stats.cached) == (1, 0, 0)
+
+    run = indexed.execute("SELECT status, error FROM runs").fetchone()
+    assert run["status"] == "failed"
+    assert "FileNotFoundError" in run["error"]

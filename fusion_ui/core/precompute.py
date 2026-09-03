@@ -14,7 +14,7 @@ is ~500 MB, so an overnight fill must not re-read what is already stored.
 import dataclasses
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import xarray as xr
 
@@ -116,8 +116,11 @@ def run(conn, spec, targets, params, force=False):
     A cache hit needs an ``ok`` run *and* its blob on disk: the ledger alone is
     not enough, because a cleared cache directory would otherwise make a fill
     skip a result it was asked to warm. Detecting it still costs no file open.
+
     A target whose compute raises still gets a ``failed`` row (via the store),
-    so a broken shot does not stop the rest of the fill.
+    so a broken shot does not stop the rest of the fill -- and a ``failed`` run
+    is skipped without reopening its file, because ``store.result`` would only
+    hand the same failure back. ``--force`` is the explicit retry.
     """
     params_hash, _ = store.record_params(conn, spec.key, params)
     discharges = load_discharges()
@@ -136,15 +139,35 @@ def run(conn, spec, targets, params, force=False):
         ):
             stats.cached += 1
             continue
+        if existing is not None and existing["status"] == "failed" and not force:
+            stats.failed += 1
+            continue
         if force and existing is not None:
             store.delete_run(conn, existing)
 
-        with xr.open_dataset(target.path) as ds:
-            t_start, t_end, _ = loader.time_window(ds, discharges.get(target.shot))
-            windowed = (
-                loader.sliced(ds, t_start, t_end) if loader.TIME_DIM in ds.dims else ds
+        try:
+            with xr.open_dataset(target.path) as ds:
+                t_start, t_end, _ = loader.time_window(ds, discharges.get(target.shot))
+                windowed = (
+                    loader.sliced(ds, t_start, t_end)
+                    if loader.TIME_DIM in ds.dims
+                    else ds
+                )
+                _, run_row = store.result(conn, spec, target, params, windowed)
+        except OSError as error:
+            # The file was removed since rescan, or is unreadable. Record it and
+            # keep going, so one bad file cannot abort the overnight fill.
+            store.record_run(
+                conn,
+                target,
+                spec.key,
+                params_hash,
+                blob_path=None,
+                status="failed",
+                error=f"{type(error).__name__}: {error}",
             )
-            _, run_row = store.result(conn, spec, target, params, windowed)
+            stats.failed += 1
+            continue
 
         if run_row is not None and run_row["status"] == "failed":
             stats.failed += 1

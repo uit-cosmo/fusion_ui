@@ -87,6 +87,13 @@ def test_fixed_pixel_selects_one_pixel():
     assert dict(zip(result["shot"], result["value"])) == {1: 20.0}
 
 
+def test_fixed_pixel_requires_a_pixel():
+    with pytest.raises(TypeError, match="pixel"):
+        multishot.aggregate(
+            two_shot_frame(), ("velocity_contour", "h", "apd", 1), "vx_c", "pixel"
+        )
+
+
 def test_shot_level_scalars_pass_through_unchanged():
     rows = frame(
         [

@@ -91,6 +91,8 @@ def aggregate(frame, source, name, how, pixel=None):
         )
 
     if how == "pixel":
+        if pixel is None:
+            raise TypeError("`pixel` (an (x, y) tuple) is required when `how='pixel'`")
         x, y = pixel
         return sub[(sub["x"] == x) & (sub["y"] == y)][
             ["machine", "shot", "value"]
