@@ -282,7 +282,7 @@ shot 1160616027 at pixel (6, 6) exactly — `1.9861501630052958e-05` from both �
 which is the end-to-end proof that params → compute → blob → scalars works, and
 it is the file phase 03's ports should be copied from.
 
-### Phase 03 — Velocity and conditional averaging (1 week) — **in progress**
+### Phase 03 — Velocity and conditional averaging (1 week) — **done**
 
 *First port: Opus 5. Remaining ports: Sonnet 5. Physics validation: you.*
 
@@ -295,10 +295,54 @@ The physics payload, ported as `PlotSpec`s:
   in phase 02
 - ✅ FWHM sizes (`lr`, `lz`) from `plot_and_estimate_fwhm_sizes` —
   `plots/fwhm_sizes.py`
-- ⬜ Gaussian fit sizes (`lx_f`, `ly_f`, `theta_f`) from `get_gaussian_fit_sizes`
-- ⬜ TDE and 2DCA-TDE velocities from `density_scan/utils.py`
-- ⬜ quiver and trajectory plots from `plotting_scripts/twodca_plots.py`
-- ⬜ two-sided exponential fits from `waveform_analysis/fitting.py`
+- ✅ Gaussian fit sizes (`lx_f`, `ly_f`, `theta_f`) from `get_gaussian_fit_sizes`
+  — `plots/gaussian_sizes.py`
+- ✅ 2DCA-TDE velocities from `get_2dca_tde_velocities` —
+  `plots/velocity_2dca_tde.py`, emitting `vx_2dca_tde`, `vy_2dca_tde`
+- ✅ TDE velocities from `get_tde_velocities` — `plots/velocity_tde.py`,
+  emitting `vx_tde`, `vy_tde`. The one phase-03 spec computed off the raw
+  record rather than the conditional average
+- ✅ trajectory plots from `plotting_scripts/twodca_plots.py:plot_trajectories`
+  — `plots/trajectories.py`
+- ✅ the quiver, as the whole-array velocity field — `plots/velocity_field.py`,
+  ported from `twodca_manuscript/velocity_field.py`
+- ✅ two-sided exponential fits from `waveform_analysis/fitting.py`, applied to
+  the temporal and radial cuts of the conditional average —
+  `plots/two_sided_exp.py`
+
+**Phase 03 is done.** Twelve specs are registered. What still needs a
+physicist, not a model:
+
+- **Twelve of the emitted scalar names are new** and not in the seeded
+  `density_scan` rows: `vx_2dca_lsq`/`vy_2dca_lsq`/`vx_ccf_lsq`/`vy_ccf_lsq`
+  (`trajectories`), `vx_field`/`vy_field`/`number_events_field`/`nlags_field`
+  (`velocity_field`), and `tau_prime`/`sigma_t`/`l_prime`/`sigma_sp`
+  (`two_sided_exp`). Confirm they are the right quantities under the right
+  names before phase 04 puts them on an axis.
+- **`two_sided_exp`'s four scalars are not comparable across parameter sets.**
+  The fitted scale depends on how far out the cut extends, and the two cuts do
+  not extend equally far: the radial one spans the pixel array, the temporal
+  one spans `TwoDcaParams.window`. Widening `window` alone moves `tau_prime` by
+  a factor of three while `l_prime` does not move, so their ratio — a velocity
+  — sweeps from 632 m/s through the planted 400 down to 215. Written up in the
+  module docstring.
+- **`gaussian_sizes` reports a penalised size.** On the synthetic fixture the
+  unpenalised least-squares optimum is 0.0089 m and the default
+  `size_penalty=5` pulls it to 0.0039 m — a factor of 2.2. `lx_f`/`ly_f` are
+  that penalty's answer, not a physical width.
+- **The contour reduction is wrong-signed at the array's R-edges.** On the
+  fixture, columns x = 0, 1, 7, 8 return −100 to −240 m/s against a planted
+  +400, and x = 1 and x = 7 do it resting on 40 lags — past any `min_lags`
+  worth setting, so they draw as ordinary well-supported arrows. Reproduced
+  directly through `velocity_contour`'s own reduction, so it is the shared
+  estimator near a truncated blob, not a porting error. It is the main thing
+  `velocity_field` is worth looking at for.
+- **`velocity_tde` returns NaN on purely radial motion at upstream's own
+  default.** Every estimate pairs one neighbour from each axis, and
+  `ccf_min_lag=1` rejects a poloidal neighbour whose cross-correlation peaks at
+  zero lag. Real data has poloidal motion; the default is kept because it is
+  what reproduces the seeded `vx_tde`/`vy_tde`, and the render names the
+  missing axis.
 
 Each implements `scalars()`, which is what makes phase 04 nearly free.
 

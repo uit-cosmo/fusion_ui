@@ -195,9 +195,15 @@ def test_the_plot_picker_offers_only_specs_for_this_diagnostic(single_shot_deplo
     assert widget(app, "selectbox", "Plot").options == [
         "Frames and pixel trace",
         "Duration time (PSD fit)",
+        "Blob velocity (TDE, whole record)",
         "Conditional average (2DCA)",
         "Blob velocity (contour tracking)",
         "Blob size (FWHM)",
+        "Blob size (Gaussian fit)",
+        "Blob velocity (2DCA time delay)",
+        "Tracked trajectories (2DCA)",
+        "Two-sided exponential fits (2DCA cuts)",
+        "Blob velocity field (2DCA at every pixel)",
     ]
 
     app.session_state["selection"] = {

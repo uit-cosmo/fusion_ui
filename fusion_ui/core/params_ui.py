@@ -72,6 +72,7 @@ CHOICES = {
 #: different instruction entirely.
 OPTIONAL = {
     ("GaussFitParams", "size_max"),
+    ("TdeVelocityParams", "max_threshold"),
 }
 
 #: Help text, by dotted path from the top of whichever tree is being walked.
@@ -109,6 +110,23 @@ HELP = {
     "contouring.threshold_factor": (
         "Contour level, as a fraction of the maximum amplitude over the whole "
         "event. 0.3 is what the APD analyses use; 0.5 is the synthetic default."
+    ),
+    # velocity_2dca_tde.TdeParams has no upstream docstring at all -- it is
+    # this app's own wrapper around a bare pair of arguments upstream never
+    # grouped into a class.
+    "tde.gauss_convolve": (
+        "Smooth each pixel's lag trace with a Gaussian before locating its "
+        "maximum. Off by default, matching upstream."
+    ),
+    "tde.sigma": (
+        "Standard deviation of that smoothing Gaussian, in samples. Only "
+        "used when gauss_convolve is on."
+    ),
+    "cross_corr.mask_signal_factor": (
+        "Mask signal factor for the cross-correlation track only. The 2D "
+        "cross-correlation sits on a pedestal well above zero rather than "
+        "decaying to it like the conditional average does, so this fraction-"
+        "of-max floor needs its own value to bind at all."
     ),
 }
 

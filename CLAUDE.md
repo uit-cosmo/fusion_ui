@@ -16,16 +16,18 @@ This file holds only the conventions that apply while writing code.
 
 ## Current state
 
-Phases 00 (skeleton, deployed), 01 (raw data browser) and 02 (registry,
-parameter forms, result store) — **done**. Phase 03 (velocity and conditional
-averaging) is **in progress**: the 2DCA chain has landed, along with
-contour-tracking velocity and FWHM sizes. The remaining ports (Gaussian fit
-sizes, 2DCA-TDE and TDE velocities, quiver and trajectory plots) are
-`PlotSpec`s built the same way — see the contract below.
+Phases 00 (skeleton, deployed), 01 (raw data browser), 02 (registry,
+parameter forms, result store) and 03 (velocity and conditional averaging)
+— **done**. Phase 04 (multi-shot view and precompute CLI) is next.
+
+`docs/PLAN.md` closes phase 03 with the five things that need a physicist
+rather than a model — twelve new scalar names to confirm, and four estimator
+behaviours worth knowing before any of it goes on a multi-shot axis. Read that
+list before phase 04 puts these quantities on an axis.
 
 `core/registry.py`, `core/params_ui.py`, `core/store.py` and `core/seed.py` are
 in, `pages/2_single_shot.py` is a thin dispatcher over the registry, and
-`fusion_ui/plots/` holds six specs:
+`fusion_ui/plots/` holds twelve specs:
 
 | module | spec | |
 |---|---|---|
@@ -35,8 +37,14 @@ in, `pages/2_single_shot.py` is a thin dispatcher over the registry, and
 | `two_dca.py` | `two_dca` | cached: the conditional average — **the base of the phase-03 chain** |
 | `velocity_contour.py` | `velocity_contour` | cached, `requires="two_dca"`: contour-tracking velocity |
 | `fwhm_sizes.py` | `fwhm_sizes` | cached, `requires="two_dca"`: FWHM blob size, `lr`/`lz` |
+| `gaussian_sizes.py` | `gaussian_sizes` | cached, `requires="two_dca"`: fitted ellipse, `lx_f`/`ly_f`/`theta_f` |
+| `velocity_2dca_tde.py` | `velocity_2dca_tde` | cached, `requires="two_dca"`: 3-point time delay across the average |
+| `trajectories.py` | `trajectories` | cached, `requires="two_dca"`: both trackers on one figure |
+| `two_sided_exp.py` | `two_sided_exp` | cached, `requires="two_dca"`: exponential fits to the two cuts |
+| `velocity_tde.py` | `velocity_tde` | cached, unchained: TDE off the raw record |
+| `velocity_field.py` | `velocity_field` | cached, unchained: 2DCA at **every** pixel, ~30 min/shot |
 
-**Copy `velocity_contour.py` for a new phase-03 analysis.** Almost every blob
+**Copy `velocity_contour.py` for a new derived analysis.** Almost every blob
 quantity the group reports is derived from the conditional average, not from
 the raw frames, and 2DCA costs ~21 s on a real shot — so a derived spec
 declares `requires="two_dca"` rather than running its own. Copying `spectra.py`
