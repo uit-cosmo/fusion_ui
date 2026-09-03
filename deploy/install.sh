@@ -48,7 +48,7 @@ STATE_DIR=${STATE_DIR:-/hdd1/fusion_ui}      # SQLite file + result cache
 SERVICE_USER=${SERVICE_USER:-fusionui}
 REPO_URL=${REPO_URL:-https://github.com/uit-cosmo/fusion_ui.git}
 BRANCH=${BRANCH:-main}
-SERVER_NAME=${SERVER_NAME:-$(hostname -f)}
+SERVER_NAME=${SERVER_NAME:-}                 # empty = detect, see resolve_server_name
 CAMPUS_SUBNET=${CAMPUS_SUBNET:-}             # e.g. 10.228.0.0/16; empty = ask, offering
                                              # the subnet the server is itself on
 HTPASSWD_USER=${HTPASSWD_USER:-fusion}
@@ -84,7 +84,7 @@ Usage: sudo bash $0 [options]
   --src-dir PATH      where dependency checkouts live  [$SRC_DIR]
   --state-dir PATH    SQLite file and result cache     [$STATE_DIR]
   --user NAME         service account                  [$SERVICE_USER]
-  --server-name NAME  hostname in the certificate/nginx[$SERVER_NAME]
+  --server-name NAME  hostname in the certificate/nginx[${SERVER_NAME:-detected}]
   --subnet CIDR       allow 443 from this range        [${CAMPUS_SUBNET:-ask}]
   --htpasswd-user U   shared login name                [$HTPASSWD_USER]
   -h, --help          this text
@@ -127,7 +127,41 @@ detect_subnet() {
 }
 as_service_user() { sudo -u "$SERVICE_USER" env "${GIT_ENV[@]}" "$@"; }
 
+# The address the server answers on -- the one the certificate has to cover
+# alongside the name, since people reach an unpublished machine by IP.
+primary_ip() {
+  ip -4 route get 1.1.1.1 2>/dev/null |
+    sed -n 's/.*[[:space:]]src[[:space:]]\([0-9.]*\).*/\1/p' | head -1
+}
+
+# `hostname -f` is whatever the machine calls itself, which need not exist in
+# DNS: this server answers to fp1-hpz4fusion.int.uit.no campus-wide but calls
+# itself fusion-HP-Z4-G4-Workstation, a name that resolves nowhere. Certifying
+# the latter gives every visitor a name-mismatch warning and a URL that does
+# not work. Prefer the reverse lookup of the primary address, and take it only
+# when it resolves forward to that same address.
+resolve_server_name() {
+  local ip name
+  ip=$(primary_ip)
+  if [[ -n "$ip" ]]; then
+    # `|| true`: getent exits 2 when there is no PTR record, and pipefail
+    # would make that abort the whole install.
+    name=$(getent hosts "$ip" | awk '{print $2; exit}' || true)
+    if [[ -n "$name" ]] &&
+       [[ "$(getent hosts "$name" | awk '{print $1; exit}')" == "$ip" ]]; then
+      printf '%s\n' "$name"
+      return 0
+    fi
+  fi
+  hostname -f
+}
+
 [[ $EUID -eq 0 ]] || { echo "Run me as root: sudo bash $0" >&2; exit 1; }
+
+if [[ -z "$SERVER_NAME" ]]; then
+  SERVER_NAME=$(resolve_server_name)
+  echo "Serving as $SERVER_NAME (override with --server-name)."
+fi
 
 step "1. Packages and service account"
 apt-get update -qq
@@ -275,11 +309,30 @@ if [[ ! -f /etc/nginx/.htpasswd ]]; then
 else
   echo "  /etc/nginx/.htpasswd exists; run 'htpasswd /etc/nginx/.htpasswd $HTPASSWD_USER' to change it."
 fi
-if [[ ! -f /etc/nginx/ssl/fusion-ui.crt ]]; then
+# Browsers have matched on subjectAltName alone since 2017 and ignore CN
+# entirely, so a certificate carrying only a subject is rejected however right
+# that subject is. Both the name and the address go in the SAN: the name is how
+# people should reach it, the address is how they will while they are guessing.
+cert_san="DNS:$SERVER_NAME"
+server_ip=$(primary_ip)
+if [[ -n "$server_ip" ]]; then
+  cert_san="$cert_san,IP:$server_ip"
+fi
+# Reissued when it no longer covers the name, so correcting --server-name is
+# enough -- an existing certificate for the wrong name is the whole problem.
+if [[ -f /etc/nginx/ssl/fusion-ui.crt ]] &&
+   openssl x509 -in /etc/nginx/ssl/fusion-ui.crt -noout -ext subjectAltName \
+     2>/dev/null | grep -qF "DNS:$SERVER_NAME"; then
+  echo "  Certificate already covers $SERVER_NAME."
+else
+  if [[ -f /etc/nginx/ssl/fusion-ui.crt ]]; then
+    echo "  Reissuing the certificate: it does not cover $SERVER_NAME."
+  fi
   mkdir -p /etc/nginx/ssl
   openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
     -keyout /etc/nginx/ssl/fusion-ui.key -out /etc/nginx/ssl/fusion-ui.crt \
-    -subj "/CN=$SERVER_NAME" 2>/dev/null
+    -subj "/CN=$SERVER_NAME" -addext "subjectAltName=$cert_san" 2>/dev/null
+  echo "  Certificate: CN=$SERVER_NAME, SAN=$cert_san"
 fi
 # nginx binds every listen directive at startup, so one taken port stops the
 # whole service -- including the 443 vhost that is the actual deployment.
