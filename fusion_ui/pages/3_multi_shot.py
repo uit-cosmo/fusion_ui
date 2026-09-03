@@ -18,7 +18,7 @@ import plotly.express as px
 import streamlit as st
 
 import fusion_ui.plots  # noqa: F401 - importing the package registers every spec
-from fusion_ui import ui
+from fusion_ui import config, ui
 from fusion_ui.core import multishot, params_ui, registry, store
 
 st.set_page_config(page_title="Multi shot · Shot Explorer", layout="wide")
@@ -68,12 +68,20 @@ def main():
     st.title("Multi shot")
 
     conn = ui.get_connection()
-    frame = store.scalar_frame(conn)
+    # One machine at a time. `rescan` only ever deletes its own machine's rows,
+    # so an index can hold two machines at once (the single-shot page picks
+    # between them); shot numbers are not unique across machines, and neither
+    # the selection carried over from the browser nor the metadata join is
+    # keyed by machine, so an unscoped frame would silently overlay two
+    # different discharges on one point.
+    machine = config.MACHINE
+    frame = store.scalar_frame(conn, machine=machine)
     if frame.empty:
         st.warning(
-            "No results are stored yet. Compute something on the single-shot "
-            "page, run `fusion-ui import-results` to load the density_scan "
-            "seed, or `fusion-ui precompute` to warm the cache overnight.",
+            f"No results are stored for machine `{machine}` yet. Compute "
+            "something on the single-shot page, run `fusion-ui import-results` "
+            "to load the density_scan seed, or `fusion-ui precompute` to warm "
+            "the cache overnight.",
             icon="⚠️",
         )
         return
@@ -173,7 +181,7 @@ def main():
 
     st.caption(
         f"{name} · {multishot.AGGREGATES.get(how, how)} · "
-        f"{len(plot_frame)} shots · click a point to open that shot"
+        f"{len(plot_frame)} shots on `{machine}` · click a point to open that shot"
     )
 
     figure = px.scatter(

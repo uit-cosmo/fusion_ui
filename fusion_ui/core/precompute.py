@@ -60,10 +60,15 @@ def targets_for(conn, spec, machine=None, shots=None):
     defaults to ``config.MACHINE``. The time window is left ``NaN`` here -- it is
     derived from the descriptor (or the record itself) when the file is opened
     in :func:`run`, exactly as the single-shot page does.
+
+    The order is fixed by the query, not left to the query plan: an overnight
+    fill prints one line per shot and is watched (and resumed) by shot number,
+    so two runs over the same index must walk it the same way.
     """
     machine = machine or config.MACHINE
     rows = conn.execute(
-        "SELECT shot, diagnostic, preprocessed, path FROM shots WHERE machine = ?",
+        "SELECT shot, diagnostic, preprocessed, path FROM shots WHERE machine = ?"
+        " ORDER BY shot, diagnostic, preprocessed",
         (machine,),
     ).fetchall()
     targets = []

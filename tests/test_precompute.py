@@ -35,6 +35,16 @@ def test_targets_for_picks_only_shots_the_spec_accepts(indexed):
     assert precompute.targets_for(indexed, registry.get("probe_trace"), "cmod") == []
 
 
+def test_targets_come_back_in_a_fixed_order(indexed):
+    """The query orders the fill; the query plan must not get a say in it."""
+    spec = registry.get("taud_psd")
+    keys = [
+        (t.shot, t.diagnostic, t.preprocessed)
+        for t in precompute.targets_for(indexed, spec, "cmod")
+    ]
+    assert keys == sorted(keys)
+
+
 def test_targets_can_be_restricted_to_a_shot(indexed):
     spec = registry.get("taud_psd")
     assert precompute.targets_for(indexed, spec, "cmod", shots={999}) == []

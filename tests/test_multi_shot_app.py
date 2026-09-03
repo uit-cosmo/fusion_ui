@@ -41,13 +41,13 @@ def deployment(monkeypatch, tmp_path, data_folder, discharge_db):
     st.cache_resource.clear()
 
 
-def _write_scalars(conn):
+def _write_scalars(conn, machine="cmod", scalars=None):
     """Two shots with stored ``vx_c`` values, one source, per-pixel."""
-    for shot, values in [
+    for shot, values in scalars or [
         (1160616027, {(6, 6): 400.0, (6, 5): 380.0}),
         (1110201007, {(6, 6): 100.0}),
     ]:
-        target = registry.Target("cmod", shot, "apd", True, "", 0.0, 0.0, "none")
+        target = registry.Target(machine, shot, "apd", True, "", 0.0, 0.0, "none")
         params_hash, _ = store.record_params(conn, "synthetic", _Params())
         run = store.record_run(
             conn,
@@ -126,3 +126,14 @@ def test_the_aggregate_picker_offers_each_collapse(deployment):
         "maximum over pixels",
         "fixed pixel",
     ]
+
+
+def test_another_machines_scalars_are_left_out(deployment):
+    """`rescan` only deletes its own machine's rows, so an index can hold two
+    machines at once -- and shot numbers are not unique across them."""
+    conn = db.open_db(deployment)
+    _write_scalars(conn, machine="aug", scalars=[(1160616027, {(6, 6): -1.0})])
+    conn.close()
+
+    app = run(MULTI_SHOT)
+    assert any("2 shots on `cmod`" in c.value for c in app.caption)
