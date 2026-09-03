@@ -422,3 +422,76 @@ def test_a_cached_spec_may_draw_its_own_widgets(blob_deployment):
     (runs,) = conn.execute("SELECT COUNT(*) FROM runs").fetchone()
     conn.close()
     assert (after, runs) == (before, 1)
+
+
+# ---------------------------------------------------------------------------
+# Two machines in one index
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def two_machine_deployment(single_shot_deployment):
+    """The same shot numbers indexed under two machines.
+
+    ``rescan`` runs for one machine and only deletes that machine's rows, so
+    repointing ``FUSION_MACHINE`` leaves the previous machine indexed for good
+    -- there is no "switch machines" that also forgets the old one. The
+    fixture reuses the real tree so both machines carry shots 1234 and 5678,
+    which is the collision the picker has to survive.
+    """
+    import streamlit as st
+
+    conn = db.open_db(single_shot_deployment)
+    catalog.rescan(conn, str(config.DATA_FOLDER), "other", None)
+    conn.close()
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    return single_shot_deployment
+
+
+def test_a_shot_number_on_two_machines_still_picks_exactly_one_row(
+    two_machine_deployment,
+):
+    """Keyed on the shot alone, ``table.set_index("shot").loc[1234]`` returns
+    both machines' rows and ``available_targets`` then asks for the truth
+    value of a Series -- so the page dies on a ValueError rather than showing
+    the wrong shot."""
+    app = AppTest.from_file(SINGLE_SHOT, default_timeout=60).run()
+    assert not app.exception, app.exception
+
+    machine = widget(app, "selectbox", "Machine")
+    assert machine.options == ["cmod", "other"]
+    assert machine.value == "cmod"
+    # Each machine offers its own shots, not the union counted twice.
+    # AppTest serialises selectbox options as strings; what matters is that
+    # each machine offers its own two shots, not the union counted twice.
+    assert widget(app, "selectbox", "Shot").options == ["1234", "5678"]
+
+
+def test_switching_machine_keeps_the_target_on_that_machine(two_machine_deployment):
+    app = AppTest.from_file(SINGLE_SHOT, default_timeout=60).run()
+    # Target.key names the cache blob and every session-state entry, so a
+    # picker that dropped the machine would give both machines one key and let
+    # them overwrite each other's view state. Proven here through the pixel
+    # the frame view reports: it is read out of session state under that key,
+    # so it only comes back if the target really moved to "other".
+    app.session_state["pixel.other_1234_apd_r"] = (2, 3)
+    widget(app, "selectbox", "Machine").set_value("other").run()
+    assert not app.exception, app.exception
+    assert widget(app, "selectbox", "Machine").value == "other"
+    assert any("y=2, x=3" in c for c in captions(app))
+
+
+def test_a_browser_selection_on_the_other_machine_is_honoured(two_machine_deployment):
+    app = AppTest.from_file(SINGLE_SHOT, default_timeout=60)
+    app.session_state["selection"] = {
+        "machine": "other",
+        "shot": 5678,
+        "diagnostic": "asp",
+        "preprocessed": False,
+    }
+    app.run()
+    assert not app.exception, app.exception
+    assert widget(app, "selectbox", "Machine").value == "other"
+    assert widget(app, "selectbox", "Shot").value == 5678
+    assert widget(app, "selectbox", "Diagnostic").value == "asp"
