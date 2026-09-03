@@ -90,11 +90,77 @@ def _migrate_to_1(conn):
     conn.executescript(SCHEMA)
 
 
+# ---------------------------------------------------------------------------
+# Schema (version 2)
+# ---------------------------------------------------------------------------
+
+# `runs` originally keyed on (machine, shot, diagnostic, plot, params_hash),
+# which does not say whether the result came from the raw file or the
+# preprocessed one. `shots` has always distinguished them -- they are different
+# data and give different answers -- so without this column the second variant
+# silently returned the first one's cached result under its own label.
+#
+# SQLite cannot add a column to a UNIQUE constraint, so the table is rebuilt.
+# `scalars` is parked in a constraint-free copy first: it carries ON DELETE
+# CASCADE, and dropping `runs` while it still referenced it would take the
+# scalars with it.
+_MIGRATE_2 = """
+CREATE TABLE scalars_backup AS SELECT * FROM scalars;
+DROP TABLE scalars;
+
+CREATE TABLE runs_new (
+    id           INTEGER PRIMARY KEY,
+    machine      TEXT    NOT NULL,
+    shot         INTEGER NOT NULL,
+    diagnostic   TEXT    NOT NULL,
+    preprocessed INTEGER NOT NULL DEFAULT 0,
+    plot         TEXT    NOT NULL,
+    params_hash  TEXT    NOT NULL REFERENCES param_sets(hash),
+    blob_path    TEXT,
+    status       TEXT    NOT NULL,
+    error        TEXT,
+    seconds      REAL,
+    code_version TEXT,
+    created_at   TEXT    NOT NULL,
+    UNIQUE (machine, shot, diagnostic, preprocessed, plot, params_hash)
+);
+INSERT INTO runs_new (id, machine, shot, diagnostic, preprocessed, plot,
+                      params_hash, blob_path, status, error, seconds,
+                      code_version, created_at)
+     SELECT id, machine, shot, diagnostic, 0, plot, params_hash, blob_path,
+            status, error, seconds, code_version, created_at
+       FROM runs;
+DROP TABLE runs;
+ALTER TABLE runs_new RENAME TO runs;
+
+CREATE TABLE scalars (
+    run_id  INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    x       INTEGER NOT NULL DEFAULT -1,
+    y       INTEGER NOT NULL DEFAULT -1,
+    name    TEXT    NOT NULL,
+    value   REAL,
+    PRIMARY KEY (run_id, x, y, name)
+);
+INSERT INTO scalars (run_id, x, y, name, value)
+     SELECT run_id, x, y, name, value FROM scalars_backup;
+DROP TABLE scalars_backup;
+
+CREATE INDEX idx_runs_shot    ON runs (machine, shot);
+CREATE INDEX idx_runs_plot    ON runs (plot, params_hash);
+CREATE INDEX idx_scalars_name ON scalars (name);
+"""
+
+
+def _migrate_to_2(conn):
+    conn.executescript(_MIGRATE_2)
+
+
 # Index = the schema version the migration produces. Append, never rewrite:
 # a database file already at version N only runs MIGRATIONS[N:].
 MIGRATIONS = [
     None,  # version 0 is "empty file"
     _migrate_to_1,
+    _migrate_to_2,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS) - 1

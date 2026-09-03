@@ -17,6 +17,11 @@ offers the subnet the server is itself on.
 also reads the matching environment variable, but prefer the flags — whether
 `sudo VAR=value bash …` passes a variable through depends on the sudoers config.
 
+The current deployment is **<https://fp1-hpz4fusion.int.uit.no/>** — that name,
+not the machine's own `fusion-HP-Z4-G4-Workstation`, which resolves nowhere. Port
+80 is closed, so the `https://` has to be typed. The certificate is self-signed,
+so the first visit needs one click through the browser's warning.
+
 To check a deployment at any time, from the server or a laptop:
 
 ```bash
@@ -258,10 +263,25 @@ puts the database or cache somewhere else, or the service will fail to write.
 sudo apt install nginx apache2-utils
 sudo htpasswd -c /etc/nginx/.htpasswd fusion    # one shared account
 sudo mkdir -p /etc/nginx/ssl
+name=$(getent hosts "$(hostname -I | awk '{print $1}')" | awk '{print $2}')
 sudo openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
   -keyout /etc/nginx/ssl/fusion-ui.key -out /etc/nginx/ssl/fusion-ui.crt \
-  -subj "/CN=$(hostname -f)"
+  -subj "/CN=$name" \
+  -addext "subjectAltName=DNS:$name,IP:$(hostname -I | awk '{print $1}')"
+```
 
+Two things about that name, both of which cost an afternoon once. It must be the
+name **DNS** knows, not `hostname -f`: this server calls itself
+`fusion-HP-Z4-G4-Workstation` and answers campus-wide as
+`fp1-hpz4fusion.int.uit.no`, and a certificate for the first is a warning plus a
+URL nobody can open. The reverse lookup above is where `install.sh` gets it, and
+`--server-name` overrides. And the name has to be in `subjectAltName`, not only
+in the subject — browsers have ignored CN since 2017, so a subject-only
+certificate is rejected however right the subject is. `install.sh` reissues the
+certificate whenever the existing one does not cover `--server-name`, so fixing
+the name and re-running is enough.
+
+```bash
 sudo cp /opt/fusion-ui/deploy/nginx.conf /etc/nginx/sites-available/fusion-ui
 sudo ln -sf /etc/nginx/sites-available/fusion-ui /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default

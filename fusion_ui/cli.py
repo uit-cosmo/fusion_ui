@@ -1,7 +1,8 @@
 """``fusion-ui`` -- the commands that run outside the browser.
 
 ``rescan`` is the one that goes on cron; ``status`` is the one to run after
-deploying. ``precompute`` and ``prune`` arrive with phases 04 and 05.
+deploying; ``import-results`` is run once, to seed the scalar store from
+``density_scan``. ``precompute`` and ``prune`` arrive with phases 04 and 05.
 """
 
 import argparse
@@ -9,7 +10,7 @@ import os
 import sys
 
 from fusion_ui import config
-from fusion_ui.core import catalog, db
+from fusion_ui.core import catalog, db, seed
 
 
 def _resolve(attribute):
@@ -53,6 +54,17 @@ def cmd_rescan(args):
     return 0
 
 
+def cmd_import_results(args):
+    conn = db.open_db(args.database)
+    try:
+        stats = seed.import_results(conn, args.results, args.machine)
+    except FileNotFoundError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    print(stats.summary())
+    return 0
+
+
 def cmd_status(args):
     print(f"machine          {config.MACHINE}")
     for label, attribute in (
@@ -79,16 +91,34 @@ def cmd_status(args):
     ).fetchall()
     if not rows:
         print("index            empty — run `fusion-ui rescan`")
+    else:
+        print("index")
+        for row in rows:
+            kind = "preprocessed" if row["preprocessed"] else "raw"
+            print(
+                f"  {row['machine']} {row['diagnostic']:<8} {kind:<12} "
+                f"{row['n']:>6} files, {row['curated']:>6} curated"
+            )
+        shots = conn.execute("SELECT COUNT(DISTINCT shot) FROM shots").fetchone()[0]
+        print(f"  {shots} distinct shots")
+
+    runs = conn.execute(
+        "SELECT r.plot, r.status, COUNT(*) AS n,"
+        "       COUNT(DISTINCT r.shot) AS shots,"
+        "       (SELECT COUNT(*) FROM scalars s WHERE s.run_id IN"
+        "          (SELECT id FROM runs q WHERE q.plot = r.plot"
+        "                                AND q.status = r.status)) AS scalars"
+        "  FROM runs r GROUP BY r.plot, r.status ORDER BY r.plot, r.status"
+    ).fetchall()
+    if not runs:
+        print("results          none yet")
         return 0
-    print("index")
-    for row in rows:
-        kind = "preprocessed" if row["preprocessed"] else "raw"
+    print("results")
+    for row in runs:
         print(
-            f"  {row['machine']} {row['diagnostic']:<8} {kind:<12} "
-            f"{row['n']:>6} files, {row['curated']:>6} curated"
+            f"  {row['plot']:<24} {row['status']:<7} {row['n']:>5} runs, "
+            f"{row['shots']:>4} shots, {row['scalars']:>7} scalars"
         )
-    shots = conn.execute("SELECT COUNT(DISTINCT shot) FROM shots").fetchone()[0]
-    print(f"  {shots} distinct shots")
     return 0
 
 
@@ -120,6 +150,18 @@ def build_parser():
         help="data tree to walk (default: $FUSION_DATA_FOLDER)",
     )
     rescan.set_defaults(func=cmd_rescan)
+
+    seed_results = subparsers.add_parser(
+        "import-results",
+        help="seed `scalars` from a density_scan results.json",
+    )
+    seed_results.add_argument(
+        "--results",
+        default=None,
+        metavar="PATH",
+        help="results.json to import (default: fusion_scripts' DENSITY_SCAN_RESULTS)",
+    )
+    seed_results.set_defaults(func=cmd_import_results)
 
     status = subparsers.add_parser("status", help="resolved paths and index counts")
     status.set_defaults(func=cmd_status)

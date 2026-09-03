@@ -215,7 +215,7 @@ APIs rather than reaching into scripts.
 Ordered so something usable is deployed at the end of the first phase, and each
 later phase adds a view without reworking the last.
 
-### Phase 00 — Skeleton, deployed (1–2 days)
+### Phase 00 — Skeleton, deployed (1–2 days) — **done**
 
 *Schema: Opus 5, in plan mode. Scaffolding: Sonnet 5. Deployment steps: you.*
 
@@ -228,7 +228,7 @@ files but no metadata. Then the full deployment path — systemd, nginx, passwor
 
 **Ships: a URL the group can already open.**
 
-### Phase 01 — Raw data browser (2–3 days)
+### Phase 01 — Raw data browser (2–3 days) — **done**
 
 *Sonnet 5, except `core/probes.py` — Opus 5.*
 
@@ -240,7 +240,7 @@ consumers rather than one imagined one.
 
 **Ships: the view people will use daily.**
 
-### Phase 02 — Registry, parameter forms, result store (2–3 days)
+### Phase 02 — Registry, parameter forms, result store (2–3 days) — **done**
 
 *Opus 5, in plan mode.*
 
@@ -251,21 +251,125 @@ views onto it and delete the bespoke wiring. Import
 multi-shot view has data before any heavy compute runs.
 
 **Ships: adding a plot becomes a one-file job.**
-**On landing: write the `PlotSpec` contract into `CLAUDE.md`.**
+**On landing: write the `PlotSpec` contract into `CLAUDE.md`.** — done; it is
+the section of that file phase 03 should read first.
 
-### Phase 03 — Velocity and conditional averaging (1 week)
+Four things came out differently from the sketch above, all deliberate:
+
+- **`render` may draw, and `compute` is optional.** `render(result, params,
+  target) -> go.Figure | None`; returning `None` means it drew into Streamlit
+  itself. `compute is None` marks a *live* spec whose result is the time-sliced
+  dataset — no run row, no blob. Without this the frame viewer, with its
+  slider, click target, movie expander and two figures, could not have been a
+  spec at all, and the registry would have been designed against one imagined
+  consumer instead of the two real ones phase 01 was written to provide.
+- **Diagnostics are strings, not `Diagnostic` members.** Every other part of the
+  app already used the string (`catalog.DIAGNOSTICS`, `shots.diagnostic`,
+  `loader.dataset_path`); the enum stays inside `loader`.
+- **The params hash includes the plot key.** `param_sets.hash` is the primary
+  key while `plot` is an ordinary column, so two plots sharing a default
+  parameter set — easy, since several will use bare `TwoDcaParams()` — would
+  have collided on it.
+- **Schema v2 adds `runs.preprocessed`.** The original UNIQUE key could not tell
+  a result computed from the raw file from one computed from the preprocessed
+  one, so the second silently returned the first's cached result under its own
+  label. Caught by a test before any real data was written.
+
+Phase 02 also shipped one real cached analysis rather than infrastructure alone:
+`plots/spectra.py`, the PSD duration-time fit ported from
+`density_scan/utils.py:get_taud_from_psd`. It reproduces the stored value for
+shot 1160616027 at pixel (6, 6) exactly — `1.9861501630052958e-05` from both —
+which is the end-to-end proof that params → compute → blob → scalars works, and
+it is the file phase 03's ports should be copied from.
+
+### Phase 03 — Velocity and conditional averaging (1 week) — **done**
 
 *First port: Opus 5. Remaining ports: Sonnet 5. Physics validation: you.*
 
 The physics payload, ported as `PlotSpec`s:
 
-- quiver and trajectory plots from `plotting_scripts/twodca_plots.py`
-- contour, TDE and 2DCA-TDE velocities from `density_scan/utils.py`
-- `imaging_methods.find_events_and_2dca` with event counts, and two-sided
-  exponential fits from `waveform_analysis/fitting.py`
-- duration times via `density_scan/utils.py:get_taud_from_psd`
+- ✅ `imaging_methods.find_events_and_2dca` with event counts — `plots/two_dca.py`
+- ✅ contour velocities from `density_scan/utils.py:get_contour_parameters` —
+  `plots/velocity_contour.py`, emitting `vx_c`, `vy_c`, `area_c`
+- ✅ duration times via `density_scan/utils.py:get_taud_from_psd` — landed early,
+  in phase 02
+- ✅ FWHM sizes (`lr`, `lz`) from `plot_and_estimate_fwhm_sizes` —
+  `plots/fwhm_sizes.py`
+- ✅ Gaussian fit sizes (`lx_f`, `ly_f`, `theta_f`) from `get_gaussian_fit_sizes`
+  — `plots/gaussian_sizes.py`
+- ✅ 2DCA-TDE velocities from `get_2dca_tde_velocities` —
+  `plots/velocity_2dca_tde.py`, emitting `vx_2dca_tde`, `vy_2dca_tde`
+- ✅ TDE velocities from `get_tde_velocities` — `plots/velocity_tde.py`,
+  emitting `vx_tde`, `vy_tde`. The one phase-03 spec computed off the raw
+  record rather than the conditional average
+- ✅ trajectory plots from `plotting_scripts/twodca_plots.py:plot_trajectories`
+  — `plots/trajectories.py`
+- ✅ the quiver, as the whole-array velocity field — `plots/velocity_field.py`,
+  ported from `twodca_manuscript/velocity_field.py`
+- ✅ two-sided exponential fits from `waveform_analysis/fitting.py`, applied to
+  the temporal and radial cuts of the conditional average —
+  `plots/two_sided_exp.py`
+
+**Phase 03 is done.** Twelve specs are registered. What still needs a
+physicist, not a model:
+
+- **Twelve of the emitted scalar names are new** and not in the seeded
+  `density_scan` rows: `vx_2dca_lsq`/`vy_2dca_lsq`/`vx_ccf_lsq`/`vy_ccf_lsq`
+  (`trajectories`), `vx_field`/`vy_field`/`number_events_field`/`nlags_field`
+  (`velocity_field`), and `tau_prime`/`sigma_t`/`l_prime`/`sigma_sp`
+  (`two_sided_exp`). Confirm they are the right quantities under the right
+  names before phase 04 puts them on an axis.
+- **`two_sided_exp`'s four scalars are not comparable across parameter sets.**
+  The fitted scale depends on how far out the cut extends, and the two cuts do
+  not extend equally far: the radial one spans the pixel array, the temporal
+  one spans `TwoDcaParams.window`. Widening `window` alone moves `tau_prime` by
+  a factor of three while `l_prime` does not move, so their ratio — a velocity
+  — sweeps from 632 m/s through the planted 400 down to 215. Written up in the
+  module docstring.
+- **`gaussian_sizes` reports a penalised size.** On the synthetic fixture the
+  unpenalised least-squares optimum is 0.0089 m and the default
+  `size_penalty=5` pulls it to 0.0039 m — a factor of 2.2. `lx_f`/`ly_f` are
+  that penalty's answer, not a physical width.
+- **The contour reduction is wrong-signed at the array's R-edges.** On the
+  fixture, columns x = 0, 1, 7, 8 return −100 to −240 m/s against a planted
+  +400, and x = 1 and x = 7 do it resting on 40 lags — past any `min_lags`
+  worth setting, so they draw as ordinary well-supported arrows. Reproduced
+  directly through `velocity_contour`'s own reduction, so it is the shared
+  estimator near a truncated blob, not a porting error. It is the main thing
+  `velocity_field` is worth looking at for.
+- **`velocity_tde` returns NaN on purely radial motion at upstream's own
+  default.** Every estimate pairs one neighbour from each axis, and
+  `ccf_min_lag=1` rejects a poloidal neighbour whose cross-correlation peaks at
+  zero lag. Real data has poloidal motion; the default is kept because it is
+  what reproduces the seeded `vx_tde`/`vy_tde`, and the render names the
+  missing axis.
 
 Each implements `scalars()`, which is what makes phase 04 nearly free.
+
+**One contract extension, in the first port: `PlotSpec.requires`.** 2DCA costs
+~21 s on a real preprocessed shot, and every remaining item on that list except
+the TDE velocities takes the *conditional average* as its input, not the raw
+frames — which is why `density_scan` stages `average_ds_<shot>_<refx><refy>.nc`
+files on disk between the two halves of its own pipeline. A spec now says
+`requires="two_dca"` plus an `upstream_params` that lifts the upstream's
+parameters out of its own, and the store resolves the chain depth-first and
+only on a miss. Without it each of the four remaining ports would recompute the
+same average and store a duplicate blob: at 3880 seeded pixels that is on the
+order of a hundred hours of duplicated compute for a full phase-04 precompute.
+
+Two notes for the remaining ports:
+
+- **`velocity_estimation.EstimationOptions` still cannot be a params field** —
+  it carries `@dataclass` but declares its own `__init__`, so `fields()` is
+  empty and `params_ui` raises on it by design. The TDE ports need a real
+  dataclass holding the handful of settings `get_tde_velocities` actually sets,
+  and should build the `EstimationOptions` inside `compute`.
+- **The seed is from 1 June 2026 and `imaging_methods` has moved since**
+  (notably `0f28885`, the non-uniform-grid fix in `contours.py`, 14 July).
+  `number_events` and `taud_psd` reproduce exactly; the contour quantities
+  agree to 1–5% and `theta` changed convention outright. Expect the same when
+  checking a new port against `results.json`, and treat a *large* disagreement
+  as a real finding.
 
 **Ships: the reason the tool exists.**
 

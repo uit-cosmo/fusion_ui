@@ -99,3 +99,50 @@ def test_run_requires_a_known_params_hash(conn):
                 " status, created_at) VALUES ('cmod', 1, 'apd', 'raw',"
                 " 'no-such-hash', 'ok', '2026-01-02')"
             )
+
+
+def test_runs_distinguish_the_raw_file_from_the_preprocessed_one(conn):
+    """Added in schema v2. Without it the preprocessed variant of a shot
+    returned the raw one's cached result under its own label."""
+    _make_run(conn)
+    with conn:
+        conn.execute(
+            "INSERT INTO runs (machine, shot, diagnostic, preprocessed, plot,"
+            " params_hash, status, created_at) VALUES ('cmod', 1, 'apd', 1,"
+            " 'velocity_2dca', 'abc', 'ok', '2026-01-01')"
+        )
+    assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 2
+
+
+def test_a_v1_database_migrates_forward_without_losing_rows(tmp_path):
+    """The v1 -> v2 rebuild drops and recreates both `runs` and `scalars`;
+    anything already recorded has to survive it."""
+    path = tmp_path / "old.sqlite"
+    conn = db.connect(path)
+    with conn:
+        db.MIGRATIONS[1](conn)
+        conn.execute("PRAGMA user_version = 1")
+        conn.execute(
+            "INSERT INTO param_sets VALUES ('abc', 'velocity_2dca', '{}', '2026-01-01')"
+        )
+        conn.execute(
+            "INSERT INTO runs (id, machine, shot, diagnostic, plot, params_hash,"
+            " status, created_at) VALUES (7, 'cmod', 1160616027, 'apd',"
+            " 'velocity_2dca', 'abc', 'ok', '2026-01-01')"
+        )
+        conn.execute("INSERT INTO scalars VALUES (7, 3, 4, 'vx_c', 566.6)")
+    conn.close()
+
+    conn = db.open_db(path)
+    assert db.schema_version(conn) == db.SCHEMA_VERSION
+    run = conn.execute("SELECT * FROM runs").fetchone()
+    assert run["id"] == 7 and run["shot"] == 1160616027
+    assert run["preprocessed"] == 0, "existing rows describe the raw file"
+    assert conn.execute("SELECT value FROM scalars").fetchone()[0] == 566.6
+    assert "scalars_backup" not in table_names(conn)
+
+    # And the cascade still works on the rebuilt tables.
+    with conn:
+        conn.execute("DELETE FROM runs WHERE id = 7")
+    assert conn.execute("SELECT COUNT(*) FROM scalars").fetchone()[0] == 0
+    conn.close()
