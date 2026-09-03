@@ -293,9 +293,9 @@ The physics payload, ported as `PlotSpec`s:
   `plots/velocity_contour.py`, emitting `vx_c`, `vy_c`, `area_c`
 - ✅ duration times via `density_scan/utils.py:get_taud_from_psd` — landed early,
   in phase 02
-- ⬜ Gaussian fit sizes (`lx_f`, `ly_f`, `theta_f`) from
-  `get_gaussian_fit_sizes`, and FWHM sizes (`lr`, `lz`) from
-  `plot_and_estimate_fwhm_sizes`
+- ✅ FWHM sizes (`lr`, `lz`) from `plot_and_estimate_fwhm_sizes` —
+  `plots/fwhm_sizes.py`
+- ⬜ Gaussian fit sizes (`lx_f`, `ly_f`, `theta_f`) from `get_gaussian_fit_sizes`
 - ⬜ TDE and 2DCA-TDE velocities from `density_scan/utils.py`
 - ⬜ quiver and trajectory plots from `plotting_scripts/twodca_plots.py`
 - ⬜ two-sided exponential fits from `waveform_analysis/fitting.py`

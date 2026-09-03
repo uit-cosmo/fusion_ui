@@ -11,11 +11,15 @@ import pytest
 import xarray as xr
 
 from fusion_ui.core import registry, store
-from fusion_ui.plots import two_dca, velocity_contour
+from fusion_ui.plots import fwhm_sizes, two_dca, velocity_contour
 
 #: What the fixture plants: 20 blobs at 400 m/s radially outward.
 EVENTS, VX = 20, 400.0
 CENTRE = 4  # the reference pixel on the 9x9 grid
+#: The planted Gaussian's FWHM, in metres: sigma is 0.4 cm and both the
+#: radial and poloidal cuts through the peak-lag average are that same
+#: Gaussian, so lr and lz should agree with this and with each other.
+BLOB_FWHM = 2 * np.sqrt(2 * np.log(2)) * 0.4 / 100
 
 
 @pytest.fixture
@@ -34,6 +38,13 @@ def two_dca_params():
 @pytest.fixture
 def contour_params():
     params = velocity_contour.ContourVelocityParams()
+    params.two_dca.refx = params.two_dca.refy = CENTRE
+    return params
+
+
+@pytest.fixture
+def fwhm_params():
+    params = fwhm_sizes.FwhmSizeParams()
     params.two_dca.refx = params.two_dca.refy = CENTRE
     return params
 
@@ -170,4 +181,58 @@ def test_the_chain_round_trips_through_the_store(
         ("velocity_contour", "vx_c"),
         ("velocity_contour", "vy_c"),
         ("velocity_contour", "area_c"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# fwhm_sizes
+# ---------------------------------------------------------------------------
+
+
+def test_the_fwhm_recovers_the_planted_blob_width(blobs, two_dca_params, fwhm_params):
+    average = two_dca.compute(blobs, two_dca_params)
+    result = fwhm_sizes.compute(blobs, fwhm_params, average)
+
+    assert float(result["lr"]) == pytest.approx(BLOB_FWHM, rel=0.05)
+    # The planted blob is a symmetric Gaussian, so the radial and poloidal
+    # cuts through it must agree with each other, not just with the analytic
+    # width -- a bug that mixed up the two axes would still pass the first
+    # assertion by coincidence but fail this one.
+    assert float(result["lz"]) == pytest.approx(float(result["lr"]), rel=0.05)
+
+
+def test_the_scalars_are_the_two_density_scan_reports(blobs, two_dca_params, fwhm_params):
+    average = two_dca.compute(blobs, two_dca_params)
+    result = fwhm_sizes.compute(blobs, fwhm_params, average)
+    assert fwhm_sizes.scalars(result) == {
+        (CENTRE, CENTRE, "lr"): pytest.approx(float(result["lr"])),
+        (CENTRE, CENTRE, "lz"): pytest.approx(float(result["lz"])),
+    }
+
+
+def test_compute_never_looks_at_the_raw_dataset_fwhm(blobs, two_dca_params, fwhm_params):
+    """Its input is the upstream result. If that stops being true, the store's
+    chaining is no longer the only path to this analysis."""
+    average = two_dca.compute(blobs, two_dca_params)
+    assert fwhm_sizes.compute(None, fwhm_params, average) is not None
+
+
+def test_the_fwhm_chain_round_trips_through_the_store(conn, cache, blobs, fwhm_params, target):
+    spec = registry.get("fwhm_sizes")
+    result, run = store.result(conn, spec, target, fwhm_params, blobs)
+
+    assert run["status"] == "ok", run["error"]
+    assert float(result["lr"]) == pytest.approx(BLOB_FWHM, rel=0.05)
+    assert fwhm_sizes.render(result, fwhm_params, target) is not None
+
+    names = {
+        (r["plot"], r["name"])
+        for r in conn.execute(
+            "SELECT r.plot, s.name FROM scalars s JOIN runs r ON r.id = s.run_id"
+        )
+    }
+    assert names == {
+        ("two_dca", "number_events"),
+        ("fwhm_sizes", "lr"),
+        ("fwhm_sizes", "lz"),
     }

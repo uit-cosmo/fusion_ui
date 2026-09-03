@@ -18,13 +18,14 @@ This file holds only the conventions that apply while writing code.
 
 Phases 00 (skeleton, deployed), 01 (raw data browser) and 02 (registry,
 parameter forms, result store) — **done**. Phase 03 (velocity and conditional
-averaging) is **in progress**: the 2DCA chain has landed and the remaining
-ports (Gaussian fit sizes, FWHM sizes, 2DCA-TDE and TDE velocities, quiver and
-trajectory plots) are `PlotSpec`s built the same way — see the contract below.
+averaging) is **in progress**: the 2DCA chain has landed, along with
+contour-tracking velocity and FWHM sizes. The remaining ports (Gaussian fit
+sizes, 2DCA-TDE and TDE velocities, quiver and trajectory plots) are
+`PlotSpec`s built the same way — see the contract below.
 
 `core/registry.py`, `core/params_ui.py`, `core/store.py` and `core/seed.py` are
 in, `pages/2_single_shot.py` is a thin dispatcher over the registry, and
-`fusion_ui/plots/` holds five specs:
+`fusion_ui/plots/` holds six specs:
 
 | module | spec | |
 |---|---|---|
@@ -33,6 +34,7 @@ in, `pages/2_single_shot.py` is a thin dispatcher over the registry, and
 | `spectra.py` | `taud_psd` | cached: the PSD duration-time fit |
 | `two_dca.py` | `two_dca` | cached: the conditional average — **the base of the phase-03 chain** |
 | `velocity_contour.py` | `velocity_contour` | cached, `requires="two_dca"`: contour-tracking velocity |
+| `fwhm_sizes.py` | `fwhm_sizes` | cached, `requires="two_dca"`: FWHM blob size, `lr`/`lz` |
 
 **Copy `velocity_contour.py` for a new phase-03 analysis.** Almost every blob
 quantity the group reports is derived from the conditional average, not from

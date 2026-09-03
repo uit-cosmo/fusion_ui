@@ -197,6 +197,7 @@ def test_the_plot_picker_offers_only_specs_for_this_diagnostic(single_shot_deplo
         "Duration time (PSD fit)",
         "Conditional average (2DCA)",
         "Blob velocity (contour tracking)",
+        "Blob size (FWHM)",
     ]
 
     app.session_state["selection"] = {
@@ -350,6 +351,38 @@ def test_a_chained_spec_renders_and_stores_both_links(blob_deployment):
     }
     conn.close()
     assert velocity["vx_c"] == pytest.approx(400.0, rel=0.05)
+
+
+def test_the_fwhm_spec_renders_and_stores_both_links(blob_deployment):
+    """The other chained port, through the page: one Compute, two ledger
+    rows -- the FWHM sizes and the conditional average they were built on."""
+    app = AppTest.from_file(SINGLE_SHOT, default_timeout=180)
+    app.session_state["spec.apd"] = registry.get("fwhm_sizes")
+    # Same corner-pixel trap as the contour spec: the APD default (8, 8) is a
+    # corner of this 9x9 fixture that no blob crosses.
+    app.session_state["params.fwhm_sizes.two_dca.refx"] = 4
+    app.session_state["params.fwhm_sizes.two_dca.refy"] = 4
+    app.run()
+    assert not app.exception
+
+    widget(app, "button", "Compute").click().run()
+    assert not app.exception
+    assert not app.error, [e.value for e in app.error]
+
+    conn = db.connect(blob_deployment)
+    runs = {r["plot"]: r for r in conn.execute("SELECT * FROM runs")}
+    assert set(runs) == {"two_dca", "fwhm_sizes"}
+    assert all(r["status"] == "ok" for r in runs.values())
+    assert all(os.path.exists(r["blob_path"]) for r in runs.values())
+    sizes = {
+        r["name"]: r["value"]
+        for r in conn.execute(
+            "SELECT s.name, s.value FROM scalars s WHERE s.run_id = ?",
+            (runs["fwhm_sizes"]["id"],),
+        )
+    }
+    conn.close()
+    assert sizes["lr"] == pytest.approx(sizes["lz"], rel=0.05)
 
 
 def test_a_cached_spec_may_draw_its_own_widgets(blob_deployment):

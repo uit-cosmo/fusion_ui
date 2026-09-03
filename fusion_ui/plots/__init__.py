@@ -15,6 +15,7 @@ from fusion_ui.plots import (  # noqa: F401 - imported to register
     spectra,
     two_dca,
     velocity_contour,
+    fwhm_sizes,
 )
 
-__all__ = ["probe", "raw", "spectra", "two_dca", "velocity_contour"]
+__all__ = ["probe", "raw", "spectra", "two_dca", "velocity_contour", "fwhm_sizes"]
