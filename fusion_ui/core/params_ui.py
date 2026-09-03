@@ -87,6 +87,29 @@ HELP = {
         "window length."
     ),
     "position_filter.window_size": "Length of the smoothing filter on the position signal.",
+    # PositionFilterParams and ContouringParams carry no docstring at all, so
+    # without these five entries the busiest panel in the app is unlabelled.
+    "position_filter.window_type": (
+        "Shape of the smoothing window, resolved with scipy.signal.windows."
+    ),
+    "position_filter.mask_distance": (
+        "How far the tracked structure may drift from the reference pixel and "
+        "still count, in pixel widths."
+    ),
+    "position_filter.mask_signal_factor": (
+        "Only track while the field's spatial maximum is at least this "
+        "fraction of its largest value -- it is what keeps the tail of a "
+        "decaying average out of the velocity."
+    ),
+    "position_filter.require_within_boundaries": (
+        "Drop times where the contour touches the edge of the array. Worth "
+        "switching on for a structure comparable in size to the field of view, "
+        "where a clipped contour's centroid follows the edge and not the blob."
+    ),
+    "contouring.threshold_factor": (
+        "Contour level, as a fraction of the maximum amplitude over the whole "
+        "event. 0.3 is what the APD analyses use; 0.5 is the synthetic default."
+    ),
 }
 
 

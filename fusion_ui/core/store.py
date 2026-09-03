@@ -22,6 +22,12 @@ version matters for what they are doing.
 ``status='failed'`` row carrying the message. Subsequent loads return that row
 so the page can show the error and offer Recompute, rather than re-raising the
 same traceback on every rerun.
+
+**A spec with ``requires`` is resolved depth first**, and only when the
+downstream result is actually missing -- a cache hit on the derived quantity
+must not pay for its upstream. Each link in the chain keeps its own ledger row,
+so the 2DCA average that four different plots are built on is computed and
+stored exactly once.
 """
 
 import math
@@ -286,34 +292,76 @@ def _write_blob(result, path, plot, params_hash, text, code_version, created_at)
 # ---------------------------------------------------------------------------
 
 
+def _fail(conn, target, spec, params_hash, message, seconds, code_version):
+    return None, record_run(
+        conn,
+        target,
+        spec.key,
+        params_hash,
+        blob_path=None,
+        status="failed",
+        error=message,
+        seconds=seconds,
+        code_version=code_version,
+    )
+
+
 def compute_and_store(conn, spec, target, params, ds):
     """Run ``spec.compute``, store what it produced, return ``(result, run)``.
 
     On failure the exception is recorded and ``(None, run)`` comes back with
     ``run["status"] == "failed"``.
     """
+    from fusion_ui.core import registry
+
     params_hash, text = record_params(conn, spec.key, params)
     code_version = _code_version()
+
+    # An upstream is resolved before the clock starts, so ``seconds`` measures
+    # this analysis and not the one it was waiting on -- each has its own row.
+    arguments = (ds, params)
+    if spec.requires is not None:
+        upstream, upstream_run = result(
+            conn,
+            registry.get(spec.requires),
+            target,
+            spec.upstream_params(params),
+            ds,
+        )
+        if upstream is None:
+            reason = (
+                upstream_run["error"]
+                if upstream_run is not None
+                else "it produced nothing"
+            )
+            return _fail(
+                conn,
+                target,
+                spec,
+                params_hash,
+                f"upstream {spec.requires!r} did not produce a result: {reason}",
+                None,
+                code_version,
+            )
+        arguments = (ds, params, upstream)
+
     started = time.perf_counter()
     try:
-        result = spec.compute(ds, params)
+        result_ds = spec.compute(*arguments)
     except Exception as error:  # noqa: BLE001 - reported through the ledger
-        run = record_run(
+        return _fail(
             conn,
             target,
-            spec.key,
+            spec,
             params_hash,
-            blob_path=None,
-            status="failed",
-            error=f"{type(error).__name__}: {error}",
-            seconds=time.perf_counter() - started,
-            code_version=code_version,
+            f"{type(error).__name__}: {error}",
+            time.perf_counter() - started,
+            code_version,
         )
-        return None, run
 
     created_at = _now()
     path = _write_blob(
-        result,
+        result_ds,
         blob_path(spec.key, params_hash, target),
         spec.key,
         params_hash,
@@ -334,8 +382,8 @@ def compute_and_store(conn, spec, target, params, ds):
         created_at=created_at,
     )
     if spec.scalars is not None:
-        write_scalars(conn, run["id"], spec.scalars(result))
-    return result, run
+        write_scalars(conn, run["id"], spec.scalars(result_ds))
+    return result_ds, run
 
 
 def result(conn, spec, target, params, ds):

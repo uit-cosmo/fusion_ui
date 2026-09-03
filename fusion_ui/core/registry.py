@@ -27,6 +27,17 @@ view that needs a slider, a click target, or several figures). Anything more
 rigid would have forced the frame viewer to stay outside the registry, which
 is the thing this design is for.
 
+A cached spec may also be built *on another one*. Set ``requires`` to the
+upstream plot key and ``upstream_params`` to the function that pulls the
+upstream's parameters out of this spec's own, and ``compute`` is called as
+``compute(ds, params, upstream)`` with the upstream's cached result already in
+hand. That exists because 2DCA costs about half a minute on a real shot and
+almost every blob quantity is derived from the same conditional average:
+without chaining, each derived plot would pay for its own copy of it and store
+a duplicate blob. Because ``upstream_params`` reads out of the downstream
+parameters, the two hashes stay in step -- change the 2DCA threshold and both
+the average and everything derived from it get a new cache entry.
+
 What must never enter a spec's ``params``: view state. A frame index, a
 selected pixel, a zoom -- those live in ``st.session_state`` keyed off
 :attr:`Target.key`. A slider drag must not mint a new ``param_sets`` row.
@@ -101,6 +112,14 @@ class PlotSpec:
     #: opened file knows -- the probe view's quantity and position lists.
     #: ``chosen`` holds the values picked so far, so selectboxes can chain.
     choices: Optional[Callable] = None
+    #: Plot key of a spec whose result this one consumes. When set, ``compute``
+    #: is called as ``compute(ds, params, upstream)`` and the store resolves --
+    #: from cache where it can -- the upstream result first.
+    requires: Optional[str] = None
+    #: ``(params) -> upstream params``. Required with :attr:`requires`, and it
+    #: must read out of this spec's own parameters so the two cache keys cannot
+    #: drift apart.
+    upstream_params: Optional[Callable] = None
     #: One line under the plot picker.
     description: str = ""
 
@@ -122,6 +141,29 @@ def register(spec):
         raise ValueError(f"a PlotSpec is already registered under {spec.key!r}")
     if not spec.diagnostics:
         raise ValueError(f"{spec.key!r} accepts no diagnostics")
+    if spec.requires is not None:
+        # Checked at registration, not at compute time: a typo here would
+        # otherwise surface as a failed run on someone's shot.
+        if spec.requires not in REGISTRY:
+            raise ValueError(
+                f"{spec.key!r} requires {spec.requires!r}, which is not "
+                "registered -- import it first in fusion_ui/plots/__init__.py"
+            )
+        if spec.upstream_params is None:
+            raise ValueError(
+                f"{spec.key!r} sets requires but no upstream_params, so there "
+                "is no way to say which upstream result it wants"
+            )
+        if spec.compute is None:
+            raise ValueError(f"{spec.key!r} sets requires but is a live spec")
+        missing = set(spec.diagnostics) - set(REGISTRY[spec.requires].diagnostics)
+        if missing:
+            raise ValueError(
+                f"{spec.key!r} accepts {sorted(missing)} but its upstream "
+                f"{spec.requires!r} does not"
+            )
+    elif spec.upstream_params is not None:
+        raise ValueError(f"{spec.key!r} sets upstream_params but no requires")
     REGISTRY[spec.key] = spec
     return spec
 

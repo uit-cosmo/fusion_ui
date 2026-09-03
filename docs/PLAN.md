@@ -282,19 +282,50 @@ shot 1160616027 at pixel (6, 6) exactly — `1.9861501630052958e-05` from both �
 which is the end-to-end proof that params → compute → blob → scalars works, and
 it is the file phase 03's ports should be copied from.
 
-### Phase 03 — Velocity and conditional averaging (1 week)
+### Phase 03 — Velocity and conditional averaging (1 week) — **in progress**
 
 *First port: Opus 5. Remaining ports: Sonnet 5. Physics validation: you.*
 
 The physics payload, ported as `PlotSpec`s:
 
-- quiver and trajectory plots from `plotting_scripts/twodca_plots.py`
-- contour, TDE and 2DCA-TDE velocities from `density_scan/utils.py`
-- `imaging_methods.find_events_and_2dca` with event counts, and two-sided
-  exponential fits from `waveform_analysis/fitting.py`
-- duration times via `density_scan/utils.py:get_taud_from_psd`
+- ✅ `imaging_methods.find_events_and_2dca` with event counts — `plots/two_dca.py`
+- ✅ contour velocities from `density_scan/utils.py:get_contour_parameters` —
+  `plots/velocity_contour.py`, emitting `vx_c`, `vy_c`, `area_c`
+- ✅ duration times via `density_scan/utils.py:get_taud_from_psd` — landed early,
+  in phase 02
+- ⬜ Gaussian fit sizes (`lx_f`, `ly_f`, `theta_f`) from
+  `get_gaussian_fit_sizes`, and FWHM sizes (`lr`, `lz`) from
+  `plot_and_estimate_fwhm_sizes`
+- ⬜ TDE and 2DCA-TDE velocities from `density_scan/utils.py`
+- ⬜ quiver and trajectory plots from `plotting_scripts/twodca_plots.py`
+- ⬜ two-sided exponential fits from `waveform_analysis/fitting.py`
 
 Each implements `scalars()`, which is what makes phase 04 nearly free.
+
+**One contract extension, in the first port: `PlotSpec.requires`.** 2DCA costs
+~21 s on a real preprocessed shot, and every remaining item on that list except
+the TDE velocities takes the *conditional average* as its input, not the raw
+frames — which is why `density_scan` stages `average_ds_<shot>_<refx><refy>.nc`
+files on disk between the two halves of its own pipeline. A spec now says
+`requires="two_dca"` plus an `upstream_params` that lifts the upstream's
+parameters out of its own, and the store resolves the chain depth-first and
+only on a miss. Without it each of the four remaining ports would recompute the
+same average and store a duplicate blob: at 3880 seeded pixels that is on the
+order of a hundred hours of duplicated compute for a full phase-04 precompute.
+
+Two notes for the remaining ports:
+
+- **`velocity_estimation.EstimationOptions` still cannot be a params field** —
+  it carries `@dataclass` but declares its own `__init__`, so `fields()` is
+  empty and `params_ui` raises on it by design. The TDE ports need a real
+  dataclass holding the handful of settings `get_tde_velocities` actually sets,
+  and should build the `EstimationOptions` inside `compute`.
+- **The seed is from 1 June 2026 and `imaging_methods` has moved since**
+  (notably `0f28885`, the non-uniform-grid fix in `contours.py`, 14 July).
+  `number_events` and `taud_psd` reproduce exactly; the contour quantities
+  agree to 1–5% and `theta` changed convention outright. Expect the same when
+  checking a new port against `results.json`, and treat a *large* disagreement
+  as a real finding.
 
 **Ships: the reason the tool exists.**
 

@@ -195,6 +195,8 @@ def test_the_plot_picker_offers_only_specs_for_this_diagnostic(single_shot_deplo
     assert widget(app, "selectbox", "Plot").options == [
         "Frames and pixel trace",
         "Duration time (PSD fit)",
+        "Conditional average (2DCA)",
+        "Blob velocity (contour tracking)",
     ]
 
     app.session_state["selection"] = {
@@ -284,3 +286,100 @@ def test_a_failed_run_is_shown_rather_than_raised(single_shot_deployment, monkey
 
 def _boom(ds, params):
     raise ValueError("deliberate test failure")
+
+
+@pytest.fixture
+def blob_deployment(monkeypatch, tmp_path, blob_dataset_path):
+    """One indexed shot whose data has blobs in it, so the 2DCA chain can run
+    through the page rather than only through ``store.result``."""
+    import streamlit as st
+
+    data_folder = blob_dataset_path.parent.parent
+    database = tmp_path / "state" / "shot_explorer.sqlite"
+    monkeypatch.setenv("FUSION_DATA_FOLDER", str(data_folder))
+    monkeypatch.setenv("FUSION_DISCHARGE_DB", str(tmp_path / "none.json"))
+    monkeypatch.setenv("FUSION_UI_DB", str(database))
+    monkeypatch.setenv("FUSION_UI_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setenv("FUSION_MACHINE", "cmod")
+
+    conn = db.open_db(database)
+    catalog.rescan(conn, str(data_folder), "cmod", None)
+    conn.close()
+
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    yield database
+    st.cache_data.clear()
+    st.cache_resource.clear()
+
+
+def test_a_chained_spec_renders_and_stores_both_links(blob_deployment):
+    """The whole phase-03 shape through the page: the deepest parameter form in
+    the app, one Compute, and two ledger rows -- the derived plot and the
+    conditional average it was built on."""
+    app = AppTest.from_file(SINGLE_SHOT, default_timeout=180)
+    app.session_state["spec.apd"] = registry.get("velocity_contour")
+    # The APD default reference pixel is (8, 8), a corner of this 9x9 fixture
+    # that no blob crosses. Parameters live under the spec key, not the target,
+    # so they survive moving to the next shot.
+    app.session_state["params.velocity_contour.two_dca.refx"] = 4
+    app.session_state["params.velocity_contour.two_dca.refy"] = 4
+    app.run()
+    assert not app.exception
+    # Four nested dataclasses' worth of widgets, including the two string
+    # fields that only exist as prose upstream.
+    assert widget(app, "selectbox", "estimator").options == ["central_diff", "lsq"]
+    assert widget(app, "selectbox", "window type").options[0] == "hann"
+    assert widget(app, "checkbox", "require within boundaries") is not None
+
+    widget(app, "button", "Compute").click().run()
+    assert not app.exception
+    assert not app.error, [e.value for e in app.error]
+
+    conn = db.connect(blob_deployment)
+    runs = {r["plot"]: r for r in conn.execute("SELECT * FROM runs")}
+    assert set(runs) == {"two_dca", "velocity_contour"}
+    assert all(r["status"] == "ok" for r in runs.values())
+    assert all(os.path.exists(r["blob_path"]) for r in runs.values())
+    velocity = {
+        r["name"]: r["value"]
+        for r in conn.execute(
+            "SELECT s.name, s.value FROM scalars s WHERE s.run_id = ?",
+            (runs["velocity_contour"]["id"],),
+        )
+    }
+    conn.close()
+    assert velocity["vx_c"] == pytest.approx(400.0, rel=0.05)
+
+
+def test_a_cached_spec_may_draw_its_own_widgets(blob_deployment):
+    """The conditional average is a short movie, so it draws a field picker and
+    a lag slider instead of returning one figure. Those are view state: they
+    must not appear in the parameter form or in the hash."""
+    app = AppTest.from_file(SINGLE_SHOT, default_timeout=180)
+    app.session_state["spec.apd"] = registry.get("two_dca")
+    app.session_state["params.two_dca.two_dca.refx"] = 4
+    app.session_state["params.two_dca.two_dca.refy"] = 4
+    app.run()
+    widget(app, "button", "Compute").click().run()
+    assert not app.exception
+    assert not app.error, [e.value for e in app.error]
+
+    assert widget(app, "selectbox", "Field").options == [
+        "conditional average",
+        "conditional representativeness",
+        "cross-correlation",
+    ]
+    assert any("20 events" in c for c in captions(app))
+
+    conn = db.connect(blob_deployment)
+    (before,) = conn.execute("SELECT COUNT(*) FROM param_sets").fetchone()
+    conn.close()
+
+    widget(app, "slider", "Lag").set_value(3).run()
+    assert not app.exception
+    conn = db.connect(blob_deployment)
+    (after,) = conn.execute("SELECT COUNT(*) FROM param_sets").fetchone()
+    (runs,) = conn.execute("SELECT COUNT(*) FROM runs").fetchone()
+    conn.close()
+    assert (after, runs) == (before, 1)

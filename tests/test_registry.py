@@ -59,6 +59,56 @@ def test_compute_decides_whether_a_spec_is_cached():
     assert spec("heavy", compute=lambda ds, p: ds).cached
 
 
+# ---------------------------------------------------------------------------
+# Chained specs. Every check here is made at registration rather than at
+# compute time: a mistake in a chain would otherwise surface as a failed run on
+# somebody's shot, hours after the module was imported.
+# ---------------------------------------------------------------------------
+
+
+def derived(key, **kwargs):
+    return spec(key, compute=lambda ds, p, upstream: upstream, **kwargs)
+
+
+def test_a_spec_cannot_require_something_unregistered():
+    with pytest.raises(ValueError, match="not registered"):
+        registry.register(
+            derived("derived", requires="base", upstream_params=lambda p: p)
+        )
+
+
+def test_a_spec_that_requires_must_say_which_upstream_parameters_it_wants():
+    registry.register(spec("base", compute=lambda ds, p: ds))
+    with pytest.raises(ValueError, match="upstream_params"):
+        registry.register(derived("derived", requires="base"))
+
+
+def test_upstream_params_without_requires_is_rejected():
+    with pytest.raises(ValueError, match="no requires"):
+        registry.register(spec("derived", upstream_params=lambda p: p))
+
+
+def test_a_live_spec_cannot_have_an_upstream():
+    registry.register(spec("base", compute=lambda ds, p: ds))
+    with pytest.raises(ValueError, match="live spec"):
+        registry.register(spec("derived", requires="base", upstream_params=lambda p: p))
+
+
+def test_a_spec_cannot_accept_a_diagnostic_its_upstream_refuses():
+    """Otherwise picking the derived plot on a probe shot would fail only once
+    the upstream was asked to open a file it cannot read."""
+    registry.register(spec("base", ("apd",), compute=lambda ds, p: ds))
+    with pytest.raises(ValueError, match="upstream"):
+        registry.register(
+            derived(
+                "derived",
+                diagnostics=("apd", "asp"),
+                requires="base",
+                upstream_params=lambda p: p,
+            )
+        )
+
+
 def target(**kwargs):
     defaults = dict(
         machine="cmod",

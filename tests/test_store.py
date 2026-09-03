@@ -250,3 +250,111 @@ def test_scalar_frame_is_empty_but_shaped_when_nothing_is_stored(conn, cache):
     frame = store.scalar_frame(conn)
     assert frame.empty
     assert "value" in frame.columns
+
+
+# ---------------------------------------------------------------------------
+# Chained specs
+#
+# The property that matters is that a cache hit on the derived quantity does
+# not pay for its upstream: 2DCA is half a minute on a real shot, and four of
+# phase 03's plots are built on the same average.
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class DerivedParams:
+    base: Params = dataclasses.field(default_factory=Params)
+    scale: float = 2.0
+
+
+@pytest.fixture
+def chain(spec, calls, registered):
+    """A ``derived`` spec whose upstream is the synthetic one above."""
+    registered(spec)
+
+    def compute(ds, params, upstream):
+        calls.append(f"derived {params.scale}")
+        return xr.Dataset({"y": upstream["y"] * params.scale})
+
+    return registered(
+        registry.PlotSpec(
+            key="derived",
+            label="Derived",
+            diagnostics=("apd",),
+            params=DerivedParams,
+            render=lambda result, params, target: None,
+            compute=compute,
+            scalars=lambda result: {"total": float(result["y"].sum())},
+            requires="synthetic",
+            upstream_params=lambda params: params.base,
+        )
+    )
+
+
+@pytest.fixture
+def registered():
+    """Put a spec in the global registry for the duration of one test."""
+    added = []
+
+    def add(spec):
+        registry.REGISTRY[spec.key] = spec
+        added.append(spec.key)
+        return spec
+
+    yield add
+    for key in added:
+        registry.REGISTRY.pop(key, None)
+
+
+def test_an_upstream_is_computed_once_and_reused(conn, cache, chain, target, calls):
+    result, run = store.result(conn, chain, target, DerivedParams(), ds=None)
+    assert run["status"] == "ok"
+    assert list(result["y"].values) == [0.0, 2.0, 4.0, 6.0]
+    assert calls == [1.0, "derived 2.0"]
+
+    # A second derived parameter set: the upstream parameters are unchanged, so
+    # the average is read from its blob rather than recomputed.
+    store.result(conn, chain, target, DerivedParams(scale=3.0), ds=None)
+    assert calls == [1.0, "derived 2.0", "derived 3.0"]
+
+    plots = [r["plot"] for r in conn.execute("SELECT plot FROM runs ORDER BY id")]
+    assert plots == ["synthetic", "derived", "derived"]
+
+
+def test_changing_an_upstream_parameter_recomputes_both(
+    conn, cache, chain, target, calls
+):
+    store.result(conn, chain, target, DerivedParams(), ds=None)
+    store.result(conn, chain, target, DerivedParams(base=Params(gain=5.0)), ds=None)
+    assert calls == [1.0, "derived 2.0", 5.0, "derived 2.0"]
+    assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 4
+
+
+def test_a_cache_hit_on_the_derived_result_does_not_touch_the_upstream(
+    conn, cache, chain, target, calls
+):
+    store.result(conn, chain, target, DerivedParams(), ds=None)
+    calls.clear()
+    result, run = store.result(conn, chain, target, DerivedParams(), ds=None)
+    assert calls == []
+    assert list(result["y"].values) == [0.0, 2.0, 4.0, 6.0]
+
+
+def test_a_failing_upstream_is_reported_on_the_derived_run(
+    conn, cache, chain, spec, target, registered
+):
+    """The person is looking at the derived plot; the error has to name what
+    actually broke rather than appear as an empty figure."""
+
+    def boom(ds, params):
+        raise ValueError("no events survived")
+
+    registered(dataclasses.replace(spec, compute=boom))
+    result, run = store.result(conn, chain, target, DerivedParams(), ds=None)
+
+    assert result is None
+    assert run["plot"] == "derived" and run["status"] == "failed"
+    assert "upstream 'synthetic'" in run["error"]
+    assert "no events survived" in run["error"]
+    upstream = conn.execute("SELECT * FROM runs WHERE plot = 'synthetic'").fetchone()
+    assert upstream["status"] == "failed"

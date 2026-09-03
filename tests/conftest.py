@@ -189,3 +189,57 @@ def asp_dataset_path(tmp_path):
     path = folder / "asp_5678.nc"
     ds.to_netcdf(path)
     return path
+
+
+@pytest.fixture
+def blob_dataset_path(tmp_path):
+    """An APD-shaped dataset with blobs of a *known* velocity crossing it.
+
+    Twenty identical Gaussians propagate radially at 400 m/s across a 9x9 grid,
+    each crossing the centre pixel at a known time, on a small noise floor. The
+    amplitudes are already in standard deviations, as run-normalised data is,
+    so ``find_events_and_2dca``'s threshold means what it says.
+
+    Random data cannot test a blob analysis: it produces no events, or events
+    with no velocity to recover. With a planted velocity the whole chain --
+    conditional average, contour, track, mask, reduction -- can be checked
+    against an answer known in advance.
+    """
+    import numpy as np
+    import xarray as xr
+
+    n, pitch, sigma = 9, 0.4, 0.4  # pixels, cm between them, blob width in cm
+    n_time, dt, spacing = 3200, 5e-7, 150  # samples, seconds, samples per blob
+    velocity = 4e4  # cm/s -- 400 m/s, the number the tests assert on
+
+    R = np.tile(88.0 + pitch * np.arange(n), (n, 1))
+    Z = np.tile((np.arange(n) - n // 2) * pitch, (n, 1)).T
+    time = np.arange(n_time) * dt
+    centre_r, centre_z = R[n // 2, n // 2], Z[n // 2, n // 2]
+
+    frames = np.zeros((n, n, n_time))
+    for k in range(20):
+        position = centre_r + velocity * (time - (k + 1) * spacing * dt)
+        frames += 3.0 * np.exp(
+            -(
+                (R[:, :, None] - position[None, None, :]) ** 2
+                + (Z[:, :, None] - centre_z) ** 2
+            )
+            / (2 * sigma**2)
+        )
+    frames += np.random.default_rng(7).normal(scale=0.05, size=frames.shape)
+
+    ds = xr.Dataset(
+        {"frames": (["y", "x", "time"], frames)},
+        coords={
+            "R": (["y", "x"], R.astype("float32")),
+            "Z": (["y", "x"], Z.astype("float32")),
+            "time": ("time", time),
+        },
+        attrs={"shot_number": 4321},
+    )
+    folder = tmp_path / "alcator" / "apd"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "apd_4321_preprocessed.nc"
+    ds.to_netcdf(path)
+    return path

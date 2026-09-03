@@ -18,17 +18,35 @@ This file holds only the conventions that apply while writing code.
 
 Phases 00 (skeleton, deployed), 01 (raw data browser) and 02 (registry,
 parameter forms, result store) — **done**. Phase 03 (velocity and conditional
-averaging) is next, and every analysis in it is a `PlotSpec` — see the contract
-below.
+averaging) is **in progress**: the 2DCA chain has landed and the remaining
+ports (Gaussian fit sizes, FWHM sizes, 2DCA-TDE and TDE velocities, quiver and
+trajectory plots) are `PlotSpec`s built the same way — see the contract below.
 
 `core/registry.py`, `core/params_ui.py`, `core/store.py` and `core/seed.py` are
 in, `pages/2_single_shot.py` is a thin dispatcher over the registry, and
-`fusion_ui/plots/` holds three specs: `raw.py` (frames, click-a-pixel trace,
-mp4 export), `probe.py` (the ragged ASP/FSP trace) and `spectra.py` (the PSD
-duration-time fit — the first cached analysis, and the one to copy). The
-`density_scan/results.json` seed is imported with `fusion-ui import-results`:
-50 shots, 3880 pixels, 58 200 scalars under the plot key
-`density_scan_import`.
+`fusion_ui/plots/` holds five specs:
+
+| module | spec | |
+|---|---|---|
+| `raw.py` | `raw_frames` | live: frames, click-a-pixel trace, mp4 export |
+| `probe.py` | `probe_trace` | live: the ragged ASP/FSP trace |
+| `spectra.py` | `taud_psd` | cached: the PSD duration-time fit |
+| `two_dca.py` | `two_dca` | cached: the conditional average — **the base of the phase-03 chain** |
+| `velocity_contour.py` | `velocity_contour` | cached, `requires="two_dca"`: contour-tracking velocity |
+
+**Copy `velocity_contour.py` for a new phase-03 analysis.** Almost every blob
+quantity the group reports is derived from the conditional average, not from
+the raw frames, and 2DCA costs ~21 s on a real shot — so a derived spec
+declares `requires="two_dca"` rather than running its own. Copying `spectra.py`
+instead is right only for something computed straight off the raw frames.
+
+The `density_scan/results.json` seed is imported with `fusion-ui
+import-results`: 50 shots, 3880 pixels, 58 200 scalars under the plot key
+`density_scan_import`. Values computed today agree with the seed on
+`taud_psd`/`lambda_psd` exactly and on `number_events` exactly, and to 1–5% on
+the contour quantities — the seed is from 1 June 2026 and predates upstream's
+non-uniform-grid fix in `contours.py`. `theta` changed convention outright.
+A **large** disagreement is a finding; these are drift.
 
 ## Setup
 
@@ -138,6 +156,8 @@ class PlotSpec:
     compute:     Callable | None = None   # (ds, params) -> xr.Dataset
     scalars:     Callable | None = None   # (result) -> dict
     choices:     Callable | None = None   # (ds, field_path, chosen) -> tuple | None
+    requires:    str | None = None        # plot key of an upstream spec
+    upstream_params: Callable | None = None   # (params) -> the upstream's params
     description: str = ""
 ```
 
@@ -166,6 +186,24 @@ class PlotSpec:
   list, a valid pixel index on this array. It is consulted before the static
   `params_ui.CHOICES` table and receives the values chosen so far, so
   selectboxes chain.
+- **`requires` chains one spec onto another.** Set it to the upstream plot key
+  and set `upstream_params` to the function that lifts the upstream's
+  parameters out of this spec's own; `compute` is then called as
+  `compute(ds, params, upstream)` with the upstream's cached result in hand.
+  The store resolves the chain depth-first and **only on a miss**, so a cache
+  hit on the derived quantity never pays for its upstream. Each link keeps its
+  own `runs` row and its own blob.
+
+  Three rules follow, and `register()` enforces the first two:
+
+  - the upstream must already be registered — mind the import order in
+    `plots/__init__.py` — and must accept every diagnostic the downstream does;
+  - `upstream_params` must **read out of the downstream parameters** (as
+    `velocity_contour` does with its `two_dca` field), never construct fresh
+    defaults. That is what keeps the two cache keys in step: changing the 2DCA
+    threshold has to give both a new entry;
+  - an upstream that fails is reported on the downstream run, quoting the
+    upstream's own error. The person is looking at the derived plot.
 
 ### Parameters, and what must never be one
 

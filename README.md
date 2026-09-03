@@ -24,9 +24,11 @@ the analysis code in [`imaging_methods`](https://github.com/Sosnowsky/imaging-me
 Phases 00-02 are in: the config module, the SQLite schema, the `rescan` catalog
 job, the shot browser, the single-shot view, and the plot registry that view is
 built on — parameter forms generated from a dataclass, a content-addressed
-result cache, and the scalar store the multi-shot view will read. The
-multi-shot view lands in phase 04. See [`docs/PLAN.md`](docs/PLAN.md) for the
-architecture, the database schema, and the phase order.
+result cache, and the scalar store the multi-shot view will read. Phase 03, the
+physics, has started: two-dimensional conditional averaging and the
+contour-tracking blob velocity derived from it. The multi-shot view lands in
+phase 04. See [`docs/PLAN.md`](docs/PLAN.md) for the architecture, the database
+schema, and the phase order.
 
 ## Adding a plot
 
@@ -76,6 +78,24 @@ SPEC = registry.register(
 The parameter form, the cache key, the netCDF blob, the run ledger and the
 scalar rows all follow from that. The rules the contract depends on are in
 [`CLAUDE.md`](CLAUDE.md).
+
+A plot built on another plot's result declares it, and gets it handed over
+already computed:
+
+```python
+SPEC = registry.register(
+    registry.PlotSpec(
+        ...,
+        compute=compute,                # (ds, params, upstream) -> xr.Dataset
+        requires="two_dca",
+        upstream_params=lambda p: two_dca.TwoDcaSpecParams(two_dca=p.two_dca),
+    )
+)
+```
+
+That is how every quantity derived from the conditional average — velocities,
+sizes, areas — shares one 2DCA run instead of each paying ~21 s for its own.
+`fusion_ui/plots/velocity_contour.py` is the worked example.
 
 ## Development
 
