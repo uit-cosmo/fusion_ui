@@ -179,8 +179,12 @@ def main():
         )
         return
 
+    # A shot-level scalar (x = y = -1) is already one number per shot and
+    # `aggregate` hands it back untouched, so naming a collapse would describe
+    # the axis as something the values never went through.
+    collapse = None if shot_level else multishot.AGGREGATES.get(how, how)
     st.caption(
-        f"{name} · {multishot.AGGREGATES.get(how, how)} · "
+        f"{name} · {collapse or 'one value per shot'} · "
         f"{len(plot_frame)} shots on `{machine}` · click a point to open that shot"
     )
 
@@ -200,7 +204,7 @@ def main():
         },
         labels={
             "_x": x_label,
-            "value": f"{name} ({multishot.AGGREGATES.get(how, how)})",
+            "value": f"{name} ({collapse})" if collapse else name,
             "_mode": "confinement mode",
         },
     )

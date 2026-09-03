@@ -137,3 +137,34 @@ def test_another_machines_scalars_are_left_out(deployment):
 
     app = run(MULTI_SHOT)
     assert any("2 shots on `cmod`" in c.value for c in app.caption)
+
+
+def test_a_shot_level_scalar_is_not_labelled_as_a_pixel_collapse(deployment):
+    """`x = y = -1` is already one number per shot: there is no collapse to
+    name, and the Aggregate picker is hidden rather than defaulting to mean."""
+    conn = db.open_db(deployment)
+    for shot in (1160616027, 1110201007):
+        target = registry.Target("cmod", shot, "apd", True, "", 0.0, 0.0, "none")
+        params_hash, _ = store.record_params(conn, "shotlevel", _Params())
+        run = store.record_run(
+            conn,
+            target,
+            "shotlevel",
+            params_hash,
+            blob_path=None,
+            status="ok",
+            error=None,
+            seconds=None,
+            code_version="test",
+        )
+        store.write_scalars(conn, run["id"], {"number_events": 42.0})
+    conn.close()
+
+    app = AppTest.from_file(MULTI_SHOT, default_timeout=60)
+    app.session_state["ms.scalar"] = "number_events"
+    app.run()
+    assert not app.exception, app.exception
+    assert not [w for w in app.selectbox if w.label == "Aggregate"]
+    caption = next(c.value for c in app.caption if "shots on" in c.value)
+    assert "mean over pixels" not in caption
+    assert "one value per shot" in caption
