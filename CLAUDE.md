@@ -17,17 +17,21 @@ This file holds only the conventions that apply while writing code.
 ## Current state
 
 Phases 00 (skeleton, deployed), 01 (raw data browser), 02 (registry,
-parameter forms, result store) and 03 (velocity and conditional averaging)
-— **done**. Phase 04 (multi-shot view and precompute CLI) is next.
+parameter forms, result store), 03 (velocity and conditional averaging) and
+04 (multi-shot view and precompute CLI) — **done**. Phase 05 (hardening) is
+next.
 
 `docs/PLAN.md` closes phase 03 with the five things that need a physicist
 rather than a model — twelve new scalar names to confirm, and four estimator
-behaviours worth knowing before any of it goes on a multi-shot axis. Read that
-list before phase 04 puts these quantities on an axis.
+behaviours worth knowing before any of it goes on a multi-shot axis. They
+remain open: the multi-shot view now puts these quantities on an axis, so the
+twelve names and four behaviours decide what people will see there.
 
-`core/registry.py`, `core/params_ui.py`, `core/store.py` and `core/seed.py` are
-in, `pages/2_single_shot.py` is a thin dispatcher over the registry, and
-`fusion_ui/plots/` holds twelve specs:
+`core/registry.py`, `core/params_ui.py`, `core/store.py`, `core/seed.py`,
+`core/multishot.py` and `core/precompute.py` are in,
+`pages/2_single_shot.py` is a thin dispatcher over the registry,
+`pages/3_multi_shot.py` draws the scalar scatter (its pure logic lives in
+`core/multishot.py`), and `fusion_ui/plots/` holds twelve specs:
 
 | module | spec | |
 |---|---|---|

@@ -536,6 +536,34 @@ def form(params_cls, key_prefix, defaults=None, container=None, spec=None, ds=No
     )
 
 
+def seed_session_state(state, key_prefix, params, prefix=""):
+    """Put a params instance's leaves into ``state`` under the widget keys.
+
+    :func:`form` walks the same tree and reads each leaf back out of ``state``
+    keyed by ``key_prefix`` plus the dotted field path, so seeding those keys is
+    what lets the multi-shot view open the single-shot view on exactly the
+    parameters that produced a stored result. Mirrors ``_fields``' key scheme,
+    including the ``.__auto__`` toggle for :data:`OPTIONAL` fields.
+    """
+    cls = type(params)
+    hints = _hints(cls)
+    for field in _dataclass_fields(cls):
+        annotation, _ = _unwrap_optional(hints.get(field.name, field.type))
+        path = f"{prefix}.{field.name}" if prefix else field.name
+        value = getattr(params, field.name)
+        if _dataclass_fields(annotation) is not None:
+            if value is None:
+                continue
+            seed_session_state(state, key_prefix, value, path)
+            continue
+        key = f"{key_prefix}.{path}"
+        if (cls.__name__, field.name) in OPTIONAL:
+            state[f"{key}.__auto__"] = value is None
+            state[key] = 0.0 if value is None else value
+        else:
+            state[key] = value
+
+
 def panel(spec, target, ds=None, container=None):
     """``(params, ready)`` -- the parameter panel for one spec on one target.
 

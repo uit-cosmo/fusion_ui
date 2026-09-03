@@ -373,7 +373,7 @@ Two notes for the remaining ports:
 
 **Ships: the reason the tool exists.**
 
-### Phase 04 — Multi-shot view and precompute CLI (2–3 days)
+### Phase 04 — Multi-shot view and precompute CLI (2–3 days) — **done**
 
 *Sonnet 5.*
 
@@ -384,6 +384,30 @@ the same parameters — the move that makes an outlier immediately explainable.
 Plus `fusion-ui precompute` for overnight fills.
 
 **Ships: the trend plots, and warm caches.**
+
+What landed, and three decisions that came out differently from the sketch:
+
+- **The multi-shot view is `pages/3_multi_shot.py`**, built on the pure helpers
+  in `core/multishot.py` (name/source enumeration, per-pixel collapse to one
+  number per shot, metadata join) so the aggregation rules are unit-tested
+  without a Streamlit runtime.
+- **A scalar is picked by name *and* by source.** A name like `vx_c` can be
+  written by several parameter sets — and by the `density_scan_import` seed —
+  so the sidebar has a `Source` picker listing each `(plot, params_hash,
+  diagnostic, preprocessed)` that carries the chosen name.
+- **The pixel-aggregate is a first-class control** (mean, median, maximum, or a
+  fixed pixel), shown in the y-axis label — the recommendation from the "Still
+  open" note, resolved for the mean/median/max/fixed-pixel set rather than a
+  masked region, which needs a signal the scalar store does not hold.
+- **Click-to-jump restores the producing parameters.** For a real plot, the
+  page sets `selection`, seeds the parameter widgets from the stored
+  `params_json` (`params_ui.seed_session_state`) and marks the run ready, so
+  the click lands on the cached plot that made the point; the single-shot view
+  reads it from cache rather than recomputing. Seeded imports have no spec to
+  restore, so those jumps are just the shot.
+- **`fusion-ui precompute PLOT [--shot N …] [--pixel X Y] [--force]`** walks the
+  index for a plot's accepted diagnostics and runs `store.result` on each,
+  skipping cache hits from the ledger alone (no file open).
 
 ### Phase 05 — Hardening (ongoing)
 

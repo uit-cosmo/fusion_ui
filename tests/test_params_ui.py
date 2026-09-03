@@ -170,3 +170,33 @@ def test_the_hash_is_stable_across_processes():
 def test_canonical_rejects_a_class():
     with pytest.raises(TypeError):
         params_ui.canonical(Simple)
+
+
+def test_seed_session_state_writes_the_widget_keys():
+    """The multi-shot view jumps to the single-shot view by seeding these keys;
+    they must match the scheme ``_fields`` reads back."""
+    state = {}
+    params_ui.seed_session_state(
+        state, "params.p", Nests(inner=Simple(count=7, scale=2.5))
+    )
+    assert state["params.p.inner.count"] == 7
+    assert state["params.p.inner.scale"] == 2.5
+    assert state["params.p.inner.flag"] is False
+
+
+def test_seed_session_state_marks_optional_fields():
+    """``size_max=None`` means "work it out"; the form represents that with an
+    ``.__auto__`` toggle plus a placeholder number."""
+    state = {}
+    params_ui.seed_session_state(state, "p", im.GaussFitParams(size_max=None))
+    assert state["p.size_max.__auto__"] is True
+    assert state["p.size_max"] == 0.0
+
+
+def test_seed_session_state_keeps_a_present_zero_value():
+    """``size_max=0.0`` is a real instruction, not the None placeholder: it must
+    not flip the ``.__auto__`` toggle or be swapped for a default."""
+    state = {}
+    params_ui.seed_session_state(state, "p", im.GaussFitParams(size_max=0.0))
+    assert state["p.size_max.__auto__"] is False
+    assert state["p.size_max"] == 0.0
