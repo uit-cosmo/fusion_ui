@@ -130,7 +130,13 @@ as_service_user() { sudo -u "$SERVICE_USER" env "${GIT_ENV[@]}" "$@"; }
 # The address the server answers on -- the one the certificate has to cover
 # alongside the name, since people reach an unpublished machine by IP.
 primary_ip() {
-  ip -4 route get 1.1.1.1 2>/dev/null |
+  # `|| true`: with no default route `ip` exits 2, and pipefail would carry
+  # that out to `server_ip=$(primary_ip)` where `set -e` aborts the install --
+  # silently, since stderr is already discarded. Having no address is a fine
+  # answer: resolve_server_name falls back to `hostname -f` and the
+  # certificate simply gets no IP SAN. Only the `ip` call is wrapped, so a
+  # genuinely broken sed still fails loudly.
+  { ip -4 route get 1.1.1.1 2>/dev/null || true; } |
     sed -n 's/.*[[:space:]]src[[:space:]]\([0-9.]*\).*/\1/p' | head -1
 }
 

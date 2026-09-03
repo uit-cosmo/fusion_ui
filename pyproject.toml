@@ -51,3 +51,6 @@ packages = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: exercises a full O(pixels^2) analysis (e.g. the whole velocity_field loop); skip with -m 'not slow' for a quick run.",
+]

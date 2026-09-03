@@ -41,16 +41,44 @@ def available_targets(row):
 
 def pick_shot_and_target(table):
     selection = st.session_state.get("selection")
-    shots = sorted(table["shot"].astype(int).unique())
+    if table.empty:
+        return None
+
+    # The index is keyed by (machine, shot), not by shot: `rescan` runs for one
+    # machine and only ever deletes that machine's rows, so pointing
+    # FUSION_MACHINE somewhere else leaves both machines indexed for good.
+    # Picking on the shot number alone would merge the two lists and then hand
+    # `available_targets` a two-row frame, whose columns are Series -- an
+    # ambiguous-truth ValueError rather than a wrong answer.
+    machines = sorted(table["machine"].astype(str).unique())
+    if len(machines) > 1:
+        default_machine = (
+            selection["machine"]
+            if selection and selection["machine"] in machines
+            else machines[0]
+        )
+        machine = st.sidebar.selectbox(
+            "Machine", machines, index=machines.index(default_machine)
+        )
+    else:
+        # One machine is the normal case; a selectbox with a single option is
+        # just noise in the sidebar.
+        machine = machines[0]
+    indexed = table[table["machine"].astype(str) == machine]
+
+    shots = sorted(indexed["shot"].astype(int).unique())
     if not shots:
         return None
 
+    on_this_machine = bool(selection) and selection["machine"] == machine
     default_shot = (
-        selection["shot"] if selection and selection["shot"] in shots else shots[0]
+        selection["shot"]
+        if on_this_machine and selection["shot"] in shots
+        else shots[0]
     )
     shot = st.sidebar.selectbox("Shot", shots, index=shots.index(default_shot))
 
-    row = table.set_index("shot").loc[shot]
+    row = indexed.set_index("shot").loc[shot]
     targets = available_targets(row)
     if not targets:
         st.sidebar.warning("No diagnostic files indexed for this shot.", icon="⚠️")
@@ -59,7 +87,7 @@ def pick_shot_and_target(table):
 
     default_diagnostic = (
         selection["diagnostic"]
-        if selection
+        if on_this_machine
         and selection["shot"] == shot
         and selection["diagnostic"] in targets
         else diagnostic_names[0]
@@ -77,7 +105,7 @@ def pick_shot_and_target(table):
     else:
         preprocessed = has_preprocessed
 
-    return str(row["machine"]), int(shot), diagnostic, preprocessed
+    return machine, int(shot), diagnostic, preprocessed
 
 
 def discharge_for_shot(shot):

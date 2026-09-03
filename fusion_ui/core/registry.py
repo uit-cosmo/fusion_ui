@@ -63,7 +63,7 @@ class Target:
     path: str
     t_start: float
     t_end: float
-    window_source: str = "metadata"  # "metadata" | "default"
+    window_source: str = "metadata"  # "metadata" | "default" | "none"
 
     @property
     def key(self):

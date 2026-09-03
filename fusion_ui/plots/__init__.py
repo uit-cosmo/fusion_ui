@@ -13,9 +13,33 @@ from fusion_ui.plots import (  # noqa: F401 - imported to register
     probe,
     raw,
     spectra,
+    velocity_tde,
     two_dca,
     velocity_contour,
     fwhm_sizes,
+    gaussian_sizes,
+    velocity_2dca_tde,
+    trajectories,
+    two_sided_exp,
+    velocity_field,
 )
 
-__all__ = ["probe", "raw", "spectra", "two_dca", "velocity_contour", "fwhm_sizes"]
+# Order is not cosmetic below two_dca: register() rejects a spec whose
+# upstream is not yet in the registry, so every requires="two_dca" spec has
+# to be imported after it. velocity_tde and velocity_field are unchained --
+# they run their own analysis off the raw record -- so they are free to sit
+# anywhere; they are grouped with their nearest relatives instead.
+__all__ = [
+    "probe",
+    "raw",
+    "spectra",
+    "velocity_tde",
+    "two_dca",
+    "velocity_contour",
+    "fwhm_sizes",
+    "gaussian_sizes",
+    "velocity_2dca_tde",
+    "trajectories",
+    "two_sided_exp",
+    "velocity_field",
+]
