@@ -89,3 +89,54 @@ def test_slice_to_window_restricts_to_the_range():
     assert list(x_out) == [3.0, 4.0, 5.0]
     x_out, y_out = decimate.slice_to_window(x, y, 20.0, 30.0)
     assert x_out.size == 0 and y_out.size == 0
+
+
+def test_selected_x_range_reads_the_drawn_box():
+    """A box over a *line* trace catches no points -- only the rectangle.
+
+    ``selectPoints`` bails out on a trace with neither markers nor text, so
+    reading the points list alone made box-select-to-zoom a no-op.
+    """
+    event = {
+        "selection": {
+            "points": [],
+            "box": [{"xref": "x", "yref": "y", "x": [0.2, 0.7], "y": [-1.0, 1.0]}],
+            "lasso": [],
+        }
+    }
+    assert decimate.selected_x_range(event) == (0.2, 0.7)
+
+
+def test_selected_x_range_reads_a_lasso_polygon():
+    event = {
+        "selection": {
+            "points": [],
+            "box": [],
+            "lasso": [{"x": [0.3, 0.9, 0.5], "y": [0.0, 1.0, 2.0]}],
+        }
+    }
+    assert decimate.selected_x_range(event) == (0.3, 0.9)
+
+
+def test_the_drawn_box_wins_over_the_points_it_caught():
+    """The rectangle is the window the user asked for; the points are clipped
+    to whichever decimated samples happened to fall inside it."""
+    event = {
+        "selection": {
+            "points": [{"x": 0.31}, {"x": 0.62}],
+            "box": [{"x": [0.3, 0.7], "y": [0.0, 1.0]}],
+            "lasso": [],
+        }
+    }
+    assert decimate.selected_x_range(event) == (0.3, 0.7)
+
+
+def test_a_degenerate_box_is_not_a_zoom():
+    event = {"selection": {"points": [], "box": [{"x": [0.5, 0.5]}], "lasso": []}}
+    assert decimate.selected_x_range(event) is None
+    assert decimate.selected_x_range({"selection": {"box": [{"y": [0, 1]}]}}) is None
+
+
+def test_zoomable_traces_carry_markers_so_points_are_selectable_too():
+    assert "markers" in decimate._SELECTABLE_LINE["mode"]
+    assert decimate._SELECTABLE_LINE["marker"]["opacity"] == 0

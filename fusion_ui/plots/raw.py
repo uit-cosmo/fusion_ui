@@ -104,14 +104,15 @@ def _point_to_pixel(point, x_axis, y_axis, shape):
     """Nearest ``(iy, ix)`` for one selected point, or ``None``.
 
     Three spellings, most reliable first: the click-grid overlay (see
-    :func:`_frame_figure`) stamps each of its markers with ``[iy, ix]``
-    customdata, which maps back exactly with no coordinate arithmetic; some
+    :func:`_frame_figure`) stamps each of its markers with ``[iy, ix, value]``
+    customdata, whose first two entries map back exactly with no coordinate
+    arithmetic; some
     backends report a heatmap cell as a ``[row, col]`` pair in
     ``point_number``; otherwise the physical ``x``/``y`` coordinates map back
     through the axis arrays. An unmappable point is skipped, never fatal.
     """
     custom = point.get("customdata", point.get("customData"))
-    if isinstance(custom, (list, tuple)) and len(custom) == 2:
+    if isinstance(custom, (list, tuple)) and len(custom) >= 2:
         try:
             iy, ix = int(custom[0]), int(custom[1])
         except (TypeError, ValueError):
@@ -155,20 +156,31 @@ def _frame_figure(values, x_axis, y_axis, labels, pixel, colorscale):
             y=y_axis,
             colorscale=colorscale,
             colorbar=dict(title="signal"),
+            # A heatmap is not a selectable trace -- Plotly has no
+            # ``selectPoints`` for it, so a click on the image itself can
+            # never become a selection event. It is skipped from hover so
+            # that the click grid below is always the closest hit.
+            hoverinfo="skip",
         )
     )
-    # A click target on the proven scatter-click path: one invisible marker
-    # per cell, each stamped with its own [iy, ix]. Heatmap point-clicks do
-    # not reliably arrive as selections, while scatter clicks demonstrably
-    # do (the multi-shot jump runs on them) -- so clicks land here, and map
-    # back exactly via customdata however the axes are scaled or labelled.
+    # The click target: one invisible marker per cell, each stamped with its
+    # own ``[iy, ix]``, on the scatter path that does turn a click into a
+    # selection.
+    #
+    # ``hoverinfo`` here must NOT be "skip". Streamlit's ``onClick`` handler
+    # only forwards hierarchical (sunburst/treemap) points, so an ordinary
+    # click reaches the server only as a *selection*, via Plotly's
+    # select-on-click -- and ``selectOnClick`` starts from ``gd._hoverdata``.
+    # A trace with ``hoverinfo="skip"`` produces no hover data at all, so it
+    # produced no click event either: that is why clicking the frame did
+    # nothing. "none" draws no tooltip but still fires the events.
     ny, nx = values.shape
     grid_x, grid_y, grid_custom = [], [], []
     for row in range(ny):
         for col in range(nx):
             grid_x.append(x_axis[col])
             grid_y.append(y_axis[row])
-            grid_custom.append([row, col])
+            grid_custom.append([row, col, values[row, col]])
     figure.add_trace(
         go.Scatter(
             x=grid_x,
@@ -177,7 +189,11 @@ def _frame_figure(values, x_axis, y_axis, labels, pixel, colorscale):
             mode="markers",
             marker=dict(opacity=0, size=30),
             showlegend=False,
-            hoverinfo="skip",
+            hovertemplate=(
+                f"{labels[0]}=%{{x:.2f}}<br>{labels[1]}=%{{y:.2f}}"
+                "<br>y=%{customdata[0]}, x=%{customdata[1]}"
+                "<br>signal=%{customdata[2]:.4g}<extra></extra>"
+            ),
         )
     )
     figure.add_trace(
@@ -195,6 +211,16 @@ def _frame_figure(values, x_axis, y_axis, labels, pixel, colorscale):
         yaxis_title=labels[1],
         height=420,
         margin=dict(l=10, r=10, t=20, b=10),
+        # Clicks must select, and must never miss. ``hoverdistance=-1``
+        # removes the 20-pixel cutoff, so a click anywhere in the axes finds
+        # the nearest grid marker instead of falling between two cells and
+        # being silently dropped. ``dragmode="pan"`` keeps the plain drag off
+        # ``select``: Streamlit forces ``clickmode`` back to plain "event"
+        # -- no select-on-click -- whenever the dragmode is select or lasso.
+        clickmode="event+select",
+        dragmode="pan",
+        hovermode="closest",
+        hoverdistance=-1,
     )
     return figure
 

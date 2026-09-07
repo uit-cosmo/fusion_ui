@@ -92,3 +92,34 @@ def test_selection_points_accepts_dict_and_attribute_spellings():
     assert decimate.selection_points(AttrEvent()) == [{"x": 3.0, "y": 4.0}]
     assert decimate.selection_points(None) == []
     assert decimate.selection_points(object()) == []
+
+
+def test_click_grid_customdata_carries_the_cell_value_too():
+    x_axis = np.array([88.0, 88.4, 88.8])
+    y_axis = np.array([-4.5, -4.1, -3.7])
+    point = {"curve_number": 1, "point_number": 7, "customdata": [2, 1, 0.37]}
+    assert raw._point_to_pixel(point, x_axis, y_axis, (3, 3)) == (2, 1)
+
+
+def test_the_click_grid_is_the_only_hoverable_trace():
+    """Clicks reach Streamlit only as Plotly *selections*, and
+    ``selectOnClick`` starts from the hover data -- so the click grid must
+    not be ``hoverinfo="skip"``, and the heatmap under it must be, or it
+    steals the hover and yields a point no trace can select."""
+    values = np.zeros((4, 5))
+    figure = raw._frame_figure(
+        values, np.arange(5).astype(float), np.arange(4).astype(float),
+        ("x", "y"), (1, 2), "Plasma",
+    )
+    heatmap, grid, marker = figure.data
+    assert heatmap.hoverinfo == "skip"
+    assert grid.hoverinfo != "skip"
+    assert grid.hovertemplate
+    assert marker.hoverinfo == "skip"
+    # No cutoff on the hover search: a click between two cells must still
+    # find the nearest one instead of being dropped.
+    assert figure.layout.hoverdistance == -1
+    assert figure.layout.clickmode == "event+select"
+    # Streamlit forces clickmode back to plain "event" -- no select-on-click
+    # -- whenever the dragmode is select or lasso.
+    assert figure.layout.dragmode == "pan"
