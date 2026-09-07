@@ -407,11 +407,11 @@ def overlay(items, params, target):
     """Every selected pixel's time trace on one axis.
 
     The live overlay: ``items`` carry the open time-sliced dataset (the same
-    object ``render`` gets), so each trace is read off it with
-    :func:`loader.pixel_series` -- no run, no blob, nothing cached. Each trace
-    goes through the min/max envelope first: a full window is hundreds of
-    thousands of samples per pixel, and striding would drop the spikes this
-    view is for.
+    object ``render`` gets, possibly already sliced to a zoom window by the
+    caller), so each trace is read off it with :func:`loader.pixel_series` --
+    no run, no blob, nothing cached. Each trace goes through the min/max
+    envelope first: a full window is hundreds of thousands of samples per
+    pixel, and striding would drop the spikes this view is for.
     """
     from plotly.colors import qualitative
 

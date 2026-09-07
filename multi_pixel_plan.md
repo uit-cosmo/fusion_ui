@@ -300,5 +300,8 @@ After this plan shipped, the frame viewer (`raw_frames`) joined Many mode as
 the one live spec with an `overlay`. `register()` no longer rejects `overlay`
 on a live spec: its items carry the open time-sliced dataset (the same object
 `render` gets) instead of stored results, and `multipixel.view` draws it
-straight away with no estimate and no run button. `supported()` is true for a
-live spec exactly when it defines one; the scalar fallback stays cached-only.
+straight away with no estimate and no run button. The drawing is zoomable:
+a box selection slices the dataset to that window before the overlay redraws,
+so zooming resamples rather than stretching the envelope (open_issues #3).
+`supported()` is true for a live spec exactly when it defines one; the scalar
+fallback stays cached-only.

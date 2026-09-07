@@ -268,7 +268,11 @@ the widget panel, the canonical dict and the sha1 that keys `param_sets`.
   always slice to the discharge DB's `t_start..t_end` (or a centred 0.2 s window
   when there is no metadata).
 - **Decimate before handing a 1D trace to Plotly.** Use the shared min/max
-  envelope helper in `core/decimate.py` — striding drops spikes.
+  envelope helper in `core/decimate.py` — striding drops spikes. And a
+  decimated trace must resample on zoom: zooming the axes alone never shows
+  more than the envelope kept, so a box selection re-decimates the
+  full-resolution data to that window (`decimate.zoomable_trace` for one
+  trace, the zoomable live overlay in `core/multipixel.py` for many).
 - **Interactive plots are Plotly.** Movies stay matplotlib, rendered to mp4 and
   served with `st.video`.
 - **Development uses one small shot.** Do not loop over the data tree to "check

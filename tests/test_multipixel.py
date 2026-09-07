@@ -355,6 +355,7 @@ def test_many_mode_on_the_live_trace_draws_selector_and_overlay(
         assert not app.exception, app.exception
         # Selector plus the two-trace overlay, drawn with no Compute in sight.
         assert len(app.get("plotly_chart")) >= 2
+        assert any("Drag a box to zoom in" in c.value for c in app.caption)
         labels = [b.label for b in app.button]
         assert not any(
             label.startswith("Run on") or label == "Compute" for label in labels
@@ -364,6 +365,51 @@ def test_many_mode_on_the_live_trace_draws_selector_and_overlay(
         (runs,) = conn.execute("SELECT COUNT(*) FROM runs").fetchone()
         conn.close()
         assert runs == 0, "a live overlay must not write ledger rows"
+    finally:
+        st.cache_data.clear()
+        st.cache_resource.clear()
+
+
+def test_many_mode_live_trace_zoom_resamples_the_window(
+    monkeypatch, tmp_path, apd_dataset_path
+):
+    """A stored zoom window slices the dataset before the overlay redraws."""
+    import streamlit as st
+    from pathlib import Path
+    from streamlit.testing.v1 import AppTest
+
+    from fusion_ui.core import catalog, db
+
+    data_folder = apd_dataset_path.parent.parent  # .../alcator
+    database = tmp_path / "state" / "shot_explorer.sqlite"
+    monkeypatch.setenv("FUSION_DATA_FOLDER", str(data_folder))
+    monkeypatch.setenv("FUSION_DISCHARGE_DB", str(tmp_path / "no_such_discharges.json"))
+    monkeypatch.setenv("FUSION_UI_DB", str(database))
+    monkeypatch.setenv("FUSION_UI_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setenv("FUSION_MACHINE", "cmod")
+
+    conn = db.open_db(database)
+    catalog.rescan(conn, str(data_folder), "cmod", None)
+    conn.close()
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    try:
+        single_shot = str(
+            Path(__file__).resolve().parent.parent / "fusion_ui" / "pages"
+            / "2_single_shot.py"
+        )
+        app = AppTest.from_file(single_shot, default_timeout=60)
+        app.session_state["pixels.cmod_1234_apd_r"] = [(0, 0), (1, 1)]
+        # The tiny fixture spans 1.0-1.02 s; zoom to its middle.
+        app.session_state["multizoom.cmod_1234_apd_r"] = (1.005, 1.010)
+        app.run()
+        assert not app.exception, app.exception
+
+        radios = [w for w in app.sidebar.radio if w.label == "Pixels"]
+        radios[0].set_value("Many").run()
+        assert not app.exception, app.exception
+        assert any("Zoomed to" in c.value for c in app.caption)
+        assert "Reset zoom" in [b.label for b in app.button]
     finally:
         st.cache_data.clear()
         st.cache_resource.clear()

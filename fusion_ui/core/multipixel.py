@@ -444,6 +444,77 @@ def run_all(conn, spec, target, params, ds, pixels) -> list:
     return items
 
 
+def _live_overlay(ds, spec, target, params, pixels) -> None:
+    """A live overlay with box-select-to-zoom that resamples, not just zooms.
+
+    The overlay draws envelope-decimated traces, and zooming the Plotly axes
+    alone can never show more than the envelope kept (``open_issues.md`` #3).
+    So a box/lasso selection slices the dataset to that window first and the
+    overlay redraws off the slice -- the whole point budget spent where the
+    user is looking. That is the loop :func:`decimate.zoomable_trace` closes
+    for one trace, done here without the spec's help: the slice is lazy, so
+    zooming never loads the full axis, and any present or future live overlay
+    gets it for free. The zoom window is view state keyed off ``Target.key``,
+    like the pixel set.
+    """
+    import streamlit as st
+
+    zoom_key = f"multizoom.{target.key}"
+    gen_key = f"multizoomgen.{target.key}"
+    gen = st.session_state.get(gen_key, 0)
+    window = st.session_state.get(zoom_key)
+    has_time = loader.TIME_DIM in ds.dims
+
+    full = int(ds.sizes[loader.TIME_DIM]) if has_time else 0
+    view_ds = ds
+    if window is not None and has_time:
+        view_ds = loader.sliced(ds, window[0], window[1])
+        if int(view_ds.sizes[loader.TIME_DIM]) < 2:
+            # Stale window (the target changed underneath it): drop it rather
+            # than drawing empty traces.
+            st.session_state.pop(zoom_key, None)
+            view_ds = ds
+            window = None
+
+    figure = spec.overlay([((x, y), view_ds) for x, y in pixels], params, target)
+    # A plain drag must draw a selection box, not a client-side zoom: the
+    # traces are decimated, so zooming the axes alone shows nothing new.
+    figure.update_layout(dragmode="select")
+    event = st.plotly_chart(
+        figure,
+        on_select="rerun",
+        selection_mode=["box", "lasso"],
+        key=f"multitraces.{target.key}.{gen}",
+        use_container_width=True,
+    )
+    ranged = decimate.selected_x_range(event)
+    if ranged is not None and (window is None or tuple(ranged) != tuple(window)):
+        # Remount under a new key, as the pixel selector does: the chart's
+        # selection lives in widget state and would otherwise overwrite the
+        # window that was just chosen on the next run.
+        st.session_state[zoom_key] = (float(ranged[0]), float(ranged[1]))
+        st.session_state[gen_key] = gen + 1
+        st.rerun()
+        return
+
+    shown = int(view_ds.sizes[loader.TIME_DIM]) if has_time else 0
+    if window is None:
+        st.caption(
+            f"{full} samples in window, one envelope-decimated trace per "
+            "pixel. Drag a box to zoom in."
+        )
+        return
+    st.caption(
+        f"Zoomed to {window[0]:.6f}–{window[1]:.6f} s: {shown} samples in "
+        "view, one envelope-decimated trace per pixel. "
+        "Drag a box to zoom deeper."
+    )
+    if st.button("Reset zoom", key=f"multizoom.reset.{target.key}"):
+        st.session_state.pop(zoom_key, None)
+        st.session_state[gen_key] = gen + 1
+        st.rerun()
+
+
 def _items_key(spec, target, params, pixels):
     digest, _ = params_ui.hash_params(spec.key, params)
     return (
@@ -468,10 +539,7 @@ def view(conn, spec, target, params, ds) -> None:
         # Live: nothing to stamp, nothing to compute, nothing to cache. Each
         # pixel's data comes off the already-open dataset, so draw the
         # overlay straight away -- no estimate, no run button.
-        st.plotly_chart(
-            spec.overlay([((x, y), ds) for x, y in pixels], params, target),
-            use_container_width=True,
-        )
+        _live_overlay(ds, spec, target, params, pixels)
         return
 
     st.caption(describe(estimate(conn, spec, target, params, pixels)))
