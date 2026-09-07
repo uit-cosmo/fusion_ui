@@ -10,6 +10,10 @@ the analysis code in [`imaging_methods`](https://github.com/Sosnowsky/imaging-me
 
 ## Views
 
+- **Start page** — every run day (the first seven digits of the shot number),
+  how many of its shots are curated and how many are here, and what the day
+  was run for: the miniproposal it belongs to and a short summary of the
+  session leader's plan.
 - **Shot browser** — filterable table of every shot on disk, joined to the
   discharge metadata (f_GW, I_p, n̄_e, confinement mode).
 - **Single shot** — a shot, a diagnostic, a plot type and its parameters, in.
@@ -30,6 +34,31 @@ or I_p, coloured by confinement mode, click a point to open that shot) and
 `fusion-ui precompute` for overnight cache fills. Phase 05 (hardening) is next.
 See [`docs/PLAN.md`](docs/PLAN.md) for the architecture, the database schema,
 and the phase order.
+
+## Adding a run day
+
+The purposes shown on the start page are hand-written in
+[`fusion_ui/data/run_days.md`](fusion_ui/data/run_days.md) — there is no
+scraper, and the app never goes to the network. To describe a new day, open its
+C-Mod run page,
+
+    https://www-internal.psfc.mit.edu/research/alcator/program/cmod_runs.php?run=1160616
+
+find the miniproposal whose shot range covers the shots you have, and add a
+section:
+
+```markdown
+## 1160616
+
+**MP800 — Scrape-off layer fluctuation statistic in ohmic L- and EDA H-modes**
+
+An ohmic L-mode density scan to high Greenwald fraction, with the ASP dwelling
+just inside the limiter radius and helium puffed for GPI only while the MLP
+was scanning.
+```
+
+The miniproposal number and title are quoted verbatim; the paragraph is a
+summary. A day with no section is still listed, just without a purpose.
 
 ## Adding a plot
 

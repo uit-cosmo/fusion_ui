@@ -49,6 +49,10 @@ packages = [
     "fusion_ui.plots",
 ]
 
+[tool.setuptools.package-data]
+# The hand-written run-day summaries the landing page reads.
+fusion_ui = ["data/*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [

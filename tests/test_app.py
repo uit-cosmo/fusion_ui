@@ -53,6 +53,24 @@ def test_landing_page_renders(deployment):
     assert not app.error
 
 
+def test_landing_page_lists_every_run_day_with_its_purpose(deployment):
+    app = run(APP)
+    table = app.dataframe[0].value
+    # Three curated days plus 1150618, which has files but no discharge-DB
+    # entry -- listed rather than hidden, like the browser's uncurated shots.
+    assert list(table["day"]) == ["1090813", "1110201", "1150618", "1160616"]
+    assert list(table["on_disk"]) == [0, 1, 1, 1]
+    assert table.set_index("day").loc["1160616", "mp"] == "MP800"
+    assert [m.value for m in app.metric if m.label == "Run days"] == ["4"]
+
+    # The summaries are hard-wrapped in the file, so a phrase can straddle a
+    # newline; compare against the text with its whitespace collapsed.
+    prose = " ".join(" ".join(m.value.split()) for m in app.markdown)
+    assert "MP800" in prose and "density scan to high Greenwald fraction" in prose
+    # 1150618 has no curated shots at all, only files -- its purpose still shows.
+    assert "MP761" in prose
+
+
 def test_landing_page_survives_a_missing_data_folder(monkeypatch, tmp_path):
     monkeypatch.setenv("FUSION_DATA_FOLDER", str(tmp_path / "gone"))
     monkeypatch.setenv("FUSION_DISCHARGE_DB", str(tmp_path / "gone.json"))

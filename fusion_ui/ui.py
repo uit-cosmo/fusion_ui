@@ -12,7 +12,7 @@ import threading
 import streamlit as st
 
 from fusion_ui import config
-from fusion_ui.core import catalog, db
+from fusion_ui.core import catalog, db, rundays
 
 _local = threading.local()
 
@@ -98,13 +98,42 @@ def shot_table(fingerprint, discharge_db_path, discharge_db_mtime):
     return catalog.shot_table(get_connection(), discharge_db_path)
 
 
+def discharge_db():
+    """``(path, mtime)`` for the curated descriptor, or ``(None, 0.0)``.
+
+    The mtime is not read by anything: it goes into the cache keys below so
+    that re-curating a shot shows up without restarting the server.
+    """
+    path, error = resolve("DISCHARGE_DB_PATH")
+    if error or not os.path.exists(path or ""):
+        return None, 0.0
+    return path, os.path.getmtime(path)
+
+
 def cached_shot_table():
     """The browser table, with the cache keys worked out for the caller."""
-    discharge_db_path, error = resolve("DISCHARGE_DB_PATH")
-    if error or not os.path.exists(discharge_db_path or ""):
-        discharge_db_path, mtime = None, 0.0
-    else:
-        mtime = os.path.getmtime(discharge_db_path)
-    return shot_table(
-        catalog.index_fingerprint(get_connection()), discharge_db_path, mtime
+    path, mtime = discharge_db()
+    return shot_table(catalog.index_fingerprint(get_connection()), path, mtime)
+
+
+@st.cache_data(show_spinner=False)
+def run_day_table(fingerprint, discharge_db_path, discharge_db_mtime, run_days_mtime):
+    """Cached :func:`fusion_ui.core.rundays.run_day_table`.
+
+    Same trick as :func:`shot_table`: the last three arguments are cache keys,
+    not inputs -- editing ``run_days.md`` takes effect on the next rerun rather
+    than on the next restart, which is what makes the file worth editing.
+    """
+    return rundays.run_day_table(get_connection(), discharge_db_path)
+
+
+def cached_run_day_table():
+    """The run-day overview, with the cache keys worked out for the caller."""
+    path, mtime = discharge_db()
+    run_days = rundays.RUN_DAYS_PATH
+    return run_day_table(
+        catalog.index_fingerprint(get_connection()),
+        path,
+        mtime,
+        os.path.getmtime(run_days) if os.path.exists(run_days) else 0.0,
     )

@@ -136,6 +136,28 @@ indexed with `has_metadata = 0` and shown flagged, not hidden.
 each. `catalog.index_fingerprint(conn)` is the `st.cache_data` key that makes
 the Rescan button take effect.
 
+## Run days
+
+A shot number is `1YYMMDDnnn`, so its first seven digits are the run day — the
+unit the group thinks in, since one miniproposal usually owns the whole day.
+The start page lists every run day with what it was run for.
+
+**That prose is hand-written in `fusion_ui/data/run_days.md` and there is no
+scraper.** The C-Mod run pages that supply it sit behind
+`www-internal.psfc.mit.edu` with a certificate that does not verify, they are
+written once and never revised, and a landing page that reaches the network is
+a landing page that hangs when the network is not there. The miniproposal
+number and title in each section are quoted verbatim from the run page; the
+paragraph under them is a summary and can be wrong the way any paraphrase can.
+Where a day was shared between miniproposals, the one named is the one whose
+shot range covers the shots in the discharge DB.
+
+`core/rundays.py` parses the file (a `## <seven digits>` heading, one bold
+`**MP<n> — <title>**` line, then free markdown) and joins it to both the
+discharge DB and the `shots` table: every curated day is listed whether or not
+its files are here, and a day with files but no curated shots is listed too,
+the same way the browser shows an uncurated shot rather than hiding it.
+
 ## Streamlit conventions
 
 - Shared helpers live in `fusion_ui/ui.py`. A page cannot import `app.py` —
