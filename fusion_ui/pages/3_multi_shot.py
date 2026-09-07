@@ -19,7 +19,7 @@ import streamlit as st
 
 import fusion_ui.plots  # noqa: F401 - importing the package registers every spec
 from fusion_ui import config, ui
-from fusion_ui.core import multishot, params_ui, registry, store
+from fusion_ui.core import decimate, multishot, params_ui, registry, store
 
 st.set_page_config(page_title="Multi shot · Shot Explorer", layout="wide")
 
@@ -217,10 +217,13 @@ def main():
         selection_mode="points",
         key="ms.scatter",
     )
-    selection = getattr(event, "selection", None)
-    if selection is not None and selection.points:
-        machine, shot = selection.points[0]["customdata"]
-        jump_to_single_shot(conn, machine, int(shot), source)
+    selection = decimate.selection_points(event)
+    for point in selection:
+        clicked = multishot.clicked_shot(point)
+        if clicked is not None:
+            machine, shot = clicked
+            jump_to_single_shot(conn, machine, shot, source)
+            break
 
 
 main()

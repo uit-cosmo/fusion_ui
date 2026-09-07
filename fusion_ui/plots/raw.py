@@ -103,12 +103,23 @@ def _selected_pixel(target, shape):
 def _point_to_pixel(point, x_axis, y_axis, shape):
     """Nearest ``(iy, ix)`` for one selected point, or ``None``.
 
-    A heatmap click carries the physical ``x``/``y`` coordinates, which map
-    back through the axis arrays; some backends additionally report the cell
-    as a ``[row, col]`` pair in ``point_number``. Prefer the cell when it is
-    present and in bounds, fall back to the coordinates, and never raise --
-    an unmappable point is skipped, not fatal.
+    Three spellings, most reliable first: the click-grid overlay (see
+    :func:`_frame_figure`) stamps each of its markers with ``[iy, ix, value]``
+    customdata, whose first two entries map back exactly with no coordinate
+    arithmetic; some
+    backends report a heatmap cell as a ``[row, col]`` pair in
+    ``point_number``; otherwise the physical ``x``/``y`` coordinates map back
+    through the axis arrays. An unmappable point is skipped, never fatal.
     """
+    custom = point.get("customdata", point.get("customData"))
+    if isinstance(custom, (list, tuple)) and len(custom) >= 2:
+        try:
+            iy, ix = int(custom[0]), int(custom[1])
+        except (TypeError, ValueError):
+            pass
+        else:
+            if 0 <= iy < shape[0] and 0 <= ix < shape[1]:
+                return iy, ix
     number = point.get("point_number", point.get("pointNumber"))
     if isinstance(number, (list, tuple)) and len(number) == 2:
         try:
@@ -118,6 +129,16 @@ def _point_to_pixel(point, x_axis, y_axis, shape):
         else:
             if 0 <= iy < shape[0] and 0 <= ix < shape[1]:
                 return iy, ix
+    else:
+        # A scalar point number on the click grid is the row-major index of
+        # the cell (see _frame_figure); anything else falls through to the
+        # coordinate mapping below.
+        try:
+            flat = int(number)
+        except (TypeError, ValueError):
+            flat = None
+        if flat is not None and 0 <= flat < shape[0] * shape[1]:
+            return flat // shape[1], flat % shape[1]
     try:
         ix = int(np.argmin(np.abs(x_axis - point["x"])))
         iy = int(np.argmin(np.abs(y_axis - point["y"])))
@@ -135,6 +156,44 @@ def _frame_figure(values, x_axis, y_axis, labels, pixel, colorscale):
             y=y_axis,
             colorscale=colorscale,
             colorbar=dict(title="signal"),
+            # A heatmap is not a selectable trace -- Plotly has no
+            # ``selectPoints`` for it, so a click on the image itself can
+            # never become a selection event. It is skipped from hover so
+            # that the click grid below is always the closest hit.
+            hoverinfo="skip",
+        )
+    )
+    # The click target: one invisible marker per cell, each stamped with its
+    # own ``[iy, ix]``, on the scatter path that does turn a click into a
+    # selection.
+    #
+    # ``hoverinfo`` here must NOT be "skip". Streamlit's ``onClick`` handler
+    # only forwards hierarchical (sunburst/treemap) points, so an ordinary
+    # click reaches the server only as a *selection*, via Plotly's
+    # select-on-click -- and ``selectOnClick`` starts from ``gd._hoverdata``.
+    # A trace with ``hoverinfo="skip"`` produces no hover data at all, so it
+    # produced no click event either: that is why clicking the frame did
+    # nothing. "none" draws no tooltip but still fires the events.
+    ny, nx = values.shape
+    grid_x, grid_y, grid_custom = [], [], []
+    for row in range(ny):
+        for col in range(nx):
+            grid_x.append(x_axis[col])
+            grid_y.append(y_axis[row])
+            grid_custom.append([row, col, values[row, col]])
+    figure.add_trace(
+        go.Scatter(
+            x=grid_x,
+            y=grid_y,
+            customdata=grid_custom,
+            mode="markers",
+            marker=dict(opacity=0, size=30),
+            showlegend=False,
+            hovertemplate=(
+                f"{labels[0]}=%{{x:.2f}}<br>{labels[1]}=%{{y:.2f}}"
+                "<br>y=%{customdata[0]}, x=%{customdata[1]}"
+                "<br>signal=%{customdata[2]:.4g}<extra></extra>"
+            ),
         )
     )
     figure.add_trace(
@@ -152,6 +211,16 @@ def _frame_figure(values, x_axis, y_axis, labels, pixel, colorscale):
         yaxis_title=labels[1],
         height=420,
         margin=dict(l=10, r=10, t=20, b=10),
+        # Clicks must select, and must never miss. ``hoverdistance=-1``
+        # removes the 20-pixel cutoff, so a click anywhere in the axes finds
+        # the nearest grid marker instead of falling between two cells and
+        # being silently dropped. ``dragmode="pan"`` keeps the plain drag off
+        # ``select``: Streamlit forces ``clickmode`` back to plain "event"
+        # -- no select-on-click -- whenever the dragmode is select or lasso.
+        clickmode="event+select",
+        dragmode="pan",
+        hovermode="closest",
+        hoverdistance=-1,
     )
     return figure
 
@@ -288,8 +357,6 @@ def render(ds, params, target):
         mapped = _point_to_pixel(point, x_axis, y_axis, values.shape)
         if mapped is not None and mapped != (iy, ix):
             st.session_state[f"pixel.{target.key}"] = mapped
-            st.session_state[f"pixelx.{target.key}"] = mapped[1]
-            st.session_state[f"pixely.{target.key}"] = mapped[0]
             st.rerun()
 
     location = (
@@ -300,7 +367,10 @@ def render(ds, params, target):
         "or type the indices below."
     )
     # The click target above depends on the Plotly selection event reaching
-    # the server; the indices below always work and stay in step with it.
+    # the server; the indices below always work. They are deliberately
+    # keyless: the pixel tuple in session state is the single source of
+    # truth, and keyed widgets would keep stale values that fight it --
+    # each run they display the tuple, and a typed change writes it back.
     pixel_key = f"pixel.{target.key}"
     x_col, y_col = st.columns(2)
     new_ix = x_col.number_input(
@@ -308,14 +378,12 @@ def render(ds, params, target):
         min_value=0,
         max_value=values.shape[1] - 1,
         value=int(ix),
-        key=f"pixelx.{target.key}",
     )
     new_iy = y_col.number_input(
         "Pixel y",
         min_value=0,
         max_value=values.shape[0] - 1,
         value=int(iy),
-        key=f"pixely.{target.key}",
     )
     if (int(new_iy), int(new_ix)) != (iy, ix):
         st.session_state[pixel_key] = (int(new_iy), int(new_ix))

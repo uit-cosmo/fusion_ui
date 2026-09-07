@@ -156,3 +156,17 @@ def test_with_metadata_joins_and_leaves_the_missing_ones_blank():
     assert merged.loc[merged["shot"] == 1, "mode"].iloc[0] == "L"
     assert merged.loc[merged["shot"] == 3, "f_GW"].isna().all()
     assert list(merged["shot"]) == [1, 3]
+
+
+def test_clicked_shot_reads_through_appended_hover_columns():
+    # plotly_express appends hover_data to customdata: this is the click that
+    # crashed the page with "too many values to unpack (expected 2)".
+    point = {"customdata": ["cmod", 1160616027, 0.52, 1.1, 0.9]}
+    assert multishot.clicked_shot(point) == ("cmod", 1160616027)
+
+
+def test_clicked_shot_rejects_anything_unrecognised():
+    assert multishot.clicked_shot({"customdata": ["cmod"]}) is None
+    assert multishot.clicked_shot({"customdata": ["cmod", "not-a-shot"]}) is None
+    assert multishot.clicked_shot({}) is None
+    assert multishot.clicked_shot({"customdata": None}) is None

@@ -51,53 +51,99 @@ def envelope(x, y, max_points=4000):
     return x[order], y[order]
 
 
-def selection_points(event):
-    """The selected points of a ``st.plotly_chart`` event, robustly.
+def _selection(event):
+    """The selection state of a ``st.plotly_chart`` event, or ``None``.
 
     ``PlotlyState`` supports both dict and attribute access, and older code
     paths hand back either -- try each spelling rather than assuming one.
     Anything unrecognised is no selection, never an exception in the page.
     """
     if event is None:
-        return []
+        return None
     try:
         if hasattr(event, "__getitem__"):
             try:
-                selection = event["selection"]
+                return event["selection"]
             except Exception:
-                selection = getattr(event, "selection", None)
-        else:
-            selection = getattr(event, "selection", None)
+                return getattr(event, "selection", None)
+        return getattr(event, "selection", None)
     except Exception:
-        return []
+        return None
+
+
+def _selection_field(event, name):
+    """One list off the selection state (``points``, ``box``, ``lasso``)."""
+    selection = _selection(event)
     if selection is None:
         return []
     try:
         if hasattr(selection, "__getitem__"):
             try:
-                points = selection["points"]
+                value = selection[name]
             except Exception:
-                points = getattr(selection, "points", [])
+                value = getattr(selection, name, [])
         else:
-            points = getattr(selection, "points", [])
+            value = getattr(selection, name, [])
     except Exception:
         return []
-    if not points:
+    if not value:
         return []
     try:
-        return list(points)
+        return list(value)
     except TypeError:
         return []
 
 
-def selected_x_range(event):
+def selection_points(event):
+    """The selected points of a ``st.plotly_chart`` event, robustly."""
+    return _selection_field(event, "points")
+
+
+def _finite(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if np.isfinite(number) else None
+
+
+def selected_shape_range(event):
+    """``(x0, x1)`` of the drawn box/lasso, or ``None``.
+
+    This -- not the points list -- is what a drag over a decimated **line**
+    trace gives us. Plotly's ``selectPoints`` returns nothing for a trace
+    with no markers and no text (``src/traces/scatter/select.js``), so a
+    box drawn over ``mode="lines"`` reports zero selected points while still
+    reporting the rectangle itself in ``selection["box"]``. Reading only the
+    points was why zooming never resampled.
+    """
+    xs = []
+    for shape in _selection_field(event, "box") + _selection_field(event, "lasso"):
+        try:
+            coords = shape["x"]
+        except (TypeError, KeyError, IndexError):
+            coords = getattr(shape, "x", None)
+        if coords is None:
+            continue
+        try:
+            coords = list(coords)
+        except TypeError:
+            continue
+        for value in coords:
+            number = _finite(value)
+            if number is not None:
+                xs.append(number)
+    if len(xs) < 2:
+        return None
+    lo, hi = min(xs), max(xs)
+    return None if lo == hi else (lo, hi)
+
+
+def selected_points_range(event):
     """``(x0, x1)`` spanned by the selected points' x values, or ``None``.
 
-    A box/lasso selection on a decimated trace returns the displayed points
-    inside the area; their x extent is the zoom window to re-decimate the
-    full-resolution data to. Uses the documented ``points`` list only, never
-    the box metadata. Needs at least two distinct x values -- a single
-    point-click is not a zoom.
+    Needs at least two distinct x values -- a single point-click is not a
+    zoom. Only traces that carry markers or text ever populate this.
     """
     xs = []
     for point in selection_points(event):
@@ -105,18 +151,26 @@ def selected_x_range(event):
             value = point.get("x")
         except AttributeError:
             continue
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            continue
-        if np.isfinite(number):
+        number = _finite(value)
+        if number is not None:
             xs.append(number)
     if len(xs) < 2:
         return None
     lo, hi = min(xs), max(xs)
-    if lo == hi:
-        return None
-    return lo, hi
+    return None if lo == hi else (lo, hi)
+
+
+def selected_x_range(event):
+    """The zoom window a box/lasso selection asks for, or ``None``.
+
+    The drawn rectangle wins over the points it caught: it is the window the
+    user actually indicated, it is not clipped to the nearest kept sample,
+    and on a lines-only trace it is the only thing reported at all.
+    """
+    shaped = selected_shape_range(event)
+    if shaped is not None:
+        return shaped
+    return selected_points_range(event)
 
 
 def slice_to_window(x, y, x0, x1):
@@ -130,6 +184,33 @@ def slice_to_window(x, y, x0, x1):
     lo, hi = (x0, x1) if x0 <= x1 else (x1, x0)
     mask = (x >= lo) & (x <= hi)
     return x[mask], y[mask]
+
+
+#: A line trace Plotly will also report *points* for. ``selectPoints`` in
+#: ``src/traces/scatter/select.js`` bails out on a trace with neither markers
+#: nor text, so a plain ``mode="lines"`` trace reports an empty points list
+#: for any box drawn over it. Size-1, opacity-0 markers are invisible and cost
+#: nothing to draw, and they make the points list a real fallback for the
+#: box metadata.
+_SELECTABLE_LINE = dict(
+    mode="lines+markers",
+    marker=dict(size=1, opacity=0),
+)
+
+
+def _apply_window(st, zoom_key, gen_key, gen, ranged):
+    """Store a new zoom window and remount both charts.
+
+    The generation bump is not cosmetic. Both charts keep their selection in
+    widget state under their own key, so without a remount the chart that did
+    *not* set the new window still reports its previous rectangle on the next
+    run -- and immediately overwrites the window that was just chosen. Zooming
+    out from the detail view back to a wider box on the overview is exactly
+    that case.
+    """
+    st.session_state[zoom_key] = (float(ranged[0]), float(ranged[1]))
+    st.session_state[gen_key] = gen + 1
+    st.rerun()
 
 
 def zoomable_trace(
@@ -166,12 +247,17 @@ def zoomable_trace(
     window = st.session_state.get(zoom_key)
 
     ov_x, ov_y = envelope(x, y, max_points)
-    overview = go.Figure(go.Scatter(x=ov_x, y=ov_y, mode="lines"))
+    overview = go.Figure(go.Scatter(x=ov_x, y=ov_y, **_SELECTABLE_LINE))
     overview.update_layout(
         xaxis_title=x_label,
         yaxis_title=y_label,
         height=height,
         margin=dict(l=10, r=10, t=20, b=10),
+        # A plain drag must draw a selection box, not a client-side zoom:
+        # zooming the axes alone can never show more than the envelope kept,
+        # so without this the drag gesture the caption asks for silently does
+        # nothing on the server.
+        dragmode="select",
     )
     ov_event = st.plotly_chart(
         overview,
@@ -181,11 +267,8 @@ def zoomable_trace(
         use_container_width=True,
     )
     ranged = selected_x_range(ov_event)
-    if ranged is not None and (
-        window is None or tuple(ranged) != tuple(window)
-    ):
-        st.session_state[zoom_key] = (float(ranged[0]), float(ranged[1]))
-        st.rerun()
+    if ranged is not None and (window is None or tuple(ranged) != tuple(window)):
+        _apply_window(st, zoom_key, gen_key, gen, ranged)
         return
 
     if window is None:
@@ -207,12 +290,13 @@ def zoomable_trace(
         return
 
     d_x, d_y = envelope(zx, zy, max_points)
-    detail = go.Figure(go.Scatter(x=d_x, y=d_y, mode="lines"))
+    detail = go.Figure(go.Scatter(x=d_x, y=d_y, **_SELECTABLE_LINE))
     detail.update_layout(
         xaxis_title=x_label,
         yaxis_title=y_label,
         height=height,
         margin=dict(l=10, r=10, t=20, b=10),
+        dragmode="select",  # as above: drag selects, it must not just zoom
     )
     d_event = st.plotly_chart(
         detail,
@@ -223,8 +307,7 @@ def zoomable_trace(
     )
     narrowed = selected_x_range(d_event)
     if narrowed is not None and tuple(narrowed) != tuple(window):
-        st.session_state[zoom_key] = (float(narrowed[0]), float(narrowed[1]))
-        st.rerun()
+        _apply_window(st, zoom_key, gen_key, gen, narrowed)
         return
 
     st.caption(
