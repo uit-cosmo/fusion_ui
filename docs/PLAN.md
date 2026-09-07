@@ -418,6 +418,26 @@ the page for everyone; `prune`; error surfaces that name the missing file rather
 than dumping a traceback; smoke tests via `streamlit.testing.v1.AppTest`; and a
 short recipe in the README for adding a plot.
 
+#### Multi-pixel mode
+
+Per-pixel analyses used to be one pixel at a time: twelve pixels meant twelve
+sidebar visits and twelve figures that could not be overlaid. The single-shot
+page now offers eligible specs (cached, with `refx`/`refy` in their params) as
+a One/Many toggle. Many selects a rectangle of pixels on the pixel map and runs
+one cached run per pixel through `store.result` -- no schema change, no
+`params_ui` change, no new spec -- reusing the single-pixel cache both ways, so
+a pixel already computed singly is free and re-selecting an overlapping
+rectangle only pays for the new pixels. Pure logic lives in
+`core/multipixel.py`; a spec may add an `overlay` (`(items, params, target) ->
+go.Figure`, worked example in `plots/spectra.py`) while cached specs without
+one get the per-pixel scalar fallback. The frame viewer is eligible too, as
+the one live spec with an `overlay`: its traces come off the open dataset, so
+there is no estimate and no run button. The pixel set is view state, never a
+parameter.
+Known limitation: N pixel-runs are N distinct `params_hash` values, so the
+multi-shot page lists them as N separate sources rather than aggregating the
+rectangle into one point.
+
 ## Who builds what
 
 The split is about how expensive a wrong decision is to undo, not difficulty in

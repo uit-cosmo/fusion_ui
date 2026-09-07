@@ -11,7 +11,6 @@ Cache hits are skipped without even opening the data file: a single APD record
 is ~500 MB, so an overnight fill must not re-read what is already stored.
 """
 
-import dataclasses
 import os
 import time
 from dataclasses import dataclass
@@ -19,7 +18,7 @@ from dataclasses import dataclass
 import xarray as xr
 
 from fusion_ui import config
-from fusion_ui.core import catalog, loader, registry, store
+from fusion_ui.core import catalog, loader, multipixel, registry, store
 
 
 @dataclass
@@ -101,18 +100,8 @@ def default_params(spec, pixel=None):
     """
     params = spec.params()
     if pixel is not None:
-        _set_pixel(params, pixel[0], pixel[1])
+        return multipixel.with_pixel(params, pixel[0], pixel[1])
     return params
-
-
-def _set_pixel(params, x, y):
-    """Set ``refx``/``refy`` wherever they appear in the params tree."""
-    for f in dataclasses.fields(params):
-        value = getattr(params, f.name)
-        if dataclasses.is_dataclass(value):
-            _set_pixel(value, x, y)
-        elif f.name in ("refx", "refy"):
-            setattr(params, f.name, x if f.name == "refx" else y)
 
 
 def run(conn, spec, targets, params, force=False):

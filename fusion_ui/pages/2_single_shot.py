@@ -18,7 +18,7 @@ import streamlit as st
 
 import fusion_ui.plots  # noqa: F401 - importing the package registers every spec
 from fusion_ui import ui
-from fusion_ui.core import catalog, loader, params_ui, registry, store
+from fusion_ui.core import catalog, loader, multipixel, params_ui, registry, store
 
 st.set_page_config(page_title="Single shot · Shot Explorer", layout="wide")
 
@@ -245,6 +245,19 @@ def main():
         return
 
     window_caption(target)
+
+    if multipixel.supported(spec) and st.sidebar.radio(
+        "Pixels", ["One", "Many"], horizontal=True, key=f"mode.{spec.key}"
+    ) == "Many":
+        params = params_ui.form(
+            spec.params, f"params.{spec.key}", container=st.sidebar, spec=spec, ds=ds
+        )
+        if spec.cached:
+            st.sidebar.caption(
+                "The pixel selection below overrides refx/refy in this mode."
+            )
+        multipixel.view(ui.get_connection(), spec, target, params, ds)
+        return
 
     params, ready = params_ui.panel(spec, target, ds=ds)
     if not ready:

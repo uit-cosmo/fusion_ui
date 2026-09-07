@@ -132,6 +132,55 @@ def render(result, params, target):
     return figure
 
 
+def overlay(items, params, target):
+    """Every selected pixel's PSD and its fit on one log-log axis.
+
+    One colour per pixel from a cycle, the fit dashed, both under one
+    ``legendgroup`` -- so clicking the legend hides the pair -- with the
+    duration time in the legend name. Mirrors :func:`render`.
+    """
+    from plotly.colors import qualitative
+
+    cycle = qualitative.Plotly
+    figure = go.Figure()
+    for index, ((x, y), result) in enumerate(items):
+        colour = cycle[index % len(cycle)]
+        group = f"pixel-{x}-{y}"
+        taud = float(result["taud"])
+        omega = result["omega"].values
+        figure.add_trace(
+            go.Scatter(
+                x=omega,
+                y=result["psd"].values,
+                mode="lines",
+                line=dict(color=colour),
+                legendgroup=group,
+                name=f"(x={x}, y={y})  τ_d={taud:.3g} s",
+            )
+        )
+        figure.add_trace(
+            go.Scatter(
+                x=omega,
+                y=result["psd_fit"].values,
+                mode="lines",
+                line=dict(color=colour, dash="dash"),
+                legendgroup=group,
+                showlegend=False,
+            )
+        )
+    figure.update_layout(
+        xaxis_title="angular frequency [rad/s]",
+        yaxis_title="power spectral density",
+        xaxis_type="log",
+        yaxis_type="log",
+        height=440,
+        margin=dict(l=10, r=10, t=40, b=10),
+        legend=dict(orientation="h", y=-0.2),
+        title=f"Duration time at {len(items)} pixels",
+    )
+    return figure
+
+
 def scalars(result):
     """Written at the pixel, not at the shot: which pixel was fitted is the
     whole content of the number, and it is how the seeded density_scan rows are
@@ -152,6 +201,7 @@ SPEC = registry.register(
         render=render,
         compute=compute,
         scalars=scalars,
+        overlay=overlay,
         choices=choices,
         description=(
             "Welch spectrum of one pixel fitted with the two-sided-exponential "

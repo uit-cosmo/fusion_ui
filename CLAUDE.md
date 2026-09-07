@@ -173,6 +173,13 @@ the same way the browser shows an uncurated shot rather than hiding it.
 - `st.dataframe` renders a missing numeric as a greyed `"None"`; neither a
   Styler's `na_rep` nor `column_config` overrides it. Keep numeric columns
   numeric anyway — sorting is what the table is for.
+- **Multi-pixel mode lives on the single-shot page.** Eligible specs (cached,
+  with `refx`/`refy` in their params) offer a One/Many toggle; Many selects a
+  rectangle of pixels and runs one cached run per pixel through `store.result`,
+  reusing the single-pixel cache both ways. The pixel set is view state in
+  `st.session_state`, never a parameter. The frame viewer is eligible too, as
+  the one live spec with an `overlay`: its traces come off the open dataset,
+  so there is no estimate and no run button.
 
 ## The `PlotSpec` contract
 
@@ -191,6 +198,7 @@ class PlotSpec:
     render:      Callable   # (result, params, target) -> go.Figure | None
     compute:     Callable | None = None   # (ds, params) -> xr.Dataset
     scalars:     Callable | None = None   # (result) -> dict
+    overlay:     Callable | None = None   # (items, params, target) -> go.Figure
     choices:     Callable | None = None   # (ds, field_path, chosen) -> tuple | None
     requires:    str | None = None        # plot key of an upstream spec
     upstream_params: Callable | None = None   # (params) -> the upstream's params
@@ -210,6 +218,14 @@ class PlotSpec:
   or `(x, y, name)` tuples** for a value belonging to one pixel. Write at the
   pixel whenever the parameters name one — it is how the seeded `density_scan`
   rows are laid out, so the two line up on one axis.
+- **`overlay` draws many pixels on one axis.** `items` is `[((x, y), result), …]`
+  in selection order; the spec owns the axes, scales and legend, pure like
+  `render`. `result` is the stored result for a cached spec, the open dataset
+  for a live one (the frame viewer's trace overlay reads each pixel off it).
+  A cached spec without one gets the scalar fallback in `core/multipixel.py`,
+  which plots one per-pixel scalar across the selection — so for a cached spec
+  an `overlay` is an upgrade, never a prerequisite, while for a live spec it is
+  what makes it eligible at all.
 - **`compute`, `render` and `scalars` never touch Streamlit, the database or
   the filesystem.** `core/store.py` does all of that. Keeping them pure is what
   makes them testable and what will let phase 05 move compute into a process
@@ -274,7 +290,11 @@ the widget panel, the canonical dict and the sha1 that keys `param_sets`.
   always slice to the discharge DB's `t_start..t_end` (or a centred 0.2 s window
   when there is no metadata).
 - **Decimate before handing a 1D trace to Plotly.** Use the shared min/max
-  envelope helper in `core/decimate.py` — striding drops spikes.
+  envelope helper in `core/decimate.py` — striding drops spikes. And a
+  decimated trace must resample on zoom: zooming the axes alone never shows
+  more than the envelope kept, so a box selection re-decimates the
+  full-resolution data to that window (`decimate.zoomable_trace` for one
+  trace, the zoomable live overlay in `core/multipixel.py` for many).
 - **Interactive plots are Plotly.** Movies stay matplotlib, rendered to mp4 and
   served with `st.video`.
 - **Development uses one small shot.** Do not loop over the data tree to "check
