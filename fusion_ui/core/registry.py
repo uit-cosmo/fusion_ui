@@ -112,6 +112,16 @@ class PlotSpec:
     #: opened file knows -- the probe view's quantity and position lists.
     #: ``chosen`` holds the values picked so far, so selectboxes can chain.
     choices: Optional[Callable] = None
+    #: ``(items, params, target) -> go.Figure``. Draws one figure over several
+    #: pixels: ``items`` is ``[((x, y), result), …]`` in selection order, and
+    #: the spec owns the axes, scales and legend -- the same purity contract
+    #: ``render`` has. For a cached spec ``result`` is the stored result of
+    #: that pixel's run; for a live spec it is the time-sliced dataset itself
+    #: (the same object ``render`` gets), so the overlay reads each pixel off
+    #: the already-open file -- exactly what ``render`` already does. A cached
+    #: spec without one falls back to the scalar view in
+    #: :mod:`fusion_ui.core.multipixel`.
+    overlay: Optional[Callable] = None
     #: Plot key of a spec whose result this one consumes. When set, ``compute``
     #: is called as ``compute(ds, params, upstream)`` and the store resolves --
     #: from cache where it can -- the upstream result first.

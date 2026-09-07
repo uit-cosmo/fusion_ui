@@ -10,4 +10,14 @@ These are some of the issues I encountered while playing with the UI.
 
 # TODOS for later
 
-1. Some diagnostics should be able to be run on several pixels at the same time. Have a pixel selection window, for example a plot of all the pixel locations where the pixels can be selected with a rectangle. Once they are selected, a plot type is chosen (for example, PSD fit), and then the method is applied to all selected pixels and presented in a single plot
+(none — the multi-pixel TODO below shipped as Many mode on the single-shot page)
+
+# Done
+
+1. Several pixels at the same time. The single-shot page offers eligible specs
+   (cached, with `refx`/`refy` in their params) as a One/Many toggle: Many
+   selects a rectangle of pixels on the pixel map, runs the analysis once per
+   pixel through the shared cache, and draws every pixel on one axis
+   (`core/multipixel.py`, optional per-spec `overlay`, worked example in
+   `plots/spectra.py`). Known limitation: the multi-shot page still lists the N
+   pixel-runs as N separate sources rather than aggregating the rectangle.
