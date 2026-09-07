@@ -288,6 +288,8 @@ def render(ds, params, target):
         mapped = _point_to_pixel(point, x_axis, y_axis, values.shape)
         if mapped is not None and mapped != (iy, ix):
             st.session_state[f"pixel.{target.key}"] = mapped
+            st.session_state[f"pixelx.{target.key}"] = mapped[1]
+            st.session_state[f"pixely.{target.key}"] = mapped[0]
             st.rerun()
 
     location = (
