@@ -98,8 +98,8 @@ That is how every quantity derived from the conditional average — velocities,
 sizes, areas — shares one 2DCA run instead of each paying ~21 s for its own.
 `fusion_ui/plots/velocity_contour.py` is the worked example.
 
-A cached spec whose parameters name a pixel may also draw all of its pixels
-on one axis in many-pixel mode:
+A spec may also draw several pixels on one axis in many-pixel mode — a cached
+one from its stored results, a live one straight off the open dataset:
 
 ```python
 def overlay(items, params, target):   # [((x, y), result), …] -> go.Figure
@@ -113,9 +113,11 @@ SPEC = registry.register(
 )
 ```
 
-Specs without one still work there through the scalar fallback, which plots
-one per-pixel scalar across the selection — so an `overlay` is an upgrade,
-never a prerequisite. `fusion_ui/plots/spectra.py` is the worked example.
+Cached specs without one still work there through the scalar fallback, which
+plots one per-pixel scalar across the selection — so for a cached spec an
+`overlay` is an upgrade, never a prerequisite, while for a live spec it is
+what makes it eligible at all. `fusion_ui/plots/spectra.py` (cached) and the
+trace overlay in `fusion_ui/plots/raw.py` (live) are the worked examples.
 
 ## Development
 

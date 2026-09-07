@@ -252,9 +252,10 @@ def main():
         params = params_ui.form(
             spec.params, f"params.{spec.key}", container=st.sidebar, spec=spec, ds=ds
         )
-        st.sidebar.caption(
-            "The pixel selection below overrides refx/refy in this mode."
-        )
+        if spec.cached:
+            st.sidebar.caption(
+                "The pixel selection below overrides refx/refy in this mode."
+            )
         multipixel.view(ui.get_connection(), spec, target, params, ds)
         return
 

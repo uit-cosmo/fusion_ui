@@ -155,7 +155,9 @@ the Rescan button take effect.
   with `refx`/`refy` in their params) offer a One/Many toggle; Many selects a
   rectangle of pixels and runs one cached run per pixel through `store.result`,
   reusing the single-pixel cache both ways. The pixel set is view state in
-  `st.session_state`, never a parameter.
+  `st.session_state`, never a parameter. The frame viewer is eligible too, as
+  the one live spec with an `overlay`: its traces come off the open dataset,
+  so there is no estimate and no run button.
 
 ## The `PlotSpec` contract
 
@@ -196,9 +198,12 @@ class PlotSpec:
   rows are laid out, so the two line up on one axis.
 - **`overlay` draws many pixels on one axis.** `items` is `[((x, y), result), …]`
   in selection order; the spec owns the axes, scales and legend, pure like
-  `render`. Only on a cached spec. Specs without one get the scalar fallback in
-  `core/multipixel.py`, which plots one per-pixel scalar across the selection —
-  so an `overlay` is an upgrade, never a prerequisite.
+  `render`. `result` is the stored result for a cached spec, the open dataset
+  for a live one (the frame viewer's trace overlay reads each pixel off it).
+  A cached spec without one gets the scalar fallback in `core/multipixel.py`,
+  which plots one per-pixel scalar across the selection — so for a cached spec
+  an `overlay` is an upgrade, never a prerequisite, while for a live spec it is
+  what makes it eligible at all.
 - **`compute`, `render` and `scalars` never touch Streamlit, the database or
   the filesystem.** `core/store.py` does all of that. Keeping them pure is what
   makes them testable and what will let phase 05 move compute into a process

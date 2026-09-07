@@ -73,12 +73,16 @@ def _tree_has_pixel_pair(params_cls, _seen=None):
 def supported(spec) -> bool:
     """Whether ``spec`` can run in many-pixel mode.
 
-    True for a cached spec whose params tree carries a ``refx``/``refy`` pair.
-    Correctly excludes the live specs (no per-pixel result to overlay) and
-    ``velocity_field`` (deliberately no ``refx``/``refy`` -- it sweeps every
-    pixel internally, so there is nothing to stamp).
+    True for a cached spec whose params tree carries a ``refx``/``refy`` pair,
+    and for a live spec that brings its own ``overlay`` (today just the frame
+    viewer: nothing to stamp and nothing to cache, each trace comes off the
+    already-open dataset). Correctly excludes ``probe_trace`` (live, no
+    overlay) and ``velocity_field`` (deliberately no ``refx``/``refy`` -- it
+    sweeps every pixel internally, so there is nothing to stamp).
     """
-    return spec.cached and _tree_has_pixel_pair(spec.params)
+    if not spec.cached:
+        return spec.overlay is not None
+    return _tree_has_pixel_pair(spec.params)
 
 
 def with_pixel(params, x, y):
@@ -457,6 +461,16 @@ def view(conn, spec, target, params, ds) -> None:
         st.info(
             "Drag a rectangle over the pixel map to select pixels, "
             "then run the analysis on all of them at once."
+        )
+        return
+
+    if not spec.cached:
+        # Live: nothing to stamp, nothing to compute, nothing to cache. Each
+        # pixel's data comes off the already-open dataset, so draw the
+        # overlay straight away -- no estimate, no run button.
+        st.plotly_chart(
+            spec.overlay([((x, y), ds) for x, y in pixels], params, target),
+            use_container_width=True,
         )
         return
 

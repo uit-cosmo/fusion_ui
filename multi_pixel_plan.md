@@ -293,3 +293,12 @@ In the browser, on shot 1160616027 (preprocessed, apd):
 - Overlays for specs other than `taud_psd` — the mechanism plus the fallback covers them.
 - Moving the loop off the script thread; that is phase 05's process pool.
 - `open_issues.md` issue 1 (data overview + articles).
+
+## Follow-up: the live pixel trace
+
+After this plan shipped, the frame viewer (`raw_frames`) joined Many mode as
+the one live spec with an `overlay`. `register()` no longer rejects `overlay`
+on a live spec: its items carry the open time-sliced dataset (the same object
+`render` gets) instead of stored results, and `multipixel.view` draws it
+straight away with no estimate and no run button. `supported()` is true for a
+live spec exactly when it defines one; the scalar fallback stays cached-only.

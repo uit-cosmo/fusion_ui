@@ -403,6 +403,43 @@ def render(ds, params, target):
     return None
 
 
+def overlay(items, params, target):
+    """Every selected pixel's time trace on one axis.
+
+    The live overlay: ``items`` carry the open time-sliced dataset (the same
+    object ``render`` gets), so each trace is read off it with
+    :func:`loader.pixel_series` -- no run, no blob, nothing cached. Each trace
+    goes through the min/max envelope first: a full window is hundreds of
+    thousands of samples per pixel, and striding would drop the spikes this
+    view is for.
+    """
+    from plotly.colors import qualitative
+
+    cycle = qualitative.Plotly
+    figure = go.Figure()
+    for index, ((x, y), ds) in enumerate(items):
+        times, values = loader.pixel_series(ds, int(y), int(x))
+        env_t, env_v = decimate.envelope(times, values)
+        figure.add_trace(
+            go.Scatter(
+                x=env_t,
+                y=env_v,
+                mode="lines",
+                line=dict(color=cycle[index % len(cycle)]),
+                name=f"(x={x}, y={y})",
+            )
+        )
+    figure.update_layout(
+        xaxis_title="time [s]",
+        yaxis_title="signal",
+        height=440,
+        margin=dict(l=10, r=10, t=40, b=10),
+        legend=dict(orientation="h", y=-0.2),
+        title=f"Pixel traces at {len(items)} pixels",
+    )
+    return figure
+
+
 SPEC = registry.register(
     registry.PlotSpec(
         key="raw_frames",
@@ -410,6 +447,7 @@ SPEC = registry.register(
         diagnostics=("apd", "phantom"),
         params=RawFramesParams,
         render=render,
+        overlay=overlay,
         description="The frame at a time, the trace at a pixel, and an mp4 of the window.",
     )
 )

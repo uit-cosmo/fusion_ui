@@ -8,7 +8,7 @@ import fusion_ui.plots  # noqa: F401 - registers every spec
 from fusion_ui.core import multipixel, precompute, registry, store
 from fusion_ui.plots import spectra
 
-ELIGIBLE = {
+CACHED_ELIGIBLE = {
     "taud_psd",
     "velocity_tde",
     "two_dca",
@@ -21,11 +21,15 @@ ELIGIBLE = {
 }
 
 
-def test_supported_matches_the_nine_per_pixel_specs():
+def test_supported_matches_the_per_pixel_specs_and_the_live_trace():
     assert {
-        key for key, spec in registry.REGISTRY.items() if multipixel.supported(spec)
-    } == ELIGIBLE
-    assert not multipixel.supported(registry.get("raw_frames"))
+        key
+        for key, spec in registry.REGISTRY.items()
+        if multipixel.supported(spec) and spec.cached
+    } == CACHED_ELIGIBLE
+    # The frame viewer is live -- nothing to stamp, nothing to cache -- and is
+    # eligible through its overlay, which reads each trace off the open file.
+    assert multipixel.supported(registry.get("raw_frames"))
     assert not multipixel.supported(registry.get("probe_trace"))
     assert not multipixel.supported(registry.get("velocity_field"))
 
@@ -242,6 +246,30 @@ def test_four_pixels_share_the_cache_both_ways(conn, cache, blobs, target):
     assert single["id"] == first_ids[1]
 
 
+def _frames_dataset(n_time=6000, n_y=4, n_x=5):
+    rng = np.random.default_rng(3)
+    time = np.linspace(1.0, 1.02, n_time)
+    frames = rng.normal(size=(n_y, n_x, n_time))
+    return xr.Dataset(
+        {"frames": (["y", "x", "time"], frames)},
+        coords={"time": ("time", time)},
+    )
+
+
+def test_raw_overlay_draws_one_decimated_trace_per_pixel(target):
+    from fusion_ui.plots import raw
+
+    ds = _frames_dataset()
+    items = [((0, 0), ds), ((2, 3), ds)]
+    figure = raw.overlay(items, raw.RawFramesParams(), target)
+
+    assert [t.name for t in figure.data] == ["(x=0, y=0)", "(x=2, y=3)"]
+    # 6000 samples per trace would kill Plotly three times over uncut.
+    assert all(len(t.x) <= 4000 for t in figure.data)
+    assert figure.layout.xaxis.title.text == "time [s]"
+    assert "2 pixels" in figure.layout.title.text
+
+
 # ---------------------------------------------------------------------------
 # Smoke test: Many mode on the single-shot page
 # ---------------------------------------------------------------------------
@@ -282,6 +310,60 @@ def test_many_mode_renders_the_selector(monkeypatch, tmp_path, apd_dataset_path)
         radios[0].set_value("Many").run()
         assert not app.exception, app.exception
         assert app.get("plotly_chart"), "expected the pixel-map selector to render"
+    finally:
+        st.cache_data.clear()
+        st.cache_resource.clear()
+
+
+def test_many_mode_on_the_live_trace_draws_selector_and_overlay(
+    monkeypatch, tmp_path, apd_dataset_path
+):
+    """The pixel trace needs no run and no button: selector plus overlay."""
+    import streamlit as st
+    from pathlib import Path
+    from streamlit.testing.v1 import AppTest
+
+    from fusion_ui.core import catalog, db
+
+    data_folder = apd_dataset_path.parent.parent  # .../alcator
+    database = tmp_path / "state" / "shot_explorer.sqlite"
+    monkeypatch.setenv("FUSION_DATA_FOLDER", str(data_folder))
+    monkeypatch.setenv("FUSION_DISCHARGE_DB", str(tmp_path / "no_such_discharges.json"))
+    monkeypatch.setenv("FUSION_UI_DB", str(database))
+    monkeypatch.setenv("FUSION_UI_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setenv("FUSION_MACHINE", "cmod")
+
+    conn = db.open_db(database)
+    catalog.rescan(conn, str(data_folder), "cmod", None)
+    conn.close()
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    try:
+        single_shot = str(
+            Path(__file__).resolve().parent.parent / "fusion_ui" / "pages"
+            / "2_single_shot.py"
+        )
+        app = AppTest.from_file(single_shot, default_timeout=60)
+        # raw_frames is the default spec for apd: no need to pick one.
+        app.session_state["pixels.cmod_1234_apd_r"] = [(0, 0), (1, 1)]
+        app.run()
+        assert not app.exception, app.exception
+
+        radios = [w for w in app.sidebar.radio if w.label == "Pixels"]
+        assert radios, "expected the One/Many pixel-mode radio"
+        radios[0].set_value("Many").run()
+        assert not app.exception, app.exception
+        # Selector plus the two-trace overlay, drawn with no Compute in sight.
+        assert len(app.get("plotly_chart")) >= 2
+        labels = [b.label for b in app.button]
+        assert not any(
+            label.startswith("Run on") or label == "Compute" for label in labels
+        ), f"live mode must offer no run button, found {labels}"
+
+        conn = db.connect(database)
+        (runs,) = conn.execute("SELECT COUNT(*) FROM runs").fetchone()
+        conn.close()
+        assert runs == 0, "a live overlay must not write ledger rows"
     finally:
         st.cache_data.clear()
         st.cache_resource.clear()
