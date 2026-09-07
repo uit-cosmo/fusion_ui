@@ -319,7 +319,7 @@ def render(ds, params, target):
     )
     if (int(new_iy), int(new_ix)) != (iy, ix):
         st.session_state[pixel_key] = (int(new_iy), int(new_ix))
-        iy, ix = int(new_iy), int(new_ix)
+        st.rerun()
 
     pixel_time, pixel_values = loader.pixel_series(ds, iy, ix)
     decimate.zoomable_trace(
