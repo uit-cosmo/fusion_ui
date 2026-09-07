@@ -10,4 +10,4 @@ These are some of the issues I encountered while playing with the UI.
 
 # TODOS for later
 
-1. Some diagnostics should be able to be run on several pixels at the same time. Have a pixel selection window, for example a plot of all the pixel locations where the pixels can be selected with a rectangle. Once they are selected, a plot type is choosen (for example, PSD fit), and then the method is applied to all selected pixels and presented in a single plot
+1. Some diagnostics should be able to be run on several pixels at the same time. Have a pixel selection window, for example a plot of all the pixel locations where the pixels can be selected with a rectangle. Once they are selected, a plot type is chosen (for example, PSD fit), and then the method is applied to all selected pixels and presented in a single plot
