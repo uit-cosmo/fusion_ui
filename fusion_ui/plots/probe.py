@@ -9,7 +9,6 @@ opened file, and the position list from the quantity chosen a moment earlier.
 
 from dataclasses import dataclass
 
-import plotly.graph_objects as go
 import streamlit as st
 
 from fusion_ui.core import decimate, probes, registry
@@ -53,19 +52,13 @@ def render(ds, params, target):
         return None
 
     trace = probes.load_trace(ds, params.quantity, int(params.position))
-    x_decimated, y_decimated = decimate.envelope(trace.time, trace.value)
-
-    figure = go.Figure(go.Scatter(x=x_decimated, y=y_decimated, mode="lines"))
-    figure.update_layout(
-        xaxis_title="time [s]",
-        yaxis_title=f"{trace.quantity}_{trace.position}",
+    decimate.zoomable_trace(
+        trace.time,
+        trace.value,
+        key=f"probe.{target.key}.{trace.quantity}.{trace.position}",
+        x_label="time [s]",
+        y_label=f"{trace.quantity}_{trace.position}",
         height=380,
-        margin=dict(l=10, r=10, t=20, b=10),
-    )
-    st.plotly_chart(figure, use_container_width=True)
-    st.caption(
-        f"{trace.time.size} samples on this position's own time base, "
-        f"{x_decimated.size} plotted after min/max-envelope decimation."
     )
 
     if trace.rho is not None:
@@ -74,15 +67,14 @@ def render(ds, params, target):
                 "ρ is computed on its own, coarser time base -- not a "
                 "resampling of the trace above."
             )
-            rho_x, rho_y = decimate.envelope(trace.rho_time, trace.rho)
-            rho_figure = go.Figure(go.Scatter(x=rho_x, y=rho_y, mode="lines"))
-            rho_figure.update_layout(
-                xaxis_title="time [s]",
-                yaxis_title="ρ",
+            decimate.zoomable_trace(
+                trace.rho_time,
+                trace.rho,
+                key=f"rho.{target.key}.{trace.quantity}.{trace.position}",
+                x_label="time [s]",
+                y_label="ρ",
                 height=280,
-                margin=dict(l=10, r=10, t=20, b=10),
             )
-            st.plotly_chart(rho_figure, use_container_width=True)
 
     geometry = probes.probe_geometry(ds)
     if geometry["probe_type"]:

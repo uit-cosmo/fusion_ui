@@ -100,6 +100,32 @@ def _selected_pixel(target, shape):
     return min(iy, shape[0] - 1), min(ix, shape[1] - 1)
 
 
+def _point_to_pixel(point, x_axis, y_axis, shape):
+    """Nearest ``(iy, ix)`` for one selected point, or ``None``.
+
+    A heatmap click carries the physical ``x``/``y`` coordinates, which map
+    back through the axis arrays; some backends additionally report the cell
+    as a ``[row, col]`` pair in ``point_number``. Prefer the cell when it is
+    present and in bounds, fall back to the coordinates, and never raise --
+    an unmappable point is skipped, not fatal.
+    """
+    number = point.get("point_number", point.get("pointNumber"))
+    if isinstance(number, (list, tuple)) and len(number) == 2:
+        try:
+            iy, ix = int(number[0]), int(number[1])
+        except (TypeError, ValueError):
+            iy = ix = None
+        else:
+            if 0 <= iy < shape[0] and 0 <= ix < shape[1]:
+                return iy, ix
+    try:
+        ix = int(np.argmin(np.abs(x_axis - point["x"])))
+        iy = int(np.argmin(np.abs(y_axis - point["y"])))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return iy, ix
+
+
 def _frame_figure(values, x_axis, y_axis, labels, pixel, colorscale):
     iy, ix = pixel
     figure = go.Figure(
@@ -253,40 +279,54 @@ def render(ds, params, target):
         selection_mode="points",
         key=f"click.{target.key}",
     )
-    clicked = [
-        p
-        for p in (event.selection["points"] if event else [])
-        if p.get("curve_number", 0) == 0
-    ]
-    if clicked:
-        new = (
-            int(np.argmin(np.abs(y_axis - clicked[0]["y"]))),
-            int(np.argmin(np.abs(x_axis - clicked[0]["x"]))),
-        )
-        if new != (iy, ix):
-            st.session_state[f"pixel.{target.key}"] = new
+    # Any clicked trace maps to its nearest pixel -- including the marker
+    # itself, which maps back to the pixel it already marks (a no-op). The
+    # previous code accepted heatmap clicks only and silently dropped
+    # everything else, so a click the backend attributed to the overlay left
+    # the pixel unchanged with no error to explain it.
+    for point in decimate.selection_points(event):
+        mapped = _point_to_pixel(point, x_axis, y_axis, values.shape)
+        if mapped is not None and mapped != (iy, ix):
+            st.session_state[f"pixel.{target.key}"] = mapped
             st.rerun()
 
     location = (
         f" (R={x_axis[ix]:.2f}, Z={y_axis[iy]:.2f})" if x_label.startswith("R") else ""
     )
     st.caption(
-        f"Selected pixel: y={iy}, x={ix}{location} — click the frame to move it."
+        f"Selected pixel: y={iy}, x={ix}{location} — click the frame to move it, "
+        "or type the indices below."
     )
+    # The click target above depends on the Plotly selection event reaching
+    # the server; the indices below always work and stay in step with it.
+    pixel_key = f"pixel.{target.key}"
+    x_col, y_col = st.columns(2)
+    new_ix = x_col.number_input(
+        "Pixel x",
+        min_value=0,
+        max_value=values.shape[1] - 1,
+        value=int(ix),
+        key=f"pixelx.{target.key}",
+    )
+    new_iy = y_col.number_input(
+        "Pixel y",
+        min_value=0,
+        max_value=values.shape[0] - 1,
+        value=int(iy),
+        key=f"pixely.{target.key}",
+    )
+    if (int(new_iy), int(new_ix)) != (iy, ix):
+        st.session_state[pixel_key] = (int(new_iy), int(new_ix))
+        iy, ix = int(new_iy), int(new_ix)
 
     pixel_time, pixel_values = loader.pixel_series(ds, iy, ix)
-    x_decimated, y_decimated = decimate.envelope(pixel_time, pixel_values)
-    trace = go.Figure(go.Scatter(x=x_decimated, y=y_decimated, mode="lines"))
-    trace.update_layout(
-        xaxis_title="time [s]",
-        yaxis_title="signal",
+    decimate.zoomable_trace(
+        pixel_time,
+        pixel_values,
+        key=f"trace.{target.key}.{iy}.{ix}",
+        x_label="time [s]",
+        y_label="signal",
         height=280,
-        margin=dict(l=10, r=10, t=20, b=10),
-    )
-    st.plotly_chart(trace, use_container_width=True)
-    st.caption(
-        f"{pixel_time.size} samples in window, {x_decimated.size} plotted after "
-        "min/max-envelope decimation."
     )
 
     _movie_export(ds, times, params, target)
