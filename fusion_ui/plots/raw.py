@@ -103,12 +103,22 @@ def _selected_pixel(target, shape):
 def _point_to_pixel(point, x_axis, y_axis, shape):
     """Nearest ``(iy, ix)`` for one selected point, or ``None``.
 
-    A heatmap click carries the physical ``x``/``y`` coordinates, which map
-    back through the axis arrays; some backends additionally report the cell
-    as a ``[row, col]`` pair in ``point_number``. Prefer the cell when it is
-    present and in bounds, fall back to the coordinates, and never raise --
-    an unmappable point is skipped, not fatal.
+    Three spellings, most reliable first: the click-grid overlay (see
+    :func:`_frame_figure`) stamps each of its markers with ``[iy, ix]``
+    customdata, which maps back exactly with no coordinate arithmetic; some
+    backends report a heatmap cell as a ``[row, col]`` pair in
+    ``point_number``; otherwise the physical ``x``/``y`` coordinates map back
+    through the axis arrays. An unmappable point is skipped, never fatal.
     """
+    custom = point.get("customdata", point.get("customData"))
+    if isinstance(custom, (list, tuple)) and len(custom) == 2:
+        try:
+            iy, ix = int(custom[0]), int(custom[1])
+        except (TypeError, ValueError):
+            pass
+        else:
+            if 0 <= iy < shape[0] and 0 <= ix < shape[1]:
+                return iy, ix
     number = point.get("point_number", point.get("pointNumber"))
     if isinstance(number, (list, tuple)) and len(number) == 2:
         try:
@@ -118,6 +128,16 @@ def _point_to_pixel(point, x_axis, y_axis, shape):
         else:
             if 0 <= iy < shape[0] and 0 <= ix < shape[1]:
                 return iy, ix
+    else:
+        # A scalar point number on the click grid is the row-major index of
+        # the cell (see _frame_figure); anything else falls through to the
+        # coordinate mapping below.
+        try:
+            flat = int(number)
+        except (TypeError, ValueError):
+            flat = None
+        if flat is not None and 0 <= flat < shape[0] * shape[1]:
+            return flat // shape[1], flat % shape[1]
     try:
         ix = int(np.argmin(np.abs(x_axis - point["x"])))
         iy = int(np.argmin(np.abs(y_axis - point["y"])))
@@ -135,6 +155,29 @@ def _frame_figure(values, x_axis, y_axis, labels, pixel, colorscale):
             y=y_axis,
             colorscale=colorscale,
             colorbar=dict(title="signal"),
+        )
+    )
+    # A click target on the proven scatter-click path: one invisible marker
+    # per cell, each stamped with its own [iy, ix]. Heatmap point-clicks do
+    # not reliably arrive as selections, while scatter clicks demonstrably
+    # do (the multi-shot jump runs on them) -- so clicks land here, and map
+    # back exactly via customdata however the axes are scaled or labelled.
+    ny, nx = values.shape
+    grid_x, grid_y, grid_custom = [], [], []
+    for row in range(ny):
+        for col in range(nx):
+            grid_x.append(x_axis[col])
+            grid_y.append(y_axis[row])
+            grid_custom.append([row, col])
+    figure.add_trace(
+        go.Scatter(
+            x=grid_x,
+            y=grid_y,
+            customdata=grid_custom,
+            mode="markers",
+            marker=dict(opacity=0, size=30),
+            showlegend=False,
+            hoverinfo="skip",
         )
     )
     figure.add_trace(
@@ -288,8 +331,6 @@ def render(ds, params, target):
         mapped = _point_to_pixel(point, x_axis, y_axis, values.shape)
         if mapped is not None and mapped != (iy, ix):
             st.session_state[f"pixel.{target.key}"] = mapped
-            st.session_state[f"pixelx.{target.key}"] = mapped[1]
-            st.session_state[f"pixely.{target.key}"] = mapped[0]
             st.rerun()
 
     location = (
@@ -300,7 +341,10 @@ def render(ds, params, target):
         "or type the indices below."
     )
     # The click target above depends on the Plotly selection event reaching
-    # the server; the indices below always work and stay in step with it.
+    # the server; the indices below always work. They are deliberately
+    # keyless: the pixel tuple in session state is the single source of
+    # truth, and keyed widgets would keep stale values that fight it --
+    # each run they display the tuple, and a typed change writes it back.
     pixel_key = f"pixel.{target.key}"
     x_col, y_col = st.columns(2)
     new_ix = x_col.number_input(
@@ -308,14 +352,12 @@ def render(ds, params, target):
         min_value=0,
         max_value=values.shape[1] - 1,
         value=int(ix),
-        key=f"pixelx.{target.key}",
     )
     new_iy = y_col.number_input(
         "Pixel y",
         min_value=0,
         max_value=values.shape[0] - 1,
         value=int(iy),
-        key=f"pixely.{target.key}",
     )
     if (int(new_iy), int(new_ix)) != (iy, ix):
         st.session_state[pixel_key] = (int(new_iy), int(new_ix))

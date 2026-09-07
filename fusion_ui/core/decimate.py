@@ -172,6 +172,11 @@ def zoomable_trace(
         yaxis_title=y_label,
         height=height,
         margin=dict(l=10, r=10, t=20, b=10),
+        # A plain drag must draw a selection box, not a client-side zoom:
+        # zooming the axes alone can never show more than the envelope kept,
+        # so without this the drag gesture the caption asks for silently does
+        # nothing on the server.
+        dragmode="select",
     )
     ov_event = st.plotly_chart(
         overview,
@@ -213,6 +218,7 @@ def zoomable_trace(
         yaxis_title=y_label,
         height=height,
         margin=dict(l=10, r=10, t=20, b=10),
+        dragmode="select",  # as above: drag selects, it must not just zoom
     )
     d_event = st.plotly_chart(
         detail,

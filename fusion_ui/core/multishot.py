@@ -150,3 +150,23 @@ def with_metadata(aggregated, shot_table):
     return aggregated.merge(
         shot_table[columns], on=["machine", "shot"], how="left", validate="many_to_one"
     )
+
+
+def clicked_shot(point):
+    """``(machine, shot)`` for one selected scatter point, or ``None``.
+
+    ``plotly_express`` appends the ``hover_data`` columns to ``customdata``
+    after the ``custom_data`` ones, so a point carries
+    ``[machine, shot, f_GW, ...]`` rather than exactly ``[machine, shot]`` --
+    read the first two by position instead of unpacking, and return ``None``
+    for anything unrecognised rather than crashing the page on a click.
+    """
+    custom = point.get("customdata", point.get("customData")) if hasattr(
+        point, "get"
+    ) else None
+    if not isinstance(custom, (list, tuple)) or len(custom) < 2:
+        return None
+    try:
+        return custom[0], int(custom[1])
+    except (TypeError, ValueError):
+        return None
