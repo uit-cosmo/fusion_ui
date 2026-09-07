@@ -282,8 +282,12 @@ def compute(ds, params, upstream):
 
     data_vars["refx"] = refx
     data_vars["refy"] = refy
-    data_vars["ref_r"] = ref_r / CM
-    data_vars["ref_z"] = ref_z / CM
+    # R/Z grids, track positions and intercepts are all in centimetres (see
+    # the axis labels in render) -- the reference position stays in the same
+    # units so its marker lands on the pixel rather than a factor CM away.
+    # Only slopes are converted to m/s, for the scalars and their labels.
+    data_vars["ref_r"] = ref_r
+    data_vars["ref_z"] = ref_z
     data_vars["number_events"] = int(average["number_events"])
 
     return xr.Dataset(data_vars, coords=coords)

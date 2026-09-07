@@ -128,6 +128,26 @@ def test_a_failed_track_comes_back_nan_without_taking_the_other_down(
     assert figure is not None
 
 
+def test_reference_position_is_in_centimetres_like_the_grid(
+    average, traj_params
+):
+    """The ref-pixel marker must land on the pixel, not a factor 100 away.
+
+    ``R``/``Z`` grids, track positions and the R–Z axes are all in cm; storing
+    ``ref_r``/``ref_z`` in m put the marker (and the R*/Z* lines) far outside
+    the field of view.
+    """
+    result = trajectories.compute(None, traj_params, average)
+
+    r_grid = np.asarray(result["R"].values)
+    z_grid = np.asarray(result["Z"].values)
+    ref_r, ref_z = float(result["ref_r"]), float(result["ref_z"])
+    assert r_grid.min() <= ref_r <= r_grid.max()
+    assert z_grid.min() <= ref_z <= z_grid.max()
+    assert ref_r == pytest.approx(r_grid[CENTRE, CENTRE])
+    assert ref_z == pytest.approx(z_grid[CENTRE, CENTRE])
+
+
 # ---------------------------------------------------------------------------
 # The figure has to be readable, and the chain has to go through the store
 # ---------------------------------------------------------------------------
