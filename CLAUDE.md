@@ -151,6 +151,11 @@ the Rescan button take effect.
 - `st.dataframe` renders a missing numeric as a greyed `"None"`; neither a
   Styler's `na_rep` nor `column_config` overrides it. Keep numeric columns
   numeric anyway — sorting is what the table is for.
+- **Multi-pixel mode lives on the single-shot page.** Eligible specs (cached,
+  with `refx`/`refy` in their params) offer a One/Many toggle; Many selects a
+  rectangle of pixels and runs one cached run per pixel through `store.result`,
+  reusing the single-pixel cache both ways. The pixel set is view state in
+  `st.session_state`, never a parameter.
 
 ## The `PlotSpec` contract
 
@@ -169,6 +174,7 @@ class PlotSpec:
     render:      Callable   # (result, params, target) -> go.Figure | None
     compute:     Callable | None = None   # (ds, params) -> xr.Dataset
     scalars:     Callable | None = None   # (result) -> dict
+    overlay:     Callable | None = None   # (items, params, target) -> go.Figure
     choices:     Callable | None = None   # (ds, field_path, chosen) -> tuple | None
     requires:    str | None = None        # plot key of an upstream spec
     upstream_params: Callable | None = None   # (params) -> the upstream's params
@@ -188,6 +194,11 @@ class PlotSpec:
   or `(x, y, name)` tuples** for a value belonging to one pixel. Write at the
   pixel whenever the parameters name one — it is how the seeded `density_scan`
   rows are laid out, so the two line up on one axis.
+- **`overlay` draws many pixels on one axis.** `items` is `[((x, y), result), …]`
+  in selection order; the spec owns the axes, scales and legend, pure like
+  `render`. Only on a cached spec. Specs without one get the scalar fallback in
+  `core/multipixel.py`, which plots one per-pixel scalar across the selection —
+  so an `overlay` is an upgrade, never a prerequisite.
 - **`compute`, `render` and `scalars` never touch Streamlit, the database or
   the filesystem.** `core/store.py` does all of that. Keeping them pure is what
   makes them testable and what will let phase 05 move compute into a process

@@ -112,6 +112,13 @@ class PlotSpec:
     #: opened file knows -- the probe view's quantity and position lists.
     #: ``chosen`` holds the values picked so far, so selectboxes can chain.
     choices: Optional[Callable] = None
+    #: ``(items, params, target) -> go.Figure``. Draws one figure over the
+    #: per-pixel results of several runs: ``items`` is ``[((x, y), result), …]``
+    #: in selection order, and the spec owns the axes, scales and legend --
+    #: the same purity contract ``render`` has. Only on a cached spec: a live
+    #: spec has no per-pixel result to overlay. Specs without one fall back to
+    #: the scalar view in :mod:`fusion_ui.core.multipixel`.
+    overlay: Optional[Callable] = None
     #: Plot key of a spec whose result this one consumes. When set, ``compute``
     #: is called as ``compute(ds, params, upstream)`` and the store resolves --
     #: from cache where it can -- the upstream result first.
@@ -141,6 +148,11 @@ def register(spec):
         raise ValueError(f"a PlotSpec is already registered under {spec.key!r}")
     if not spec.diagnostics:
         raise ValueError(f"{spec.key!r} accepts no diagnostics")
+    if spec.overlay is not None and spec.compute is None:
+        raise ValueError(
+            f"{spec.key!r} sets overlay but is a live spec, so there is "
+            "no per-pixel result to overlay"
+        )
     if spec.requires is not None:
         # Checked at registration, not at compute time: a typo here would
         # otherwise surface as a failed run on someone's shot.
