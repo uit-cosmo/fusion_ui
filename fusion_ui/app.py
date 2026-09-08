@@ -177,6 +177,9 @@ Point-and-click access to the group's fusion diagnostic data.
   probe traces, duration times, movies.
 - **Multi shot** — a scalar against shot number, f_GW, line-averaged density
   or I_p, coloured by confinement mode.
+- **Statistics** — a basket of traces from any shot and any diagnostic drawn
+  together under one statistic (PDF, PSD, ACF, CCF), labelled with magnetic
+  coordinates.
 
 The discharge database is read-only here and stays hand-curated; shots with
 files but no entry in it are listed anyway, flagged as missing metadata.

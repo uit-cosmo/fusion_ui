@@ -438,6 +438,30 @@ Known limitation: N pixel-runs are N distinct `params_hash` values, so the
 multi-shot page lists them as N separate sources rather than aggregating the
 rectangle into one point.
 
+#### Statistics over arbitrary traces
+
+Certain statistic plots (PDF, PSD, CCF) take a time series as input and should
+run on all diagnostics, for any series and any time window, several at once,
+labelled with magnetic coordinates. Nothing in the app took "a trace" as its
+input -- every analysis was a `PlotSpec` bound to one `Target` -- so the
+Statistics page (`pages/4_statistics.py`) introduces one: `core/traces.py`
+names a 1-D series from any diagnostic (`TraceRef`: machine, shot, diagnostic,
+preprocessed flag, channel) and materialises it over an absolute window
+(`extract`), imaging pixels off the shared axis and probe channels off their
+own ragged one. A basket of traces -- pixels off any imaging shot, channels
+off any probe shot, mixed freely -- is drawn together under one of four
+`StatSpec` statistics in `fusion_ui/stats/` (PDF, PSD with an optional
+duration-time fit, ACF, CCF against a reference trace), with the CCF's inputs
+first interpolated onto the reference's time base (`traces.common_grid`, a
+no-op when the bases already match). Statistics are live and live outside the
+`PlotSpec` registry: tens of milliseconds each, no `runs` rows, no blobs, no
+schema change, widgets take effect on the next rerun. `taud_psd` stays the
+cached, per-pixel, scalar-producing spectrum; the `psd` statistic is its
+exploratory, cross-diagnostic cousin. Labels are magnetic coordinates from
+`core/geometry.py`: `R - R_sep` at the pixel's own height (a horizontal
+distance to the separatrix, not a flux coordinate) and window-mean rho for
+probe channels. The basket is view state, never a parameter.
+
 ## Who builds what
 
 The split is about how expensive a wrong decision is to undo, not difficulty in

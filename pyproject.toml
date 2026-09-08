@@ -47,6 +47,7 @@ packages = [
     "fusion_ui",
     "fusion_ui.core",
     "fusion_ui.plots",
+    "fusion_ui.stats",
 ]
 
 [tool.setuptools.package-data]

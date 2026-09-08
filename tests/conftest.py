@@ -128,7 +128,12 @@ def conn(tmp_path):
 
 @pytest.fixture
 def apd_dataset_path(tmp_path):
-    """A tiny APD-shaped dataset: ``frames`` on ``(y, x, time)``, plus R/Z."""
+    """A tiny APD-shaped dataset: ``frames`` on ``(y, x, time)``, plus R/Z.
+
+    Carries a flat EFIT boundary (``rlcfs``/``zlcfs``/``efit_time``) at R = 87
+    cm, like every real APD file does, so the magnetic-coordinate labels have
+    something to read.
+    """
     import numpy as np
     import xarray as xr
 
@@ -139,9 +144,23 @@ def apd_dataset_path(tmp_path):
     r = np.tile(np.linspace(80.0, 90.0, n_x), (n_y, 1)).astype("float32")
     z = np.tile(np.linspace(-4.0, 4.0, n_y), (n_x, 1)).T.astype("float32")
 
+    # A flat outboard separatrix at R = 87 cm: every leg point survives the
+    # r >= 86 mask in calculate_splinted_LCFS, and R - 87 is negative inboard
+    # of x = 3, positive outboard of it.
+    n_efit = 3
+    zlc = np.linspace(-8.0, 1.0, 5)
     ds = xr.Dataset(
-        {"frames": (["y", "x", "time"], frames)},
-        coords={"R": (["y", "x"], r), "Z": (["y", "x"], z), "time": ("time", time)},
+        {
+            "frames": (["y", "x", "time"], frames),
+            "rlcfs": (["xlcfs", "efit_time"], np.full((5, n_efit), 87.0)),
+            "zlcfs": (["ylcfs", "efit_time"], np.tile(zlc, (n_efit, 1)).T),
+        },
+        coords={
+            "R": (["y", "x"], r),
+            "Z": (["y", "x"], z),
+            "time": ("time", time),
+            "efit_time": ("efit_time", np.linspace(1.0, 1.02, n_efit)),
+        },
         attrs={"shot_number": 1234},
     )
     folder = tmp_path / "alcator" / "apd"

@@ -31,6 +31,17 @@ TIME_DIM = "time"
 FRAMES_VAR = "frames"
 
 
+def image_variable(ds):
+    """``"frames"`` for imaging data, or the only 3D variable if it is named
+    something else -- phantom files have been seen both ways."""
+    if "frames" in ds:
+        return "frames"
+    for name, variable in ds.data_vars.items():
+        if variable.ndim == 3:
+            return name
+    raise KeyError("no 3D image variable in this dataset")
+
+
 def dataset_path(machine, shot, diagnostic, preprocessed):
     """Path to one diagnostic file. ``machine`` is accepted for symmetry with
     the rest of the app's API; the data tree is not yet partitioned by it."""

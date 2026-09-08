@@ -34,7 +34,7 @@ import velocity_estimation as ve
 import xarray as xr
 from velocity_estimation.two_dim_velocity_estimates import _find_neighbors
 
-from fusion_ui.core import registry
+from fusion_ui.core import loader, registry
 
 #: R and Z are stored in centimetres, so a velocity off this grid is cm/s. The
 #: group reports m/s -- convert once, here, exactly as velocity_contour.py and
@@ -122,14 +122,9 @@ def choices(ds, path, chosen):
 
 
 def _image_variable(ds):
-    """``"frames"`` for imaging data, or the only 3D variable if it is named
-    something else -- phantom files have been seen both ways."""
-    if "frames" in ds:
-        return "frames"
-    for name, variable in ds.data_vars.items():
-        if variable.ndim == 3:
-            return name
-    raise KeyError("no 3D image variable in this dataset")
+    """Alias for :func:`fusion_ui.core.loader.image_variable`, kept for
+    backwards compatibility."""
+    return loader.image_variable(ds)
 
 
 def _neighbours_used(refx, refy, interface, neighbour_options):

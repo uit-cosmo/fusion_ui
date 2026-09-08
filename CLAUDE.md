@@ -284,6 +284,48 @@ the widget panel, the canonical dict and the sha1 that keys `param_sets`.
   the allowed values for its string fields and help text for the seven leaves
   whose docstrings say nothing. Add there rather than patching a dependency.
 
+## Traces and the statistics page
+
+**A trace is the unit the Statistics page (`pages/4_statistics.py`) trades
+in.** `core/traces.py` names a 1-D series from any diagnostic — `TraceRef`
+is `(machine, shot, diagnostic, preprocessed, channel)` with `channel` either
+`("pixel", x, y)` or `("probe", quantity, position)` — and `extract` pulls it
+over an absolute `[t_start, t_end]` window: imaging pixels with
+`loader.image_variable(ds)` (promoted out of `plots/spectra.py`, which now
+calls it) sliced on the shared axis, probe channels masked on their own ragged
+axis. `None` when the record misses the window; the page drops and flags those
+rather than failing.
+
+**Statistics are live, and they live outside the `PlotSpec` registry.**
+`core/statistics.py` holds a small sibling — `StatSpec` with `key`, `label`,
+`params`, `compute`, `render`, `pairwise` and `description` — under the same
+purity rule (`compute` and `render` never touch Streamlit, the database or the
+filesystem) and the same one-file-plus-one-import registration in
+`fusion_ui/stats/` (PDF, PSD, ACF, CCF). Live because a histogram or Welch PSD
+is tens of milliseconds and produces no scalar for the multi-shot axis; that
+is what the cached `taud_psd` spec is *for*, and it is untouched. `compute` is
+`(trace, params) -> xr.Dataset`, or `(trace, reference, params)` when
+`pairwise`; `render` is `(items, params) -> go.Figure` over
+`[(Trace, result), …]` in basket order. CCF inputs go through
+`traces.common_grid` first — a no-op when the bases already match. Every
+params dataclass uses only `int`/`float`/`str`/`bool` leaves, so `params_ui`
+needs no change beyond the `("PdfParams", "estimator")` choices and the
+`("PsdParams", "cutoff")` optional.
+
+**The basket is view state** (`st.session_state["stats.basket"]`, a
+`list[TraceRef]` in plot order, plus `stats.reference` for pairwise), never a
+parameter. Extraction is memoised with `st.cache_data` on
+`(path, mtime, ref, window)`.
+
+**`R−R_sep` is a horizontal distance to the separatrix at the pixel's own
+height, not a flux coordinate** — `core/geometry.py` reuses
+`plotting_scripts.figure_plots.calculate_splinted_LCFS` (imported inside the
+function; it pulls in matplotlib) and `np.interp`s the pixel's Z into the
+outboard leg, whose hardcoded C-Mod numbers will not carry to another machine.
+Anything unexpected returns `None` and the label falls back to `R, Z`. Probe
+`ρ` is the window mean of the `rho_<quantity>_<position>` companion, and the
+probe moves during its plunge — the page says both under the figure.
+
 ## Analysis conventions
 
 - **Never load a full time axis.** APD files are ~500 MB and 583k samples;

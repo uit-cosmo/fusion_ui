@@ -65,6 +65,7 @@ CHOICES = {
         "gaussian",
     ),
     ("VelocityParams", "estimator"): ("central_diff", "lsq"),
+    ("PdfParams", "estimator"): ("histogram", "kde"),
 }
 
 #: Fields annotated ``float`` (or ``int``) whose ``None`` means "work it out" --
@@ -73,6 +74,7 @@ CHOICES = {
 OPTIONAL = {
     ("GaussFitParams", "size_max"),
     ("TdeVelocityParams", "max_threshold"),
+    ("PsdParams", "cutoff"),
 }
 
 #: Help text, by dotted path from the top of whichever tree is being walked.

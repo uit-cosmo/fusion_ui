@@ -22,6 +22,11 @@ the analysis code in [`imaging_methods`](https://github.com/Sosnowsky/imaging-me
 - **Multi shot** — one scalar (velocity, duration time, event rate, …) plotted
   against shot number, Greenwald fraction, or line-averaged density across a
   selection of shots.
+- **Statistics** — a basket of traces (pixels off any imaging shot, channels
+  off any probe shot, mixed freely) drawn together under one statistic — PDF,
+  PSD, ACF, or CCF against a reference trace — over any time window, labelled
+  with magnetic coordinates. Live and uncached; the cached Duration time (PSD
+  fit) on the single-shot page stays the scalar-producing spectrum.
 
 ## Status
 
@@ -147,6 +152,54 @@ plots one per-pixel scalar across the selection — so for a cached spec an
 `overlay` is an upgrade, never a prerequisite, while for a live spec it is
 what makes it eligible at all. `fusion_ui/plots/spectra.py` (cached) and the
 trace overlay in `fusion_ui/plots/raw.py` (live) are the worked examples.
+
+## Adding a statistic
+
+One file in `fusion_ui/stats/`, one line in its `__init__.py`. No page changes,
+no new storage, and it appears on the Statistics page immediately.
+
+```python
+from dataclasses import dataclass
+import plotly.graph_objects as go
+import xarray as xr
+from fusion_ui.core import statistics
+
+
+@dataclass
+class MyStatParams:
+    """
+    bins: Number of bins.
+    """
+    bins: int = 64
+
+
+def compute(trace, params):        # -> xr.Dataset. Live; never cached.
+    return xr.Dataset({"y": ("v", ...)})
+
+
+def render(items, params):         # [(Trace, xr.Dataset), ...] -> go.Figure
+    figure = go.Figure()
+    for trace, result in items:
+        figure.add_trace(go.Scatter(y=result["y"].values, name=trace.label))
+    return figure
+
+
+SPEC = statistics.register(
+    statistics.StatSpec(
+        key="my_stat",              # permanent: it keys the session state
+        label="My statistic",
+        params=MyStatParams,
+        compute=compute,            # (trace, reference, params) when pairwise
+        render=render,
+        pairwise=False,             # True when it needs a reference trace
+    )
+)
+```
+
+Only `int`/`float`/`str`/`bool` parameter leaves — `params_ui` supports nothing
+else. A pairwise statistic gets every trace interpolated onto its reference's
+time base before `compute` is called. `fusion_ui/stats/ccf.py` is the worked
+example.
 
 ## Development
 
