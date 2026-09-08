@@ -138,6 +138,23 @@ def test_common_grid_handles_a_degenerate_time_base():
     assert gridded.value[2] == 1.0
     assert np.isnan(np.delete(gridded.value, 2)).all()
 
+    # A sample computed through different arithmetic still rounds to the grid.
+    near_miss = traces.Trace(
+        ref=single.ref, time=np.array([1.0 + 1e-9]), value=np.array([7.0]),
+        dt=float("nan"), coords={}, label="",
+    )
+    (gridded_near,) = traces.common_grid([near_miss], reference)
+    assert gridded_near.value[2] == 7.0
+    assert np.isnan(np.delete(gridded_near.value, 2)).all()
+
+    # A genuinely distant sample fills nothing.
+    far = traces.Trace(
+        ref=single.ref, time=np.array([10.0]), value=np.array([7.0]),
+        dt=float("nan"), coords={}, label="",
+    )
+    (gridded_far,) = traces.common_grid([far], reference)
+    assert np.isnan(gridded_far.value).all()
+
 
 def _trace_with(coords, channel=("pixel", 2, 1)):
     return traces.Trace(
