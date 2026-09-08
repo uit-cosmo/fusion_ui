@@ -28,6 +28,14 @@ RUN_DAYS_PATH = os.path.join(
     "run_days.md",
 )
 
+# The run page links each miniproposal to a PDF under this path; the number in
+# the markdown file is the whole of it, so the URL is derived rather than
+# written down twice. Served over http on the run page, but https works and is
+# what we link to.
+MINIPROPOSAL_URL = (
+    "https://www-internal.psfc.mit.edu/research/alcator/miniproposals/{}.pdf"
+)
+
 _HEADING = re.compile(r"^##\s+(\d{7})\s*$")
 # The one bold line under a heading: "**MP800 -- <verbatim title>**".
 _MINIPROPOSAL = re.compile(r"^\*\*MP\s*(\d+)\s*[—–-]+\s*(.+?)\*\*\s*$")
@@ -46,6 +54,16 @@ class RunDay:
     @property
     def date(self):
         return day_to_date(self.day)
+
+    @property
+    def url(self):
+        """The miniproposal PDF on the C-Mod internal web.
+
+        Reachable from the group server and from MIT; from anywhere else it
+        simply will not load. Nothing here fetches it -- it is a link for the
+        person reading the page.
+        """
+        return MINIPROPOSAL_URL.format(self.mp.removeprefix("MP"))
 
 
 def day_of(shot):
@@ -111,6 +129,7 @@ TABLE_COLUMNS = [
     "diagnostics",
     "bytes",
     "mp",
+    "mp_url",
     "title",
 ]
 
@@ -151,6 +170,7 @@ def run_day_table(conn, discharge_db_path, run_days=None):
                 "diagnostics": " ".join(sorted(diagnostics.get(day, ()))),
                 "bytes": sizes.get(day, 0),
                 "mp": entry.mp if entry else "",
+                "mp_url": entry.url if entry else "",
                 "title": entry.title if entry else "",
             }
         )

@@ -95,7 +95,7 @@ def _entry(row, run_days):
         )
     return (
         f"**{row.date} · {row.day}** — {counts}\n\n"
-        f"{entry.mp} · *{entry.title}*\n\n{entry.summary}\n"
+        f"[{entry.mp}]({entry.url}) · *{entry.title}*\n\n{entry.summary}\n"
     )
 
 
@@ -126,7 +126,9 @@ def overview_section():
     )
 
     st.dataframe(
-        table.assign(size=table["bytes"].map(human_bytes)).drop(columns="bytes"),
+        table.assign(size=table["bytes"].map(human_bytes)).drop(
+            columns=["bytes", "mp"]
+        ),
         hide_index=True,
         use_container_width=True,
         height=min(36 * len(table) + 38, 420),
@@ -140,7 +142,14 @@ def overview_section():
                 "on disk", format="%d", help="shots on this day with files indexed here"
             ),
             "diagnostics": st.column_config.TextColumn("diagnostics"),
-            "mp": st.column_config.TextColumn("MP"),
+            # LinkColumn can only take its cell text from the URL itself, so
+            # the cells read "800" under an "MP" header rather than "MP800".
+            "mp_url": st.column_config.LinkColumn(
+                "MP",
+                display_text=r"/(\d+)\.pdf$",
+                help="opens the miniproposal PDF on the C-Mod internal web "
+                "(reachable from the group server and from MIT only)",
+            ),
             "title": st.column_config.TextColumn(
                 "miniproposal", help="quoted verbatim from the C-Mod run page"
             ),

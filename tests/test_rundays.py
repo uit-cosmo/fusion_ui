@@ -40,6 +40,9 @@ def test_parse_keeps_the_verbatim_title_and_the_whole_summary():
     assert entry.summary.startswith("An ohmic L-mode density scan")
     assert entry.summary.endswith("Second paragraph.")
     assert entry.date == "2016-06-16"
+    assert entry.url == (
+        "https://www-internal.psfc.mit.edu/research/alcator/miniproposals/800.pdf"
+    )
 
 
 def test_a_shot_maps_onto_its_run_day():
@@ -76,6 +79,9 @@ def test_the_table_joins_curated_days_to_what_is_on_disk(
     assert (table.loc["1150618", "shots"], table.loc["1150618", "on_disk"]) == (0, 1)
     assert table.loc["1150618", "diagnostics"] == "apd asp"
     assert table.loc["1160616", "mp"] == "MP800"
+    assert table.loc["1160616", "mp_url"].endswith("/miniproposals/800.pdf")
+    # A day with no section gets no link rather than a link to nowhere.
+    assert table.loc["1150618", "mp_url"].endswith("/miniproposals/761.pdf")
 
 
 def test_the_table_survives_a_missing_discharge_database(conn, data_folder):

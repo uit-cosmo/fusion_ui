@@ -60,7 +60,11 @@ def test_landing_page_lists_every_run_day_with_its_purpose(deployment):
     # entry -- listed rather than hidden, like the browser's uncurated shots.
     assert list(table["day"]) == ["1090813", "1110201", "1150618", "1160616"]
     assert list(table["on_disk"]) == [0, 1, 1, 1]
-    assert table.set_index("day").loc["1160616", "mp"] == "MP800"
+    assert (
+        table.set_index("day")
+        .loc["1160616", "mp_url"]
+        .endswith("/miniproposals/800.pdf")
+    )
     assert [m.value for m in app.metric if m.label == "Run days"] == ["4"]
 
     # The summaries are hard-wrapped in the file, so a phrase can straddle a

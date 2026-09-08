@@ -1,23 +1,7 @@
 
 These are some of the issues I encountered while playing with the UI.
 
-# Issues
+Certain statistic plots (pdf, psd, ccf) that take as input a time series (a trace), should be able to run on all current diagnostics, for any time series (any pixel in the case of apd/phantom, or any probe in the case of the others), and for any time window. Additionally it would be convenient to plot serveral at the same time, labelled maybe with the magnetic coordinates. 
 
-1. In the main page, present an overview of the stored data. It should be easily fetched from the cmod archives, but ideally it should also contain an overview of academic articles that use that data.
-2. Single Shot: APD doesn't change the pixel when clicking on the frame
-3. In all plots that need to coarsen the data to plot due to too high number of samples, resample to a higher resolution when zooming in.
-4. In the Tracked trajectories, upper left plot, the reference pixel is way out of the field of view. The reason is that its position is given in meters but plotted as if it was centimeters. Same applies to the R* and Z* in the plots on the right.
+I am a bit unsure how this should look at the end, so please come with ideas. A possibility is that we have a statistics plot type that, say pdf that, given a shot, allows you to throw in time series that you can select from all the diagnostics (maybe a UI with a pixel selection would work nice here for the case of APD/phantom). Additionally, it should have a time window that centers the traces.
 
-# TODOS for later
-
-(none — the multi-pixel TODO below shipped as Many mode on the single-shot page)
-
-# Done
-
-1. Several pixels at the same time. The single-shot page offers eligible specs
-   (cached, with `refx`/`refy` in their params) as a One/Many toggle: Many
-   selects a rectangle of pixels on the pixel map, runs the analysis once per
-   pixel through the shared cache, and draws every pixel on one axis
-   (`core/multipixel.py`, optional per-spec `overlay`, worked example in
-   `plots/spectra.py`). Known limitation: the multi-shot page still lists the N
-   pixel-runs as N separate sources rather than aggregating the rectangle.
