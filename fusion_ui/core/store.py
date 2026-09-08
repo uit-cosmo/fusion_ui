@@ -164,10 +164,20 @@ def record_run(conn, target, plot, params_hash, **columns):
 
 
 def delete_run(conn, run):
-    """Drop a run, its scalars (by cascade) and its blob. The Recompute path."""
+    """Drop a run, its scalars (by cascade) and its blob. The Recompute path.
+
+    The ledger rows are always removed, even if the blob cannot be unlinked
+    (permissions, concurrent delete): a leftover blob under a hash path is
+    overwritten on the next compute, but a leftover row would short-circuit
+    ``result()`` back to the stale result forever.
+    """
     path = run["blob_path"]
-    if path and os.path.exists(path):
-        os.remove(path)
+    if path:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
     with conn:
         conn.execute("DELETE FROM scalars WHERE run_id = ?", (run["id"],))
         conn.execute("DELETE FROM runs WHERE id = ?", (run["id"],))

@@ -139,11 +139,12 @@ def run(conn, spec, targets, params, force=False, retry_failed=False):
             if not retry_failed:
                 stats.failed += 1
                 continue
+            # Retrying a failure must drop the failed row first: store.result
+            # hands a recorded failure straight back and would never recompute.
+            store.delete_run(conn, existing)
+            existing = None
         if force and existing is not None:
-            try:
-                store.delete_run(conn, existing)
-            except OSError:
-                pass
+            store.delete_run(conn, existing)
 
         try:
             with xr.open_dataset(target.path) as ds:
