@@ -259,13 +259,17 @@ def load_result(conn, run):
 
     Loaded into memory and the file closed: these are derived results, small
     next to the ~500 MB inputs, and holding a handle open would keep a deleted
-    cache file alive.
+    cache file alive. A corrupt/unreadable blob also returns ``None`` so the
+    caller falls through and recomputes rather than crashing the page.
     """
     path = run["blob_path"]
     if not path or not os.path.exists(path):
         return None
-    with xr.open_dataset(path) as stored:
-        return stored.load()
+    try:
+        with xr.open_dataset(path) as stored:
+            return stored.load()
+    except Exception:  # noqa: BLE001 - corrupt cache must recompute, not crash
+        return None
 
 
 def _write_blob(result, path, plot, params_hash, text, code_version, created_at):
@@ -363,29 +367,50 @@ def compute_and_store(conn, spec, target, params, ds):
         )
 
     created_at = _now()
-    path = _write_blob(
-        result_ds,
-        blob_path(spec.key, params_hash, target),
-        spec.key,
-        params_hash,
-        text,
-        code_version,
-        created_at,
-    )
-    run = record_run(
-        conn,
-        target,
-        spec.key,
-        params_hash,
-        blob_path=path,
-        status="ok",
-        error=None,
-        seconds=time.perf_counter() - started,
-        code_version=code_version,
-        created_at=created_at,
-    )
-    if spec.scalars is not None:
-        write_scalars(conn, run["id"], spec.scalars(result_ds))
+    try:
+        path = _write_blob(
+            result_ds,
+            blob_path(spec.key, params_hash, target),
+            spec.key,
+            params_hash,
+            text,
+            code_version,
+            created_at,
+        )
+        run = record_run(
+            conn,
+            target,
+            spec.key,
+            params_hash,
+            blob_path=path,
+            status="ok",
+            error=None,
+            seconds=time.perf_counter() - started,
+            code_version=code_version,
+            created_at=created_at,
+        )
+        if spec.scalars is not None:
+            write_scalars(conn, run["id"], spec.scalars(result_ds))
+    except Exception as error:  # noqa: BLE001 - a failure is a row, not a crash
+        # Blob write, ledger write, or scalars() raised after a successful
+        # compute (disk full, PermissionError, bad attrs, non-numeric mapping).
+        # Record it so the page shows the error with Recompute instead of a
+        # traceback, and remove a half-written blob if there is one.
+        try:
+            partial = blob_path(spec.key, params_hash, target)
+            if os.path.exists(partial):
+                os.remove(partial)
+        except OSError:
+            pass
+        return _fail(
+            conn,
+            target,
+            spec,
+            params_hash,
+            f"{type(error).__name__}: {error}",
+            time.perf_counter() - started,
+            code_version,
+        )
     return result_ds, run
 
 

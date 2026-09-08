@@ -128,7 +128,11 @@ def open_target(machine, shot, diagnostic, preprocessed):
     if not os.path.exists(path):
         st.error(f"File not found: `{path}`", icon="⚠️")
         return None, None
-    ds = loader.open_dataset(path)
+    try:
+        ds = loader.open_dataset(path)
+    except Exception as error:  # noqa: BLE001 - file vanished or is unreadable
+        st.error(f"Could not open `{path}`: {type(error).__name__}: {error}", icon="⚠️")
+        return None, None
 
     if loader.TIME_DIM in ds.dims:
         t_start, t_end, source = loader.time_window(ds, discharge_for_shot(shot))
@@ -269,14 +273,27 @@ def main():
         return
 
     conn = ui.get_connection()
-    with st.spinner(f"Computing {spec.label.lower()}…" if spec.cached else ""):
-        result, run = store.result(conn, spec, target, params, ds)
+    try:
+        with st.spinner(f"Computing {spec.label.lower()}…" if spec.cached else ""):
+            result, run = store.result(conn, spec, target, params, ds)
+    except Exception as error:  # noqa: BLE001 - never show a traceback for a plot
+        st.error(f"{type(error).__name__}: {error}", icon="⚠️")
+        st.caption(
+            "An unexpected error escaped the run ledger. Re-trying sometimes "
+            "helps after a full disk or a permissions fix."
+        )
+        return
 
     if run is not None and run["status"] == "failed":
         show_failure(run, conn)
         return
 
-    figure = spec.render(result, params, target)
+    try:
+        figure = spec.render(result, params, target)
+    except Exception as error:  # noqa: BLE001 - a plot bug must not kill the page
+        st.error(f"{type(error).__name__}: {error}", icon="⚠️")
+        st.caption(f"Rendering {spec.label.lower()} failed.")
+        return
     if figure is not None:
         st.plotly_chart(figure, use_container_width=True)
     provenance(run, conn)

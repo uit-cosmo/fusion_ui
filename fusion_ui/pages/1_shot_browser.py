@@ -118,7 +118,9 @@ def sidebar_filters(table):
 
     search = st.sidebar.text_input("Shot number contains", "")
     if search.strip():
-        table = table[table["shot"].astype(str).str.contains(search.strip())]
+        table = table[
+            table["shot"].astype(str).str.contains(search.strip(), regex=False)
+        ]
 
     return table
 

@@ -204,6 +204,10 @@ def common_grid(traces, reference) -> list:
     axes. When every trace already shares the reference's time base -- the
     common case, several pixels of one APD file -- this is a no-op, not a
     round-trip through ``np.interp``.
+
+    Points of the reference base outside a trace's own range become NaN rather
+    than ``np.interp``'s flat extrapolation: two non-overlapping windows must
+    read as missing data, not as a bogus flat line with a spurious CCF peak.
     """
     base = np.asarray(reference.time, dtype=float)
     out = []
@@ -212,12 +216,20 @@ def common_grid(traces, reference) -> list:
         if time.shape == base.shape and bool(np.array_equal(time, base)):
             out.append(trace)
             continue
-        value = np.interp(base, time, np.asarray(trace.value, dtype=float))
+        values = np.asarray(trace.value, dtype=float)
+        if time.size < 2:
+            resampled = np.full_like(base, float("nan"), dtype=float)
+            if time.size == 1:
+                resampled[base == time[0]] = values[0]
+        else:
+            resampled = np.interp(base, time, values).astype(float)
+            # np.interp clamps outside xp; mask back to NaN.
+            resampled[(base < time.min()) | (base > time.max())] = float("nan")
         out.append(
             Trace(
                 ref=trace.ref,
                 time=np.asarray(base),
-                value=np.asarray(value),
+                value=np.asarray(resampled),
                 dt=trace.dt,
                 coords=trace.coords,
                 label=trace.label,
