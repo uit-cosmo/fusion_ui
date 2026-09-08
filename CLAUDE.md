@@ -306,7 +306,11 @@ is tens of milliseconds and produces no scalar for the multi-shot axis; that
 is what the cached `taud_psd` spec is *for*, and it is untouched. `compute` is
 `(trace, params) -> xr.Dataset`, or `(trace, reference, params)` when
 `pairwise`; `render` is `(items, params) -> go.Figure` over
-`[(Trace, result), …]` in basket order. CCF inputs go through
+`[(Trace, result), …]` in basket order — except the time trace, whose `render`
+draws into Streamlit itself and returns `None`: a box selection resamples each
+trace's full-resolution data to that window (zooming the axes alone could never
+show more than the envelope kept), the same loop `decimate.zoomable_trace`
+closes for one trace. CCF inputs go through
 `traces.common_grid` first — a no-op when the bases already match. Every
 params dataclass uses only `int`/`float`/`str`/`bool` leaves, so `params_ui`
 needs no change beyond the `("PdfParams", "estimator")` choices and the

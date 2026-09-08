@@ -3,9 +3,13 @@
 ``PlotSpec.render`` is ``(result, params, target) -> figure``: one target, one
 result. A statistics view is many traces from many targets on one axis, and
 ``Target`` cannot express that. Rather than bend the contract every spec
-depends on, this module adds a small sibling with the same purity rule --
-``compute`` and ``render`` never touch Streamlit, the database or the
-filesystem -- and the same one-file-plus-one-import registration.
+depends on, this module adds a small sibling with the same registration shape
+-- and the same purity rule for ``compute``, which never touches Streamlit,
+the database or the filesystem. ``render`` may either return a ``go.Figure``
+(the page draws it) or draw into Streamlit itself and return ``None``, when
+the view needs interaction: the time trace's box-select-to-zoom resamples the
+full-resolution data to the chosen window, which a returned figure could never
+do. Same escape hatch ``PlotSpec.render`` has, for the same reason.
 
 Statistics are live: a Welch PSD or a histogram of a 583k-sample trace is tens
 of milliseconds, these views produce no scalar anyone wants on a multi-shot
@@ -32,7 +36,9 @@ class StatSpec:
     #: ``(trace, reference, params) -> xr.Dataset`` when ``pairwise``.
     compute: Callable
     #: ``(items, params) -> go.Figure | None``. ``items`` is
-    #: ``[(Trace, xr.Dataset), ...]`` in basket order.
+    #: ``[(Trace, xr.Dataset), ...]`` in basket order. Returning ``None``
+    #: means the callable drew into Streamlit itself (an interactive view,
+    #: like the time trace's zoom).
     render: Callable
     #: Needs a reference trace, and a common time base (see
     #: :func:`fusion_ui.core.traces.common_grid`).

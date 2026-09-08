@@ -172,14 +172,25 @@ def test_pdf_lines_are_splined():
     assert figure.data[0].line.shape == "spline"
 
 
+def test_trace_overview_figure_holds_one_line_per_item():
+    import plotly.graph_objects as go
+
+    from fusion_ui.stats import trace
+
+    sine = _trace(_sine())
+    items = [(sine, trace.compute(sine, trace.TraceParams()))]
+    overview = trace.figure(items, trace.TraceParams())
+    assert isinstance(overview, go.Figure)
+    assert len(overview.data) == 1
+
+
 def test_every_spec_renders_its_items():
     import plotly.graph_objects as go
 
-    from fusion_ui.stats import acf, ccf, pdf, psd, trace
+    from fusion_ui.stats import acf, ccf, pdf, psd
 
     sine, shifted = _trace(_sine()), _trace(np.roll(_sine(), 5))
     cases = [
-        ("trace", trace, (sine,), trace.TraceParams()),
         ("pdf", pdf, (sine,), pdf.PdfParams()),
         ("psd", psd, (sine,), psd.PsdParams(fit=False)),
         ("acf", acf, (sine,), acf.AcfParams(fit=False)),

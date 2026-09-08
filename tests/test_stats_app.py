@@ -121,8 +121,26 @@ def test_adding_two_pixels_draws_a_figure(statistics_deployment):
     add_button(app).click().run()
     assert not app.exception, app.exception
     assert len(basket_rows(app)) == 2
-    # The pixel-map selector plus the statistics figure.
+    # The pixel-map selector plus the time-trace overview, which zooms by
+    # resampling rather than by stretching its axes.
     assert len(app.get("plotly_chart")) >= 2
+    assert any("Drag a box to zoom in" in c.value for c in app.caption)
+
+
+def test_trace_zoom_resamples_the_window(statistics_deployment):
+    app = AppTest.from_file(STATISTICS, default_timeout=120)
+    app.session_state["pixels.cmod_9999_apd_r"] = [(0, 0), (1, 1)]
+    app.run()
+    assert not app.exception, app.exception
+    add_button(app).click().run()
+    assert not app.exception, app.exception
+
+    # The tiny fixture spans 1.0-1.02 s; zoom to its middle.
+    app.session_state["stats.trace_zoom"] = (1.005, 1.010)
+    app.run()
+    assert not app.exception, app.exception
+    assert any("Zoomed to" in c.value for c in app.caption)
+    assert "Reset zoom" in [b.label for b in app.button]
 
 
 def test_switching_the_statistic_redraws_without_clearing_the_basket(
