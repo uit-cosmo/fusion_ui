@@ -15,6 +15,7 @@ import sqlite3
 from pathlib import Path
 
 from fusion_ui import config
+from fusion_ui.core import shared
 
 # ---------------------------------------------------------------------------
 # Schema (version 1)
@@ -181,10 +182,13 @@ def connect(path=None):
         path = config.UI_DB_PATH
     path = os.path.expanduser(str(path))
     if path != ":memory:":
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        shared.makedirs(Path(path).parent)
     conn = sqlite3.connect(path, timeout=30.0)
     conn.row_factory = sqlite3.Row
     if path != ":memory:":
+        # Before the WAL pragma: SQLite creates -wal and -shm with the mode of
+        # the database file itself, so relaxing it here relaxes all three.
+        shared.share_file(path)
         conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")

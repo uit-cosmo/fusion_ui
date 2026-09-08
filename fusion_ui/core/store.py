@@ -39,7 +39,7 @@ import pandas as pd
 import xarray as xr
 
 from fusion_ui import config
-from fusion_ui.core import params_ui
+from fusion_ui.core import params_ui, shared
 
 #: Sentinel for a scalar that belongs to the shot rather than to one pixel.
 #: Not NULL: SQLite permits NULLs in a non-INTEGER primary key, which would
@@ -269,7 +269,7 @@ def load_result(conn, run):
 
 
 def _write_blob(result, path, plot, params_hash, text, code_version, created_at):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    shared.makedirs(os.path.dirname(path))
     result = result.copy()
     # netCDF attributes cannot hold nested structures, so the parameters go in
     # as their canonical JSON string -- which makes the blob self-describing if
@@ -284,6 +284,9 @@ def _write_blob(result, path, plot, params_hash, text, code_version, created_at)
         }
     )
     result.to_netcdf(path)
+    # The service account and whoever runs `fusion-ui precompute` both write
+    # here; see fusion_ui.core.shared.
+    shared.share_file(path)
     return path
 
 

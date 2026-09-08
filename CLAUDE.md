@@ -364,3 +364,15 @@ systemd unit, nginx site and the exact sudo sequence are in `deploy/`. The
 shared password lives in nginx, not in the app. The one check that matters is
 the websocket handshake returning `101` — a proxy that drops the `Upgrade`
 header serves a page that loads and then hangs forever with no error.
+
+**The state directory has two writers**: the service account, and whoever runs
+`fusion-ui precompute` or `rescan` by hand. So the SQLite file, the cache
+directories and the blobs are created group-writable through
+`core/shared.py` — never with a bare `os.makedirs`, whose `mode` argument is
+masked by the umask and silently gives 0755. Getting this wrong does not fail
+early: the analysis runs to completion and then `to_netcdf` raises
+`PermissionError`, and the ledger records that as a `failed` run which
+`precompute` will skip forever without `--force`. Choosing the group is the
+operator's half (`chown` + setgid in `deploy/install.sh`); the app only ever
+widens the mode, never the ownership, and leaves directories it did not create
+alone.

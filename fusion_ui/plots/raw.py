@@ -20,7 +20,7 @@ import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
 
-from fusion_ui.core import decimate, loader, params_ui, registry, store
+from fusion_ui.core import decimate, loader, params_ui, registry, shared, store
 
 
 @dataclass
@@ -287,7 +287,7 @@ def _render_movie(ds, stride, params, out_path):
         title.set_text(f"t = {times[indices[i]]:.5f} s")
         return image, title
 
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    shared.makedirs(os.path.dirname(out_path))
     animation.FuncAnimation(figure, update, frames=len(indices)).save(
         out_path, writer="ffmpeg", fps=params.movie_fps
     )

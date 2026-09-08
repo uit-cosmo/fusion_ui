@@ -253,6 +253,16 @@ fi
 step "3. Configuration"
 mkdir -p "$STATE_DIR/cache"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$STATE_DIR"
+# Two accounts write this tree: the service, and whoever runs `fusion-ui
+# precompute` by hand. The app creates its own directories group-writable
+# (fusion_ui/core/shared.py) but cannot choose the group -- setgid here is what
+# makes everything below inherit $SERVICE_USER's. The chmod also repairs a tree
+# created before that, where a directory made by one account is unwritable by
+# the other and costs the second one a whole analysis before it finds out.
+chmod -R g+w "$STATE_DIR"
+find "$STATE_DIR" -type d -exec chmod g+s {} +
+echo "  $STATE_DIR is group-writable by $SERVICE_USER."
+echo "  Add anyone who runs precompute by hand: sudo usermod -aG $SERVICE_USER <user>"
 if [[ ! -f "$APP_DIR/.env" ]]; then
   as_service_user cp "$APP_DIR/.env.example" "$APP_DIR/.env"
   as_service_user sed -i \

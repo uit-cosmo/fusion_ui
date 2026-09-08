@@ -228,6 +228,25 @@ sudo chown -R fusionui:fusionui /hdd1/fusion_ui
 
 ## 3. Database and first index
 
+The state directory has two writers — the service, and whoever runs `fusion-ui
+precompute` by hand — so make it group-writable before anything creates
+anything in it:
+
+```bash
+sudo chown -R fusionui:fusionui /hdd1/fusion_ui
+sudo chmod -R g+w /hdd1/fusion_ui
+sudo find /hdd1/fusion_ui -type d -exec chmod g+s {} +   # new dirs inherit the group
+sudo usermod -aG fusionui <you>                          # log out and back in
+```
+
+The app creates its own directories and blobs group-writable
+(`fusion_ui/core/shared.py`), because `os.makedirs` masks its `mode` with the
+umask and would otherwise leave them owner-write only — which costs the second
+writer a whole analysis before it discovers it cannot save the result. But the
+app cannot choose *which* group, so the `chown` and the setgid bit above are
+the one-time operator half of it. **Run them on any deployment set up before
+this**, to repair directories already created under the old behaviour.
+
 ```bash
 sudo -u fusionui /opt/fusion-ui/.venv/bin/fusion-ui init-db
 sudo -u fusionui /opt/fusion-ui/.venv/bin/fusion-ui rescan

@@ -11,7 +11,7 @@ import os
 import sys
 
 from fusion_ui import config
-from fusion_ui.core import catalog, db, seed
+from fusion_ui.core import catalog, db, seed, shared
 
 
 def _resolve(attribute):
@@ -30,7 +30,7 @@ def cmd_init_db(args):
     # created here so a permissions problem shows up at deploy time.
     cache, error = _resolve("CACHE_DIR")
     if not error:
-        os.makedirs(cache, exist_ok=True)
+        shared.makedirs(cache)
     print(f"{path}: schema v{version}")
     return 0
 
