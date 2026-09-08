@@ -59,7 +59,11 @@ def compute(trace, params):
 
 
 def render(items, params):
-    """One step line per trace, colour-cycled, log-y when asked."""
+    """One smooth curve per trace, colour-cycled, log-y when asked.
+
+    Splined in the drawing, not in the data: the stored bins are untouched,
+    Plotly just stops drawing the histogram steps.
+    """
     from plotly.colors import qualitative
 
     cycle = qualitative.Plotly
@@ -71,7 +75,7 @@ def render(items, params):
                 x=result["value"].values,
                 y=result["pdf"].values,
                 mode="lines",
-                line=dict(color=colour, shape="hv"),
+                line=dict(color=colour, shape="spline", smoothing=0.8),
                 name=trace.label or trace.ref.key,
             )
         )

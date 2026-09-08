@@ -449,8 +449,8 @@ names a 1-D series from any diagnostic (`TraceRef`: machine, shot, diagnostic,
 preprocessed flag, channel) and materialises it over an absolute window
 (`extract`), imaging pixels off the shared axis and probe channels off their
 own ragged one. A basket of traces -- pixels off any imaging shot, channels
-off any probe shot, mixed freely -- is drawn together under one of four
-`StatSpec` statistics in `fusion_ui/stats/` (PDF, PSD with an optional
+off any probe shot, mixed freely -- is drawn together under one of five
+`StatSpec` statistics in `fusion_ui/stats/` (time trace, PDF, PSD with an optional
 duration-time fit, ACF, CCF against a reference trace), with the CCF's inputs
 first interpolated onto the reference's time base (`traces.common_grid`, a
 no-op when the bases already match). Statistics are live and live outside the

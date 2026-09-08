@@ -301,7 +301,7 @@ rather than failing.
 `params`, `compute`, `render`, `pairwise` and `description` — under the same
 purity rule (`compute` and `render` never touch Streamlit, the database or the
 filesystem) and the same one-file-plus-one-import registration in
-`fusion_ui/stats/` (PDF, PSD, ACF, CCF). Live because a histogram or Welch PSD
+`fusion_ui/stats/` (time trace, PDF, PSD, ACF, CCF). Live because a histogram or Welch PSD
 is tens of milliseconds and produces no scalar for the multi-shot axis; that
 is what the cached `taud_psd` spec is *for*, and it is untouched. `compute` is
 `(trace, params) -> xr.Dataset`, or `(trace, reference, params)` when

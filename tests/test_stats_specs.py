@@ -40,8 +40,10 @@ def _ornstein_uhlenbeck(tau, n=10000, seed=11):
     return out
 
 
-def test_registry_holds_four_specs_in_plan_order():
-    assert [s.key for s in statistics.all_specs()] == ["pdf", "psd", "acf", "ccf"]
+def test_registry_holds_five_specs_in_plan_order():
+    assert [s.key for s in statistics.all_specs()] == [
+        "trace", "pdf", "psd", "acf", "ccf",
+    ]
     assert statistics.get("ccf").pairwise
     assert not statistics.get("pdf").pairwise
     with pytest.raises(ValueError):
@@ -144,13 +146,40 @@ def test_pdf_rejects_an_unknown_estimator():
         )
 
 
+def test_trace_compute_decimates_long_series_and_keeps_short_ones():
+    from fusion_ui.stats import trace
+
+    long = _trace(np.random.default_rng(5).normal(size=20000))
+    result = trace.compute(long, trace.TraceParams(max_points=1000))
+    assert len(result["time"]) <= 1000
+    # A decimated subset in time order, spanning nearly the full window.
+    assert np.all(np.diff(result["time"].values) > 0)
+    assert result["time"].values[0] <= long.time[len(long.time) // 500]
+    assert result["time"].values[-1] >= long.time[-len(long.time) // 500 - 1]
+    short = _trace(_sine(n=500))
+    kept = trace.compute(short, trace.TraceParams(max_points=4000))
+    assert len(kept["time"]) == 500
+    np.testing.assert_allclose(kept["signal"].values, short.value)
+
+
+def test_pdf_lines_are_splined():
+    from fusion_ui.stats import pdf
+
+    result = pdf.compute(
+        _trace(np.random.default_rng(3).normal(size=N)), pdf.PdfParams()
+    )
+    figure = pdf.render([(_trace(np.zeros(4)), result)], pdf.PdfParams())
+    assert figure.data[0].line.shape == "spline"
+
+
 def test_every_spec_renders_its_items():
     import plotly.graph_objects as go
 
-    from fusion_ui.stats import acf, ccf, pdf, psd
+    from fusion_ui.stats import acf, ccf, pdf, psd, trace
 
     sine, shifted = _trace(_sine()), _trace(np.roll(_sine(), 5))
     cases = [
+        ("trace", trace, (sine,), trace.TraceParams()),
         ("pdf", pdf, (sine,), pdf.PdfParams()),
         ("psd", psd, (sine,), psd.PsdParams(fit=False)),
         ("acf", acf, (sine,), acf.AcfParams(fit=False)),

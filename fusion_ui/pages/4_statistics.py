@@ -1,4 +1,4 @@
-"""Statistics over arbitrary traces: PDF, PSD, ACF and CCF on one axis.
+"""Statistics over arbitrary traces: time trace, PDF, PSD, ACF and CCF on one axis.
 
 A basket of traces -- pixels off any imaging shot, channels off any probe
 shot, mixed freely -- drawn together under one statistic, labelled with

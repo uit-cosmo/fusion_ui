@@ -7,6 +7,7 @@ an individual statistic. Adding one is a new module here plus its import below
 """
 
 from fusion_ui.stats import (  # noqa: F401 - imported to register
+    trace,
     pdf,
     psd,
     acf,
@@ -14,6 +15,7 @@ from fusion_ui.stats import (  # noqa: F401 - imported to register
 )
 
 __all__ = [
+    "trace",
     "pdf",
     "psd",
     "acf",

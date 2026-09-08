@@ -23,10 +23,11 @@ the analysis code in [`imaging_methods`](https://github.com/Sosnowsky/imaging-me
   against shot number, Greenwald fraction, or line-averaged density across a
   selection of shots.
 - **Statistics** — a basket of traces (pixels off any imaging shot, channels
-  off any probe shot, mixed freely) drawn together under one statistic — PDF,
-  PSD, ACF, or CCF against a reference trace — over any time window, labelled
-  with magnetic coordinates. Live and uncached; the cached Duration time (PSD
-  fit) on the single-shot page stays the scalar-producing spectrum.
+  off any probe shot, mixed freely) drawn together under one statistic — time
+  trace, PDF, PSD, ACF, or CCF against a reference trace — over any time
+  window, labelled with magnetic coordinates. Live and uncached; the cached
+  Duration time (PSD fit) on the single-shot page stays the scalar-producing
+  spectrum.
 
 ## Status
 
