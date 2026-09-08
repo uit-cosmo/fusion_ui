@@ -101,6 +101,61 @@ def test_common_grid_interpolates_onto_the_reference(apd_dataset_path):
     np.testing.assert_allclose(gridded.time, reference.time)
 
 
+def _synthetic_trace(t_start, t_end, n=5, channel=("pixel", 2, 1)):
+    time = np.linspace(t_start, t_end, n)
+    dt = float((t_end - t_start) / (n - 1)) if n > 1 else float("nan")
+    return traces.Trace(
+        ref=_ref(channel=channel), time=time, value=time.copy(),
+        dt=dt, coords={}, label="",
+    )
+
+
+def test_common_grid_masks_non_overlapping_regions_to_nan():
+    """Points outside a trace's own range are NaN, not flat extrapolation.
+
+    ``np.interp`` clamps outside its range; two barely-overlapping windows
+    must read as missing data rather than a bogus flat line with a spurious
+    CCF peak.
+    """
+    reference = _synthetic_trace(0.0, 2.0)
+    other = _synthetic_trace(1.0, 3.0)
+    (gridded,) = traces.common_grid([other], reference)
+    np.testing.assert_allclose(gridded.time, reference.time)
+    # Reference base is [0, 0.5, 1, 1.5, 2]: below the trace's range -> NaN.
+    assert np.isnan(gridded.value[:2]).all()
+    np.testing.assert_allclose(gridded.value[2:], [1.0, 1.5, 2.0])
+
+    disjoint = _synthetic_trace(10.0, 12.0)
+    (gridded_disjoint,) = traces.common_grid([disjoint], reference)
+    assert np.isnan(gridded_disjoint.value).all()
+
+
+def test_common_grid_handles_a_degenerate_time_base():
+    reference = _synthetic_trace(0.0, 2.0)
+    single = _synthetic_trace(1.0, 1.0, n=1)
+    (gridded,) = traces.common_grid([single], reference)
+    # Only the exactly-matching sample is filled; the rest stays missing.
+    assert gridded.value[2] == 1.0
+    assert np.isnan(np.delete(gridded.value, 2)).all()
+
+    # A sample computed through different arithmetic still rounds to the grid.
+    near_miss = traces.Trace(
+        ref=single.ref, time=np.array([1.0 + 1e-9]), value=np.array([7.0]),
+        dt=float("nan"), coords={}, label="",
+    )
+    (gridded_near,) = traces.common_grid([near_miss], reference)
+    assert gridded_near.value[2] == 7.0
+    assert np.isnan(np.delete(gridded_near.value, 2)).all()
+
+    # A genuinely distant sample fills nothing.
+    far = traces.Trace(
+        ref=single.ref, time=np.array([10.0]), value=np.array([7.0]),
+        dt=float("nan"), coords={}, label="",
+    )
+    (gridded_far,) = traces.common_grid([far], reference)
+    assert np.isnan(gridded_far.value).all()
+
+
 def _trace_with(coords, channel=("pixel", 2, 1)):
     return traces.Trace(
         ref=_ref(channel=channel), time=np.arange(4.0),

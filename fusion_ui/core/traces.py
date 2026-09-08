@@ -196,6 +196,32 @@ def label(trace, style="magnetic") -> str:
     raise ValueError(f"unknown label style {style!r}")
 
 
+def _nearest_within_half_step(base, point):
+    """Boolean mask selecting the grid point nearest ``point``.
+
+    Matches only when the sample rounds to that grid point, i.e. within half
+    the reference spacing -- exact float equality would miss samples computed
+    through different arithmetic on another file's clock. A degenerate
+    single-point base falls back to ``isclose``; anything else (empty base,
+    non-finite or zero spacing, sample too far away) selects nothing.
+    """
+    import math
+
+    if base.size == 0 or not math.isfinite(float(point)):
+        return np.zeros_like(base, dtype=bool)
+    if base.size == 1:
+        return np.isclose(base, point, rtol=1e-9, atol=1e-12)
+    step = np.median(np.diff(base))
+    if not math.isfinite(float(step)) or step <= 0:
+        return base == point
+    nearest = int(np.argmin(np.abs(base - point)))
+    if abs(float(base[nearest]) - float(point)) <= float(step) / 2:
+        mask = np.zeros_like(base, dtype=bool)
+        mask[nearest] = True
+        return mask
+    return np.zeros_like(base, dtype=bool)
+
+
 def common_grid(traces, reference) -> list:
     """Every trace linearly interpolated onto ``reference``'s time base.
 
@@ -204,6 +230,13 @@ def common_grid(traces, reference) -> list:
     axes. When every trace already shares the reference's time base -- the
     common case, several pixels of one APD file -- this is a no-op, not a
     round-trip through ``np.interp``.
+
+    Points of the reference base outside a trace's own range become NaN rather
+    than ``np.interp``'s flat extrapolation: two non-overlapping windows must
+    read as missing data, not as a bogus flat line with a spurious CCF peak.
+    A trace with a single sample cannot be interpolated, so its value lands on
+    the nearest grid point within half the reference spacing (nearest-neighbour
+    binning) and everything else stays NaN.
     """
     base = np.asarray(reference.time, dtype=float)
     out = []
@@ -212,12 +245,20 @@ def common_grid(traces, reference) -> list:
         if time.shape == base.shape and bool(np.array_equal(time, base)):
             out.append(trace)
             continue
-        value = np.interp(base, time, np.asarray(trace.value, dtype=float))
+        values = np.asarray(trace.value, dtype=float)
+        if time.size < 2:
+            resampled = np.full_like(base, float("nan"), dtype=float)
+            if time.size == 1 and base.size:
+                resampled[_nearest_within_half_step(base, time[0])] = values[0]
+        else:
+            resampled = np.interp(base, time, values).astype(float)
+            # np.interp clamps outside xp; mask back to NaN.
+            resampled[(base < time.min()) | (base > time.max())] = float("nan")
         out.append(
             Trace(
                 ref=trace.ref,
                 time=np.asarray(base),
-                value=np.asarray(value),
+                value=np.asarray(resampled),
                 dt=trace.dt,
                 coords=trace.coords,
                 label=trace.label,

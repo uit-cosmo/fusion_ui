@@ -68,8 +68,22 @@ def test_machines_do_not_clobber_each_other(conn, data_folder, discharge_db):
     empty = data_folder.parent / "empty"
     (empty / "apd").mkdir(parents=True)
     catalog.rescan(conn, str(empty), "w7x", str(discharge_db))
+    # Rescanning w7x must never touch cmod's rows. And a diagnostic whose
+    # folder is missing right now (asp/phantom/...) must not be wiped by a
+    # transient mount loss: only the present-but-empty apd folder drops rows.
     machines = {row["machine"] for row in conn.execute("SELECT machine FROM shots")}
-    assert machines == {"cmod"}
+    assert machines == {"cmod", "w7x"}
+    assert conn.execute(
+        "SELECT COUNT(*) FROM shots WHERE machine = 'cmod'"
+    ).fetchone()[0] == 5
+    # The w7x apd rows are gone (folder seen empty); the w7x asp row survives
+    # (folder missing, not empty).
+    assert conn.execute(
+        "SELECT COUNT(*) FROM shots WHERE machine = 'w7x' AND diagnostic = 'asp'"
+    ).fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM shots WHERE machine = 'w7x' AND diagnostic = 'apd'"
+    ).fetchone()[0] == 0
 
 
 def test_rescan_without_a_discharge_db(conn, data_folder):

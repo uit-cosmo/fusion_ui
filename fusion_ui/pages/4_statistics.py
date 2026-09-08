@@ -233,14 +233,21 @@ def basket_frame(basket, t_start, t_end, style):
         except OSError:
             missed.append(ref)
             continue
-        trace = _cached_trace(
-            path, mtime, ref.machine, ref.shot, ref.diagnostic,
-            ref.preprocessed, tuple(ref.channel), t_start, t_end,
-        )
+        try:
+            trace = _cached_trace(
+                path, mtime, ref.machine, ref.shot, ref.diagnostic,
+                ref.preprocessed, tuple(ref.channel), t_start, t_end,
+            )
+        except Exception:  # noqa: BLE001 - one bad trace must not fail the page
+            missed.append(ref)
+            continue
         if trace is None:
             missed.append(ref)
             continue
-        labelled = dataclasses.replace(trace, label=traces.label(trace, style))
+        try:
+            labelled = dataclasses.replace(trace, label=traces.label(trace, style))
+        except Exception:  # noqa: BLE001 - a label must never fail a trace
+            labelled = trace
         extracted.append(labelled)
         rows.append(
             {
@@ -380,7 +387,11 @@ def main():
         st.session_state["stats.reference"] = ref_index
 
     if spec.pairwise:
-        gridded = traces.common_grid(extracted, extracted[ref_index])
+        try:
+            gridded = traces.common_grid(extracted, extracted[ref_index])
+        except Exception as error:  # noqa: BLE001 - resampling must not kill page
+            st.error(f"{type(error).__name__}: {error}", icon="⚠️")
+            return
         if any(new is not old for new, old in zip(gridded, extracted)):
             st.caption("Some traces were resampled onto the reference's time base.")
         reference = gridded[ref_index]
@@ -407,7 +418,11 @@ def main():
         st.info("Nothing to draw.", icon="ℹ️")
         return
 
-    figure = spec.render(items, params)
+    try:
+        figure = spec.render(items, params)
+    except Exception as error:  # noqa: BLE001 - a stat bug must not kill the page
+        st.error(f"{type(error).__name__}: {error}", icon="⚠️")
+        return
     if figure is not None:
         st.plotly_chart(figure, use_container_width=True)
     st.caption(

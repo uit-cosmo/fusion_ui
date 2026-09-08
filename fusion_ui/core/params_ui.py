@@ -592,6 +592,11 @@ def panel(spec, target, ds=None, container=None):
         )
 
     ready_key = f"ready.{spec.key}.{target.key}"
+    # NOTE: `container.form(...)` is used as a context manager only -- its
+    # `__enter__` returns None in this Streamlit version, so widgets go through
+    # `st.*` inside the block and are routed into the form by Streamlit's
+    # context stack (passing the sidebar container itself would place them
+    # outside the form).
     with container.form(f"form.{spec.key}"):
         params = form(spec.params, key_prefix, container=st, spec=spec, ds=ds)
         if st.form_submit_button("Compute", use_container_width=True):

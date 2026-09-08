@@ -134,6 +134,56 @@ def test_a_failed_run_is_counted_without_reopening_its_file(indexed, monkeypatch
     assert (stats.failed, stats.computed, stats.cached) == (1, 0, 0)
 
 
+def test_retry_failed_reopens_and_reattempts(indexed, monkeypatch):
+    """``retry_failed`` must actually recompute, not hand the stored failure back.
+
+    Regression test: the failed row has to be dropped before ``store.result``
+    runs, which returns a recorded failure as-is without touching the file.
+    """
+    spec = registry.get("taud_psd")
+    params = precompute.default_params(spec)  # out-of-range pixel -> failed
+    targets = precompute.targets_for(indexed, spec, "cmod")
+
+    first = precompute.run(indexed, spec, targets, params)
+    assert (first.failed, first.computed) == (1, 0)
+
+    opened = []
+    real_open = precompute.xr.open_dataset
+
+    def counting(*args, **kwargs):
+        opened.append(args)
+        return real_open(*args, **kwargs)
+
+    monkeypatch.setattr(precompute.xr, "open_dataset", counting)
+    stats = precompute.run(indexed, spec, targets, params, retry_failed=True)
+    assert opened, "retry_failed must reopen the file instead of skipping"
+    assert (stats.failed, stats.computed) == (1, 0)
+
+
+def test_delete_run_removes_its_rows_even_when_the_blob_is_locked(
+    indexed, monkeypatch
+):
+    """A failed ``os.remove`` must not leave a stale row behind.
+
+    Otherwise ``--force`` silently keeps returning the old cached result.
+    """
+    spec = registry.get("taud_psd")
+    params = precompute.default_params(spec, pixel=(2, 3))
+    targets = precompute.targets_for(indexed, spec, "cmod")
+    precompute.run(indexed, spec, targets, params)
+
+    params_hash, _ = store.record_params(indexed, spec.key, params)
+    run = store.find_run(indexed, targets[0], spec.key, params_hash)
+    assert run["status"] == "ok"
+
+    def locked(*args, **kwargs):
+        raise PermissionError("locked by another writer")
+
+    monkeypatch.setattr(store.os, "remove", locked)
+    store.delete_run(indexed, run)
+    assert store.find_run(indexed, targets[0], spec.key, params_hash) is None
+
+
 def test_an_unreadable_file_records_a_failure_and_continues(indexed):
     """A file removed after rescan must not abort the whole overnight fill."""
     spec = registry.get("taud_psd")

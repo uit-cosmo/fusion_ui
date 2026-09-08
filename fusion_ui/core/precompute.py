@@ -104,7 +104,7 @@ def default_params(spec, pixel=None):
     return params
 
 
-def run(conn, spec, targets, params, force=False):
+def run(conn, spec, targets, params, force=False, retry_failed=False):
     """Compute ``spec`` with ``params`` on every target, skipping cache hits.
 
     A cache hit needs an ``ok`` run *and* its blob on disk: the ledger alone is
@@ -114,7 +114,9 @@ def run(conn, spec, targets, params, force=False):
     A target whose compute raises still gets a ``failed`` row (via the store),
     so a broken shot does not stop the rest of the fill -- and a ``failed`` run
     is skipped without reopening its file, because ``store.result`` would only
-    hand the same failure back. ``--force`` is the explicit retry.
+    hand the same failure back. ``--force`` recomputes everything;
+    ``--retry-failed`` recomputes only the failed rows (e.g. after fixing a
+    full disk or a permissions problem that poisoned the ledger).
     """
     params_hash, _ = store.record_params(conn, spec.key, params)
     discharges = load_discharges()
@@ -134,8 +136,13 @@ def run(conn, spec, targets, params, force=False):
             stats.cached += 1
             continue
         if existing is not None and existing["status"] == "failed" and not force:
-            stats.failed += 1
-            continue
+            if not retry_failed:
+                stats.failed += 1
+                continue
+            # Retrying a failure must drop the failed row first: store.result
+            # hands a recorded failure straight back and would never recompute.
+            store.delete_run(conn, existing)
+            existing = None
         if force and existing is not None:
             store.delete_run(conn, existing)
 
@@ -148,9 +155,11 @@ def run(conn, spec, targets, params, force=False):
                     else ds
                 )
                 _, run_row = store.result(conn, spec, target, params, windowed)
-        except OSError as error:
-            # The file was removed since rescan, or is unreadable. Record it and
-            # keep going, so one bad file cannot abort the overnight fill.
+        except Exception as error:  # noqa: BLE001 - one bad file must not abort the fill
+            # The file was removed since rescan, is unreadable, or the store
+            # itself raised outside its ledger path. Record it and keep going.
+            # Every column is set explicitly so a retried `ok` row does not
+            # keep stale timing/version values under its new `failed` status.
             store.record_run(
                 conn,
                 target,
@@ -159,6 +168,8 @@ def run(conn, spec, targets, params, force=False):
                 blob_path=None,
                 status="failed",
                 error=f"{type(error).__name__}: {error}",
+                seconds=None,
+                code_version=store._code_version(),
             )
             stats.failed += 1
             continue
