@@ -147,3 +147,57 @@ def test_an_unreadable_file_records_a_failure_and_continues(indexed):
     run = indexed.execute("SELECT status, error FROM runs").fetchone()
     assert run["status"] == "failed"
     assert "FileNotFoundError" in run["error"]
+
+
+def test_a_corrupt_file_is_recorded_and_does_not_abort_the_fill(
+    indexed, apd_dataset_path
+):
+    """``xr.open_dataset`` raises ValueError, not OSError, on a non-dataset
+    file -- which still must land as a failed run while the fill continues."""
+    (apd_dataset_path.parent / "apd_1.nc").write_bytes(b"not a netCDF file")
+    catalog.rescan(indexed, str(apd_dataset_path.parent.parent), "cmod", None)
+
+    spec = registry.get("taud_psd")
+    params = precompute.default_params(spec, pixel=(2, 3))
+    targets = precompute.targets_for(indexed, spec, "cmod")
+    assert [t.shot for t in targets] == [1, 1234]  # the bad file sorts first
+
+    lines = []
+    stats = precompute.run(indexed, spec, targets, params, log=lines.append)
+    assert (stats.computed, stats.failed) == (1, 1)
+
+    text = "\n".join(lines)
+    assert "[1/2]" in text and "[2/2]" in text
+    assert "failed" in text and "ok in" in text
+
+    run = indexed.execute("SELECT status, error FROM runs WHERE shot = 1").fetchone()
+    assert run["status"] == "failed"
+    assert "ValueError" in run["error"]
+
+
+def test_run_logs_each_targets_fate(indexed):
+    spec = registry.get("taud_psd")
+    params = precompute.default_params(spec, pixel=(2, 3))
+    targets = precompute.targets_for(indexed, spec, "cmod")
+
+    lines = []
+    precompute.run(indexed, spec, targets, params, log=lines.append)
+    assert "1 targets" in "\n".join(lines)
+    assert any("computing" in line for line in lines)
+    assert any("ok in" in line for line in lines)
+
+    cached_lines = []
+    precompute.run(indexed, spec, targets, params, log=cached_lines.append)
+    assert any("cached, skipping" in line for line in cached_lines)
+
+
+def test_a_skipped_failure_points_at_force(indexed):
+    spec = registry.get("taud_psd")
+    params = precompute.default_params(spec)  # out-of-range pixel -> failed
+    targets = precompute.targets_for(indexed, spec, "cmod")
+    precompute.run(indexed, spec, targets, params)
+
+    lines = []
+    stats = precompute.run(indexed, spec, targets, params, log=lines.append)
+    assert stats.failed == 1
+    assert any("--force" in line for line in lines)

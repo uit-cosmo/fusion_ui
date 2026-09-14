@@ -104,7 +104,17 @@ def default_params(spec, pixel=None):
     return params
 
 
-def run(conn, spec, targets, params, force=False):
+def _now_label():
+    # Wall-clock prefix for overnight-log reading: tailing the log shows not
+    # just which shot is in flight but since when.
+    return time.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _one_line(message):
+    return str(message).replace("\n", " | ")
+
+
+def run(conn, spec, targets, params, force=False, log=None):
     """Compute ``spec`` with ``params`` on every target, skipping cache hits.
 
     A cache hit needs an ``ok`` run *and* its blob on disk: the ledger alone is
@@ -115,13 +125,29 @@ def run(conn, spec, targets, params, force=False):
     so a broken shot does not stop the rest of the fill -- and a ``failed`` run
     is skipped without reopening its file, because ``store.result`` would only
     hand the same failure back. ``--force`` is the explicit retry.
+
+    ``log``, when given, is called with one line per event -- a header, then
+    each target's skip/computing/done line -- so an overnight fill watched
+    through ``tail -f`` shows which shot is in flight. Commits stay per-target
+    atomic: a line saying ``ok`` means the blob and the ledger row are on disk.
     """
     params_hash, _ = store.record_params(conn, spec.key, params)
     discharges = load_discharges()
 
+    def emit(message):
+        if log is not None:
+            log(message)
+
+    total = len(targets)
+    emit(
+        f"{_now_label()} {spec.key}: {total} targets,"
+        f" params {params_hash[:12]}, force={force}"
+    )
+
     stats = PrecomputeStats(plot=spec.key)
     started = time.perf_counter()
-    for target in targets:
+    for index, target in enumerate(targets, start=1):
+        prefix = f"{_now_label()} [{index}/{total}] {target.label}"
         stats.considered += 1
         existing = store.find_run(conn, target, spec.key, params_hash)
         if (
@@ -132,13 +158,17 @@ def run(conn, spec, targets, params, force=False):
             and os.path.exists(existing["blob_path"])
         ):
             stats.cached += 1
+            emit(f"{prefix}: cached, skipping")
             continue
         if existing is not None and existing["status"] == "failed" and not force:
             stats.failed += 1
+            emit(f"{prefix}: previous failure recorded, skipping (--force to retry)")
             continue
         if force and existing is not None:
             store.delete_run(conn, existing)
 
+        emit(f"{prefix}: computing…")
+        target_started = time.perf_counter()
         try:
             with xr.open_dataset(target.path) as ds:
                 t_start, t_end, _ = loader.time_window(ds, discharges.get(target.shot))
@@ -148,9 +178,11 @@ def run(conn, spec, targets, params, force=False):
                     else ds
                 )
                 _, run_row = store.result(conn, spec, target, params, windowed)
-        except OSError as error:
-            # The file was removed since rescan, or is unreadable. Record it and
-            # keep going, so one bad file cannot abort the overnight fill.
+        except Exception as error:  # noqa: BLE001 - recorded through the ledger
+            # The file was removed since rescan, is unreadable, or is not a
+            # dataset at all (a corrupt file raises ValueError out of
+            # xr.open_dataset, not OSError). Record it and keep going, so one
+            # bad file cannot abort the overnight fill.
             store.record_run(
                 conn,
                 target,
@@ -161,12 +193,20 @@ def run(conn, spec, targets, params, force=False):
                 error=f"{type(error).__name__}: {error}",
             )
             stats.failed += 1
+            emit(
+                f"{prefix}: failed after"
+                f" {time.perf_counter() - target_started:.1f}s:"
+                f" {_one_line(f'{type(error).__name__}: {error}')}"
+            )
             continue
 
+        elapsed = time.perf_counter() - target_started
         if run_row is not None and run_row["status"] == "failed":
             stats.failed += 1
+            emit(f"{prefix}: failed after {elapsed:.1f}s: {_one_line(run_row['error'])}")
         else:
             stats.computed += 1
+            emit(f"{prefix}: ok in {elapsed:.1f}s")
 
     stats.seconds = time.perf_counter() - started
     return stats

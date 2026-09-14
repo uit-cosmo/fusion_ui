@@ -102,7 +102,16 @@ def cmd_precompute(args):
             )
             return 1
 
-        stats = precompute.run(conn, spec, targets, params, force=args.force)
+        stats = precompute.run(
+            conn,
+            spec,
+            targets,
+            params,
+            force=args.force,
+            # Flush every line: this loop can run for days, and a buffered
+            # "computing…" line is no use to someone tailing the log overnight.
+            log=lambda message: print(message, flush=True),
+        )
         print(stats.summary())
         return 0
     finally:
