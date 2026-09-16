@@ -180,6 +180,30 @@ def test_a_missing_blob_is_recomputed_rather_than_reported_as_nothing(
     assert result is not None and run["status"] == "ok"
 
 
+def test_writing_a_blob_replaces_one_this_user_cannot_write(conn, cache, target):
+    """A blob left behind by the other writer carries no write bit for this
+    user, so saving straight onto it would raise ``PermissionError`` -- the
+    store writes aside and renames, which needs directory write only."""
+    import glob
+    import stat
+
+    from fusion_ui.core import shared
+
+    path = store.blob_path("synthetic", "abc123", target)
+    store._write_blob(
+        xr.Dataset({"y": 1.0}), path, "synthetic", "abc123", "{}", None, "now"
+    )
+    os.chmod(path, 0o444)  # what the other writer's blob looks like
+
+    store._write_blob(
+        xr.Dataset({"y": 2.0}), path, "synthetic", "abc123", "{}", None, "now"
+    )
+    with xr.open_dataset(path) as stored:
+        assert float(stored["y"]) == 2.0
+    assert glob.glob(path + ".tmp.*") == []
+    assert stat.S_IMODE(os.stat(path).st_mode) == shared.FILE_MODE
+
+
 def test_a_live_spec_gets_its_input_back_and_leaves_no_ledger_row(conn, cache, target):
     live = registry.PlotSpec(
         key="live",

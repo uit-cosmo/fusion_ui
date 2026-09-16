@@ -32,6 +32,7 @@ stored exactly once.
 
 import math
 import os
+import tempfile
 import time
 from datetime import datetime, timezone
 
@@ -269,7 +270,8 @@ def load_result(conn, run):
 
 
 def _write_blob(result, path, plot, params_hash, text, code_version, created_at):
-    shared.makedirs(os.path.dirname(path))
+    directory = os.path.dirname(path)
+    shared.makedirs(directory)
     result = result.copy()
     # netCDF attributes cannot hold nested structures, so the parameters go in
     # as their canonical JSON string -- which makes the blob self-describing if
@@ -283,10 +285,28 @@ def _write_blob(result, path, plot, params_hash, text, code_version, created_at)
             "fusion_ui_created_at": created_at,
         }
     )
-    result.to_netcdf(path)
-    # The service account and whoever runs `fusion-ui precompute` both write
-    # here; see fusion_ui.core.shared.
-    shared.share_file(path)
+    # Write aside and rename into place: the blob directory is shared by two
+    # accounts, and a blob left there by the other writer is not writable by
+    # this one, so saving straight to `path` fails on the overwrite. Renaming
+    # needs write permission on the directory only -- which the group-writable
+    # setup provides -- whatever mode the previous blob carries.
+    fd, tmp_path = tempfile.mkstemp(
+        dir=directory, prefix=f"{os.path.basename(path)}.tmp."
+    )
+    os.close(fd)
+    try:
+        result.to_netcdf(tmp_path)
+        # The service account and whoever runs `fusion-ui precompute` both write
+        # here; see fusion_ui.core.shared.
+        shared.share_file(tmp_path)
+        os.replace(tmp_path, path)
+        shared.share_file(path)
+    except BaseException:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
     return path
 
 

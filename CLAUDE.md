@@ -369,10 +369,14 @@ header serves a page that loads and then hangs forever with no error.
 `fusion-ui precompute` or `rescan` by hand. So the SQLite file, the cache
 directories and the blobs are created group-writable through
 `core/shared.py` — never with a bare `os.makedirs`, whose `mode` argument is
-masked by the umask and silently gives 0755. Getting this wrong does not fail
-early: the analysis runs to completion and then `to_netcdf` raises
-`PermissionError`, and the ledger records that as a `failed` run which
-`precompute` will skip forever without `--force`. Choosing the group is the
+masked by the umask and silently gives 0755. Blobs are saved aside and renamed
+into place (`store._write_blob`), so overwriting the other writer's blob needs
+directory write only; `precompute` checks that writability *before* paying for
+the analysis and leaves infrastructure failures (`PermissionError`, read-only
+mount) unrecorded rather than as `failed` rows that later fills would skip.
+Trees created before any of this still need the one-time repair below, and rows
+poisoned before it need `--force` once (or deleting the `failed` rows whose
+error names `PermissionError`). Choosing the group is the
 operator's half (`chown` + setgid in `deploy/install.sh`); the app only ever
 widens the mode, never the ownership, and leaves directories it did not create
 alone.

@@ -201,3 +201,64 @@ def test_a_skipped_failure_points_at_force(indexed):
     stats = precompute.run(indexed, spec, targets, params, log=lines.append)
     assert stats.failed == 1
     assert any("--force" in line for line in lines)
+
+
+def test_an_unwritable_cache_dir_skips_before_opening_the_file(
+    indexed, monkeypatch
+):
+    """The two-writer failure: the blob directory belongs to the other account,
+    so the fill must report it without paying for the file open and compute."""
+    spec = registry.get("taud_psd")
+    params = precompute.default_params(spec, pixel=(2, 3))
+    targets = precompute.targets_for(indexed, spec, "cmod")
+
+    def boom(*args, **kwargs):
+        raise AssertionError("an unwritable cache must not open its dataset")
+
+    monkeypatch.setattr(precompute.xr, "open_dataset", boom)
+    monkeypatch.setattr(
+        precompute, "_output_writable", lambda *args: (False, "/nowhere/cache")
+    )
+
+    lines = []
+    stats = precompute.run(indexed, spec, targets, params, log=lines.append)
+    assert (stats.failed, stats.computed, stats.cached) == (1, 0, 0)
+    assert indexed.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
+    assert any("not writable" in line for line in lines)
+
+
+def test_a_permission_error_is_reported_not_recorded(indexed, monkeypatch):
+    """Infrastructure is not analysis: it leaves no `failed` row behind to
+    poison later fills, so fixing the setup and rerunning is enough."""
+    spec = registry.get("taud_psd")
+    params = precompute.default_params(spec, pixel=(2, 3))
+    targets = precompute.targets_for(indexed, spec, "cmod")
+
+    def denied(*args, **kwargs):
+        raise PermissionError(13, "Permission denied", targets[0].path)
+
+    monkeypatch.setattr(precompute.xr, "open_dataset", denied)
+
+    lines = []
+    stats = precompute.run(indexed, spec, targets, params, log=lines.append)
+    assert (stats.failed, stats.computed) == (1, 0)
+    assert indexed.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
+    assert any("without recording" in line for line in lines)
+
+
+def test_output_writable_is_false_when_the_directory_cannot_be_made(
+    indexed, monkeypatch
+):
+    import errno
+
+    spec = registry.get("taud_psd")
+    params = precompute.default_params(spec, pixel=(2, 3))
+    targets = precompute.targets_for(indexed, spec, "cmod")
+    params_hash, _ = store.record_params(indexed, spec.key, params)
+
+    def denied(path, *args, **kwargs):
+        raise PermissionError(errno.EACCES, "Permission denied", path)
+
+    monkeypatch.setattr(precompute.shared, "makedirs", denied)
+    ok, parent = precompute._output_writable(spec, targets[0], params_hash)
+    assert ok is False and parent

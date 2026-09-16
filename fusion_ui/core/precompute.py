@@ -11,6 +11,7 @@ Cache hits are skipped without even opening the data file: a single APD record
 is ~500 MB, so an overnight fill must not re-read what is already stored.
 """
 
+import errno
 import os
 import time
 from dataclasses import dataclass
@@ -18,7 +19,7 @@ from dataclasses import dataclass
 import xarray as xr
 
 from fusion_ui import config
-from fusion_ui.core import catalog, loader, multipixel, registry, store
+from fusion_ui.core import catalog, loader, multipixel, registry, shared, store
 
 
 @dataclass
@@ -114,6 +115,62 @@ def _one_line(message):
     return str(message).replace("\n", " | ")
 
 
+#: Errnos that mean "the setup is wrong", not "the analysis failed": a cache
+#: directory the other writer owns, a read-only mount, a missing group.
+_INFRA_ERRNOS = frozenset({errno.EACCES, errno.EPERM, errno.EROFS})
+
+
+def _is_infra_error(error):
+    """Whether ``error`` is the environment, not the analysis.
+
+    An infrastructure failure must not become a ``failed`` ledger row: it would
+    be skipped without ``--force`` ever after, although nothing about the shot
+    or the parameters is wrong.
+    """
+    return isinstance(error, PermissionError) or (
+        isinstance(error, OSError) and error.errno in _INFRA_ERRNOS
+    )
+
+
+def _permission_hint():
+    try:
+        cache = config.CACHE_DIR
+    except RuntimeError:
+        cache = "$FUSION_UI_CACHE"
+    return (
+        "cannot write the result cache, which is shared by two accounts (the"
+        " service and whoever runs precompute by hand): check `id` shows the"
+        " service group, then as root `chmod -R g+w"
+        f" {cache}`, `find {cache} -type d -exec chmod g+s {{}} +` and"
+        " `usermod -aG <service-user> <you>` (log out and back in). Then just"
+        " rerun -- infrastructure failures leave no `failed` row behind, so no"
+        " `--force` is needed for them"
+    )
+
+
+def _output_writable(spec, target, params_hash):
+    """Whether this process can save the blob for ``target``.
+
+    Creates the parent directory first (group-writable, per
+    ``fusion_ui.core.shared``). ``(False, parent)`` means running the analysis
+    now would only waste it -- the ~500 MB open and minutes of compute would
+    end in a ``PermissionError`` on the save. Only the directory's owner (or
+    root) can repair that, so no repair is attempted here; the caller reports
+    it instead.
+    """
+    try:
+        parent = os.path.dirname(store.blob_path(spec.key, params_hash, target))
+    except RuntimeError:
+        return True, ""  # cache unconfigured; let the compute surface that
+    try:
+        shared.makedirs(parent)
+    except OSError:
+        return False, parent
+    if not os.access(parent, os.W_OK | os.X_OK):
+        return False, parent
+    return True, parent
+
+
 def run(conn, spec, targets, params, force=False, log=None):
     """Compute ``spec`` with ``params`` on every target, skipping cache hits.
 
@@ -162,10 +219,33 @@ def run(conn, spec, targets, params, force=False, log=None):
             continue
         if existing is not None and existing["status"] == "failed" and not force:
             stats.failed += 1
-            emit(f"{prefix}: previous failure recorded, skipping (--force to retry)")
+            emit(
+                f"{prefix}: previous failure recorded, skipping (--force to retry):"
+                f" {_one_line(existing['error'] or '')[:200]}"
+            )
             continue
         if force and existing is not None:
-            store.delete_run(conn, existing)
+            try:
+                store.delete_run(conn, existing)
+            except OSError as error:
+                if not _is_infra_error(error):
+                    raise
+                stats.failed += 1
+                emit(
+                    f"{prefix}: cannot clear the previous result:"
+                    f" {_one_line(f'{type(error).__name__}: {error}')}"
+                    f" ({_permission_hint()})"
+                )
+                continue
+
+        writable, parent = _output_writable(spec, target, params_hash)
+        if not writable:
+            stats.failed += 1
+            emit(
+                f"{prefix}: not computing -- {parent} is not writable by this"
+                f" user ({_permission_hint()})"
+            )
+            continue
 
         emit(f"{prefix}: computing…")
         target_started = time.perf_counter()
@@ -182,7 +262,17 @@ def run(conn, spec, targets, params, force=False, log=None):
             # The file was removed since rescan, is unreadable, or is not a
             # dataset at all (a corrupt file raises ValueError out of
             # xr.open_dataset, not OSError). Record it and keep going, so one
-            # bad file cannot abort the overnight fill.
+            # bad file cannot abort the overnight fill -- unless it is the
+            # environment that is broken, which is reported and left
+            # unrecorded (see _is_infra_error).
+            if _is_infra_error(error):
+                stats.failed += 1
+                emit(
+                    f"{prefix}: failed without recording a run:"
+                    f" {_one_line(f'{type(error).__name__}: {error}')}"
+                    f" ({_permission_hint()})"
+                )
+                continue
             store.record_run(
                 conn,
                 target,
