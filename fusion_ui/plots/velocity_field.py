@@ -457,7 +457,7 @@ SPEC = registry.register(
     registry.PlotSpec(
         key="velocity_field",
         label="Blob velocity field (2DCA at every pixel)",
-        diagnostics=("apd", "phantom"),
+        diagnostics=("apd",),
         params=VelocityFieldParams,
         render=render,
         compute=compute,
