@@ -13,11 +13,11 @@ Wants=network-online.target
 Type=simple
 User=fusionui
 Group=fusionui
-WorkingDirectory=/opt/fusion-ui
+WorkingDirectory=@APP_DIR@
 Environment=PYTHONUNBUFFERED=1
-# Machine-specific paths come from /opt/fusion-ui/.env, read by fusion_ui.config.
+# Machine-specific paths come from @APP_DIR@/.env, read by fusion_ui.config.
 # Anything set here would override that file, so keep this list empty.
-ExecStart=/opt/fusion-ui/.venv/bin/streamlit run fusion_ui/app.py \
+ExecStart=@APP_DIR@/.venv/bin/streamlit run fusion_ui/app.py \
   --server.port 8501 --server.address 127.0.0.1 \
   --server.headless true --browser.gatherUsageStats false \
   --server.fileWatcherType none

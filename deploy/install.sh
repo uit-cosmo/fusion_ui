@@ -42,8 +42,13 @@ GIT_ENV=(
   GIT_CONFIG_VALUE_0="$GIT_CONFIG_VALUE_0"
 )
 
-APP_DIR=${APP_DIR:-/opt/fusion-ui}
-SRC_DIR=${SRC_DIR:-/opt/src}                 # sibling checkouts live here
+# The checkout this script runs from is the deployment: no second copy of the
+# code elsewhere, no divergence between what you pull and what serves.
+# --app-dir still overrides (and SRC_DIR defaults to src/ next to it).
+INSTALL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+APP_DIR=${APP_DIR:-$INSTALL_ROOT}
+SRC_DIR=${SRC_DIR:-$(dirname "$APP_DIR")/src}  # sibling checkouts live here
 STATE_DIR=${STATE_DIR:-/hdd1/fusion_ui}      # SQLite file + result cache
 SERVICE_USER=${SERVICE_USER:-fusionui}
 REPO_URL=${REPO_URL:-https://github.com/uit-cosmo/fusion_ui.git}
@@ -80,7 +85,7 @@ Usage: sudo bash $0 [options]
 
   --branch NAME       branch to deploy                 [$BRANCH]
   --repo-url URL      where to clone the app from      [$REPO_URL]
-  --app-dir PATH      the checkout to run from         [$APP_DIR]
+  --app-dir PATH      the checkout to run from (default: this checkout) [$APP_DIR]
   --src-dir PATH      where dependency checkouts live  [$SRC_DIR]
   --state-dir PATH    SQLite file and result cache     [$STATE_DIR]
   --user NAME         service account                  [$SERVICE_USER]
@@ -305,7 +310,7 @@ touch /var/log/fusion-ui-rescan.log
 chown "$SERVICE_USER:$SERVICE_USER" /var/log/fusion-ui-rescan.log
 
 step "6. systemd"
-sed -e "s|/opt/fusion-ui|$APP_DIR|g" \
+sed -e "s|@APP_DIR@|$APP_DIR|g" \
     -e "s|^User=.*|User=$SERVICE_USER|" \
     -e "s|^Group=.*|Group=$SERVICE_USER|" \
     -e "s|^ReadWritePaths=.*|ReadWritePaths=$STATE_DIR|" \

@@ -3,8 +3,8 @@
 **The short version:**
 
 ```bash
-git clone https://github.com/uit-cosmo/fusion_ui.git /tmp/fusion-ui
-sudo bash /tmp/fusion-ui/deploy/install.sh --branch phase-00-skeleton
+git clone https://github.com/uit-cosmo/fusion_ui.git ~/fusion_ui
+sudo bash ~/fusion_ui/deploy/install.sh --branch phase-00-skeleton
 ```
 
 `install.sh` is every step below, in order and idempotent — re-run it after a
@@ -43,10 +43,15 @@ changes.
 
 ## 1. Service account and checkout
 
+`$APP_DIR` is the checkout the service runs from (`install.sh` deploys its own
+checkout by default; `--app-dir` overrides) and `$SRC_DIR` holds the sibling
+dependency checkouts (`src/` next to it by default; `--src-dir` overrides).
+
 ```bash
+APP_DIR=~/fusion_ui; SRC_DIR=~/src
 sudo useradd --system --create-home --home-dir /var/lib/fusionui fusionui
-sudo mkdir -p /opt/fusion-ui && sudo chown fusionui:fusionui /opt/fusion-ui
-sudo -u fusionui git clone https://github.com/uit-cosmo/fusion_ui /opt/fusion-ui
+sudo mkdir -p "$APP_DIR" && sudo chown fusionui:fusionui "$APP_DIR"
+sudo -u fusionui git clone https://github.com/uit-cosmo/fusion_ui "$APP_DIR"
 ```
 
 ### Private dependencies the server cannot clone
@@ -91,7 +96,7 @@ Copy it in before running the installer — a directory already present in
 
 ```bash
 rsync -a --exclude .venv --exclude .git ~/Git/experimental_database <host>:/tmp/
-ssh <host> "sudo mkdir -p /opt/src && sudo mv /tmp/experimental_database /opt/src/"
+ssh <host> "sudo mkdir -p $SRC_DIR && sudo mv /tmp/experimental_database $SRC_DIR/"
 ```
 
 The installer chowns it to the service user (editable installs write `.egg-info`
@@ -164,7 +169,7 @@ sudo -u fusionui -H git ls-remote https://github.com/uit-cosmo/experimental_data
 
 Step 4 is why `install.sh` needs no edit: the machine-specific credential lives
 in the service user's git config, and the URL in the script stays the public
-https one. If `/opt/src/experimental_database` was copied in by hand earlier,
+https one. If `$SRC_DIR/experimental_database` was copied in by hand earlier,
 delete it so the next run clones properly — or just point its remote at the
 SSH URL and leave it.
 
@@ -206,16 +211,17 @@ To take port 80 back, stop the other service and re-run the installer.
 ## 2. Environment
 
 ```bash
-sudo -u fusionui python3 -m venv /opt/fusion-ui/.venv
+sudo -u fusionui python3 -m venv "$APP_DIR/.venv"
 # imaging_methods, experimental_database, fusion_scripts, velocity_estimation and
 # fppanalysis are not on PyPI — install each editable from its checkout first.
-sudo -u fusionui /opt/fusion-ui/.venv/bin/pip install \
-  -e /opt/imaging-methods -e /opt/experimental_database -e /opt/fusion_scripts \
-  -e /opt/velocity-estimation -e /opt/fpp-analysis-tools
-sudo -u fusionui /opt/fusion-ui/.venv/bin/pip install -e /opt/fusion-ui
+sudo -u fusionui "$APP_DIR/.venv/bin/pip" install \
+  -e "$SRC_DIR/imaging-methods" -e "$SRC_DIR/experimental_database" \
+  -e "$SRC_DIR/fusion_scripts" -e "$SRC_DIR/velocity-estimation" \
+  -e "$SRC_DIR/fpp-analysis-tools"
+sudo -u fusionui "$APP_DIR/.venv/bin/pip" install -e "$APP_DIR"
 
-sudo -u fusionui cp /opt/fusion-ui/.env.example /opt/fusion-ui/.env
-sudo -u fusionui $EDITOR /opt/fusion-ui/.env      # paths for this server
+sudo -u fusionui cp "$APP_DIR/.env.example" "$APP_DIR/.env"
+sudo -u fusionui $EDITOR "$APP_DIR/.env"      # paths for this server
 ```
 
 The two writable locations are `FUSION_UI_DB` and `FUSION_UI_CACHE`; everything
@@ -248,9 +254,9 @@ the one-time operator half of it. **Run them on any deployment set up before
 this**, to repair directories already created under the old behaviour.
 
 ```bash
-sudo -u fusionui /opt/fusion-ui/.venv/bin/fusion-ui init-db
-sudo -u fusionui /opt/fusion-ui/.venv/bin/fusion-ui rescan
-sudo -u fusionui /opt/fusion-ui/.venv/bin/fusion-ui status
+sudo -u fusionui "$APP_DIR/.venv/bin/fusion-ui" init-db
+sudo -u fusionui "$APP_DIR/.venv/bin/fusion-ui" rescan
+sudo -u fusionui "$APP_DIR/.venv/bin/fusion-ui" status
 ```
 
 `status` is the check that the paths in `.env` resolve and the index is filled.
@@ -260,13 +266,13 @@ Keep the index fresh — new shots appear in the browser only after a rescan:
 ```bash
 sudo -u fusionui crontab -e
 # every 15 minutes
-*/15 * * * * /opt/fusion-ui/.venv/bin/fusion-ui rescan >> /var/log/fusion-ui-rescan.log 2>&1
+*/15 * * * * "$APP_DIR/.venv/bin/fusion-ui" rescan >> /var/log/fusion-ui-rescan.log 2>&1
 ```
 
 ## 4. systemd
 
 ```bash
-sudo cp /opt/fusion-ui/deploy/fusion-ui.service /etc/systemd/system/
+sudo cp "$APP_DIR/deploy/fusion-ui.service" /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now fusion-ui
 sudo systemctl status fusion-ui
@@ -301,7 +307,7 @@ certificate whenever the existing one does not cover `--server-name`, so fixing
 the name and re-running is enough.
 
 ```bash
-sudo cp /opt/fusion-ui/deploy/nginx.conf /etc/nginx/sites-available/fusion-ui
+sudo cp "$APP_DIR/deploy/nginx.conf" /etc/nginx/sites-available/fusion-ui
 sudo ln -sf /etc/nginx/sites-available/fusion-ui /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl reload nginx
@@ -358,7 +364,7 @@ confirm the shot browser lists shots.
 ```bash
 sudo systemctl restart fusion-ui                  # after a git pull
 sudo journalctl -u fusion-ui -f                   # logs
-sudo -u fusionui /opt/fusion-ui/.venv/bin/fusion-ui status
+sudo -u fusionui ~/fusion_ui/.venv/bin/fusion-ui status
 ```
 
 The whole of the app's state is the SQLite file and the cache directory named in
