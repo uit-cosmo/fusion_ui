@@ -56,6 +56,12 @@ fi
 # IdentitiesOnly above is what makes this safe: without it ssh offers every key
 # it holds and GitHub answers for whichever one it recognises first, which can
 # be a different repository entirely.
+# A stale rewrite of this repo's URL straight to git@github.com (from a manual
+# attempt, say) would shadow the alias below — git takes the first insteadOf
+# match — and offer fusionui's default keys instead of this deploy key while
+# everything looks correctly configured. Drop it if present.
+run git config --global --unset "url.git@github.com:$SLUG.git.insteadof" 2>/dev/null || true
+
 run git config --global "url.$ALIAS:$SLUG.git.insteadOf" "https://github.com/$SLUG.git"
 
 if ! run grep -q '^github\.com ' "$HOME_DIR/.ssh/known_hosts" 2>/dev/null; then
