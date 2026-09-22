@@ -171,7 +171,7 @@ def _output_writable(spec, target, params_hash):
     return True, parent
 
 
-def run(conn, spec, targets, params, force=False, log=None):
+def run(conn, spec, targets, params, force=False, retry_failed=False, log=None):
     """Compute ``spec`` with ``params`` on every target, skipping cache hits.
 
     A cache hit needs an ``ok`` run *and* its blob on disk: the ledger alone is
@@ -181,7 +181,9 @@ def run(conn, spec, targets, params, force=False, log=None):
     A target whose compute raises still gets a ``failed`` row (via the store),
     so a broken shot does not stop the rest of the fill -- and a ``failed`` run
     is skipped without reopening its file, because ``store.result`` would only
-    hand the same failure back. ``--force`` is the explicit retry.
+    hand the same failure back. ``--force`` recomputes everything;
+    ``--retry-failed`` recomputes only the failed rows (e.g. after fixing a
+    full disk or a permissions problem that poisoned the ledger).
 
     ``log``, when given, is called with one line per event -- a header, then
     each target's skip/computing/done line -- so an overnight fill watched
@@ -198,7 +200,7 @@ def run(conn, spec, targets, params, force=False, log=None):
     total = len(targets)
     emit(
         f"{_now_label()} {spec.key}: {total} targets,"
-        f" params {params_hash[:12]}, force={force}"
+        f" params {params_hash[:12]}, force={force} retry_failed={retry_failed}"
     )
 
     stats = PrecomputeStats(plot=spec.key)
@@ -218,12 +220,29 @@ def run(conn, spec, targets, params, force=False, log=None):
             emit(f"{prefix}: cached, skipping")
             continue
         if existing is not None and existing["status"] == "failed" and not force:
-            stats.failed += 1
-            emit(
-                f"{prefix}: previous failure recorded, skipping (--force to retry):"
-                f" {_one_line(existing['error'] or '')[:200]}"
-            )
-            continue
+            if not retry_failed:
+                stats.failed += 1
+                emit(
+                    f"{prefix}: previous failure recorded, skipping"
+                    " (--force or --retry-failed to retry):"
+                    f" {_one_line(existing['error'] or '')[:200]}"
+                )
+                continue
+            # Retrying a failure must drop the failed row first: store.result
+            # hands a recorded failure straight back and would never recompute.
+            try:
+                store.delete_run(conn, existing)
+            except OSError as error:
+                if not _is_infra_error(error):
+                    raise
+                stats.failed += 1
+                emit(
+                    f"{prefix}: cannot clear the previous result:"
+                    f" {_one_line(f'{type(error).__name__}: {error}')}"
+                    f" ({_permission_hint()})"
+                )
+                continue
+            existing = None
         if force and existing is not None:
             try:
                 store.delete_run(conn, existing)
@@ -273,6 +292,8 @@ def run(conn, spec, targets, params, force=False, log=None):
                     f" ({_permission_hint()})"
                 )
                 continue
+            # Every column is set explicitly so a retried `ok` row does not
+            # keep stale timing/version values under its new `failed` status.
             store.record_run(
                 conn,
                 target,
@@ -281,6 +302,8 @@ def run(conn, spec, targets, params, force=False, log=None):
                 blob_path=None,
                 status="failed",
                 error=f"{type(error).__name__}: {error}",
+                seconds=None,
+                code_version=store._code_version(),
             )
             stats.failed += 1
             emit(

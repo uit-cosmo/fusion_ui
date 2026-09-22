@@ -161,7 +161,15 @@ def rescan(conn, data_folder, machine, discharge_db_path=None):
 
     inserted = [key for key in seen if key not in existing]
     updated = [k for k, v in seen.items() if k in existing and existing[k] != v]
-    removed = [key for key in existing if key not in seen]
+    # Never delete rows for a diagnostic whose folder is missing right now: a
+    # transient NFS loss or a typo'd --data-folder would otherwise wipe the
+    # index for that diagnostic in the same transaction. A genuinely removed
+    # diagnostic is deleted by an explicit rescan once its (empty but present)
+    # folder is seen.
+    missing_set = set(missing)
+    removed = [
+        key for key in existing if key not in seen and key[1] not in missing_set
+    ]
 
     with conn:
         conn.executemany(
@@ -218,6 +226,15 @@ def _finite(value):
         return value is not None and math.isfinite(float(value))
     except (TypeError, ValueError):
         return False
+
+
+def _as_float_or_nan(value):
+    """``float(value)`` with ``None``/non-numeric/inf coerced to NaN.
+
+    Discharge-DB fields are sparsely filled; ``float(None)`` would raise
+    ``TypeError`` and kill the whole browser table for one incomplete entry.
+    """
+    return float(value) if _finite(value) else float("nan")
 
 
 def greenwald_fraction(discharge):
@@ -294,13 +311,13 @@ def shot_table(conn, discharge_db_path):
             continue
         f_gw, source = greenwald_fraction(discharge)
         record.update(
-            I_p=float(discharge.plasma_current),
-            n_e_bar=float(discharge.line_averaged_density),
+            I_p=_as_float_or_nan(discharge.plasma_current),
+            n_e_bar=_as_float_or_nan(discharge.line_averaged_density),
             f_GW=f_gw,
             f_GW_source=source,
             mode=discharge.comment or "",
-            t_start=float(discharge.t_start),
-            t_end=float(discharge.t_end),
+            t_start=_as_float_or_nan(discharge.t_start),
+            t_end=_as_float_or_nan(discharge.t_end),
             mlp_mode=discharge.mlp_mode or "",
         )
 

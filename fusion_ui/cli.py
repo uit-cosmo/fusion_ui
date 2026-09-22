@@ -108,6 +108,7 @@ def cmd_precompute(args):
             targets,
             params,
             force=args.force,
+            retry_failed=getattr(args, "retry_failed", False),
             # Flush every line: this loop can run for days, and a buffered
             # "computing…" line is no use to someone tailing the log overnight.
             log=lambda message: print(message, flush=True),
@@ -233,6 +234,12 @@ def build_parser():
         "--force",
         action="store_true",
         help="recompute even when a cached result already exists",
+    )
+    precompute.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="recompute rows previously recorded as failed (e.g. after fixing"
+        " a full disk); without it, failed rows are skipped without reopening",
     )
     precompute.set_defaults(func=cmd_precompute)
 
