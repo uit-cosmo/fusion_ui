@@ -174,10 +174,14 @@ def main():
             "" if not math.isfinite(a) or not math.isfinite(b) else f"{a:.2f}–{b:.2f}"
             for a, b in zip(filtered["t_start"], filtered["t_end"])
         ],
+        # Seconds in the store, microseconds on screen: fast-camera intervals
+        # are single-digit µs, and four leading zeros help nobody sort.
+        phantom_dt_us=filtered["phantom_dt"] * 1e6,
     )
     columns = [
         "shot",
         *catalog.DIAGNOSTICS,
+        "phantom_dt_us",
         "I_p",
         "n_e_bar",
         "f_GW",
@@ -215,6 +219,12 @@ def main():
                 help="db = curated value; derived = n_e · π · 0.22² / I_p",
             ),
             "mode": st.column_config.TextColumn("mode", help="discharge DB comment"),
+            "phantom_dt_us": st.column_config.NumberColumn(
+                "phantom dt [µs]",
+                format="%.2f",
+                help="median phantom frame interval; empty until "
+                "`fusion-ui backfill-dt` runs on the server",
+            ),
             "window": st.column_config.TextColumn("window [s]", help="t_start–t_end"),
             "meta": st.column_config.TextColumn(
                 "meta", help="⚠ = files on disk, no discharge DB entry"

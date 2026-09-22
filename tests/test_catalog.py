@@ -1,6 +1,30 @@
 import math
 
+import pytest
+
 from fusion_ui.core import catalog
+
+
+PHANTOM_DT = 2.5e-6
+
+
+def _phantom_tree(tmp_path, shot=1160616027, dt=PHANTOM_DT, n=200):
+    """A data tree with one real (tiny) phantom file plus an empty APD decoy."""
+    import numpy as np
+    import xarray as xr
+
+    root = tmp_path / "alcator"
+    folder = root / "phantom"
+    folder.mkdir(parents=True)
+    ds = xr.Dataset(
+        {"frames": (["time", "y", "x"], np.zeros((n, 4, 5)))},
+        coords={"time": ("time", np.arange(n) * dt)},
+        attrs={"shot_number": shot},
+    )
+    ds.to_netcdf(folder / f"phantom_{shot}.nc")
+    (root / "apd").mkdir(exist_ok=True)
+    (root / "apd" / f"apd_{shot}.nc").write_bytes(b"x")
+    return root
 
 
 def rescan(conn, data_folder, discharge_db, machine="cmod"):
@@ -149,4 +173,93 @@ def test_empty_index_gives_an_empty_table(conn, discharge_db):
 def test_fingerprint_changes_with_the_index(conn, data_folder, discharge_db):
     before = catalog.index_fingerprint(conn)
     rescan(conn, data_folder, discharge_db)
+    assert catalog.index_fingerprint(conn) != before
+
+
+def test_frame_dt_reads_the_median_interval(tmp_path):
+    root = _phantom_tree(tmp_path)
+    value = catalog.frame_dt(str(root / "phantom" / "phantom_1160616027.nc"))
+    assert value == pytest.approx(PHANTOM_DT)
+
+
+@pytest.mark.parametrize("name", ["missing.nc", "empty.nc", "no_time.nc"])
+def test_frame_dt_returns_none_for_broken_files(tmp_path, name):
+    import numpy as np
+    import xarray as xr
+
+    path = tmp_path / name
+    if name == "empty.nc":
+        path.write_bytes(b"not a dataset")
+    elif name == "no_time.nc":
+        xr.Dataset({"frames": (["y", "x"], np.zeros((4, 5)))}).to_netcdf(path)
+    assert catalog.frame_dt(str(path)) is None
+
+
+def test_backfill_dt_fills_phantom_rows_only(conn, tmp_path):
+    root = _phantom_tree(tmp_path)
+    catalog.rescan(conn, str(root), "cmod", None)
+
+    stats = catalog.backfill_dt(conn, "cmod")
+    assert (stats.considered, stats.measured, stats.skipped, stats.failed) == (1, 1, 0, 0)
+
+    rows = {
+        row["diagnostic"]: row["dt"]
+        for row in conn.execute("SELECT diagnostic, dt FROM shots")
+    }
+    assert rows["phantom"] == pytest.approx(PHANTOM_DT)
+    assert rows["apd"] is None, "the APD row is not this command's business"
+
+
+def test_backfill_dt_skips_filled_rows_unless_forced(conn, tmp_path):
+    root = _phantom_tree(tmp_path)
+    catalog.rescan(conn, str(root), "cmod", None)
+
+    catalog.backfill_dt(conn, "cmod")
+    second = catalog.backfill_dt(conn, "cmod")
+    assert (second.measured, second.skipped) == (0, 1)
+
+    forced = catalog.backfill_dt(conn, "cmod", force=True)
+    assert (forced.measured, forced.skipped) == (1, 0)
+
+
+def test_backfill_dt_counts_a_vanished_file_as_failed(conn, tmp_path):
+    root = _phantom_tree(tmp_path)
+    catalog.rescan(conn, str(root), "cmod", None)
+    (root / "phantom" / "phantom_1160616027.nc").unlink()
+
+    stats = catalog.backfill_dt(conn, "cmod")
+    assert (stats.measured, stats.failed) == (0, 1)
+    assert conn.execute("SELECT dt FROM shots").fetchone()[0] is None
+
+
+def test_rescan_preserves_a_backfilled_dt(conn, tmp_path):
+    root = _phantom_tree(tmp_path)
+    catalog.rescan(conn, str(root), "cmod", None)
+    catalog.backfill_dt(conn, "cmod")
+
+    (root / "apd" / "apd_1160616027.nc").write_bytes(b"y" * 999)
+    stats = catalog.rescan(conn, str(root), "cmod", None)
+    assert stats.updated == 1
+    assert conn.execute(
+        "SELECT dt FROM shots WHERE diagnostic = 'phantom'"
+    ).fetchone()[0] == pytest.approx(PHANTOM_DT)
+
+
+def test_shot_table_reports_phantom_dt_in_seconds(conn, tmp_path):
+    root = _phantom_tree(tmp_path)
+    catalog.rescan(conn, str(root), "cmod", None)
+
+    before = catalog.shot_table(conn, None).set_index("shot")
+    assert math.isnan(before.loc[1160616027, "phantom_dt"])
+
+    catalog.backfill_dt(conn, "cmod")
+    after = catalog.shot_table(conn, None).set_index("shot")
+    assert after.loc[1160616027, "phantom_dt"] == pytest.approx(PHANTOM_DT)
+
+
+def test_fingerprint_moves_on_backfill(conn, tmp_path):
+    root = _phantom_tree(tmp_path)
+    catalog.rescan(conn, str(root), "cmod", None)
+    before = catalog.index_fingerprint(conn)
+    catalog.backfill_dt(conn, "cmod")
     assert catalog.index_fingerprint(conn) != before

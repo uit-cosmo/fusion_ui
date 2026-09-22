@@ -130,6 +130,7 @@ CREATE TABLE shots (
     bytes        INTEGER,
     mtime        TEXT,
     has_metadata INTEGER NOT NULL DEFAULT 0,  -- present in the discharge DB?
+    dt           REAL,  -- v3: phantom frame interval [s], via `backfill-dt`
     PRIMARY KEY (machine, shot, diagnostic, preprocessed)
 );
 ```

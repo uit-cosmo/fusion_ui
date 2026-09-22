@@ -119,6 +119,23 @@ def cmd_precompute(args):
         conn.close()
 
 
+def cmd_backfill_dt(args):
+    """Measure each phantom file's frame interval into ``shots.dt``.
+
+    Reads only the 1-D time axis per file, so a whole machine's phantom
+    collection takes seconds, not hours. Run on the machine that holds the
+    data; the browser's phantom-dt column reads what this leaves behind.
+    """
+    conn = db.open_db(args.database)
+    try:
+        shots = set(args.shot) if args.shot else None
+        stats = catalog.backfill_dt(conn, args.machine, shots=shots, force=args.force)
+    finally:
+        conn.close()
+    print(stats.summary())
+    return 0
+
+
 def cmd_status(args):
     print(f"machine          {config.MACHINE}")
     for label, attribute in (
@@ -242,6 +259,30 @@ def build_parser():
         " a full disk); without it, failed rows are skipped without reopening",
     )
     precompute.set_defaults(func=cmd_precompute)
+
+    backfill = subparsers.add_parser(
+        "backfill-dt",
+        help="measure each phantom file's frame interval into `shots.dt`",
+    )
+    backfill.add_argument(
+        "--machine",
+        default=None,
+        help="machine the data belongs to (default: $FUSION_MACHINE, else cmod)",
+    )
+    backfill.add_argument(
+        "--shot",
+        action="append",
+        type=int,
+        default=[],
+        metavar="N",
+        help="restrict to this shot number (repeatable; default: every phantom file)",
+    )
+    backfill.add_argument(
+        "--force",
+        action="store_true",
+        help="re-measure even where a value is already stored",
+    )
+    backfill.set_defaults(func=cmd_backfill_dt)
 
     seed_results = subparsers.add_parser(
         "import-results",

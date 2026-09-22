@@ -146,3 +146,28 @@ def test_a_v1_database_migrates_forward_without_losing_rows(tmp_path):
         conn.execute("DELETE FROM runs WHERE id = 7")
     assert conn.execute("SELECT COUNT(*) FROM scalars").fetchone()[0] == 0
     conn.close()
+
+
+def test_a_v2_database_gains_the_dt_column_without_losing_shots(tmp_path):
+    """Schema v3 is one nullable column: old rows survive, new ones measure."""
+    path = tmp_path / "old.sqlite"
+    conn = db.connect(path)
+    with conn:
+        db.MIGRATIONS[1](conn)
+        db.MIGRATIONS[2](conn)
+        conn.execute("PRAGMA user_version = 2")
+        conn.execute(
+            "INSERT INTO shots (machine, shot, diagnostic, preprocessed, path)"
+            " VALUES ('cmod', 1160616027, 'phantom', 0,"
+            " '/data/phantom_1160616027.nc')"
+        )
+    conn.close()
+
+    conn = db.open_db(path)
+    assert db.schema_version(conn) == db.SCHEMA_VERSION == 3
+    row = conn.execute("SELECT shot, dt FROM shots").fetchone()
+    assert row["shot"] == 1160616027 and row["dt"] is None
+    with conn:
+        conn.execute("UPDATE shots SET dt = 2.5e-6 WHERE shot = 1160616027")
+    assert conn.execute("SELECT dt FROM shots").fetchone()[0] == 2.5e-6
+    conn.close()

@@ -18,7 +18,9 @@ import time
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 
+import numpy as np
 import pandas as pd
+import xarray as xr
 from experimental_database import PlasmaDischargeManager
 from experimental_database.diagnostics import Diagnostic
 
@@ -201,6 +203,100 @@ def rescan(conn, data_folder, machine, discharge_db_path=None):
 
 
 # ---------------------------------------------------------------------------
+# Phantom frame interval: measured once per file, read everywhere
+# ---------------------------------------------------------------------------
+
+# The diagnostic whose frame rate varies shot to shot (and is therefore worth
+# a browser column). The APD samples at a fixed rate; the fast camera does not.
+PHANTOM_DIAGNOSTIC = "phantom"
+
+
+def frame_dt(path):
+    """The file's median frame interval in seconds, or ``None``.
+
+    Read off the 1-D time coordinate only -- milliseconds even on a ~500 MB
+    record, since the frames themselves are never touched. ``None`` when the
+    file is missing, unreadable, or carries fewer than two finite time stamps.
+    """
+    try:
+        with xr.open_dataset(path) as ds:
+            if "time" not in ds.coords:
+                return None
+            times = np.asarray(ds["time"].values, dtype=float)
+    except Exception:  # noqa: BLE001 - a bad file measures as nothing, not a crash
+        return None
+    if times.size < 2:
+        return None
+    diffs = np.diff(times)
+    diffs = diffs[np.isfinite(diffs) & (diffs > 0)]
+    if diffs.size == 0:
+        return None
+    return float(np.median(diffs))
+
+
+@dataclass(frozen=True)
+class DtBackfillStats:
+    """What one :func:`backfill_dt` pass did."""
+
+    considered: int = 0  # phantom rows in scope
+    measured: int = 0  # newly filled
+    skipped: int = 0  # already filled, kept without reopening the file
+    failed: int = 0  # file missing/unreadable, left NULL
+
+    def summary(self):
+        return (
+            f"{self.considered} phantom files, +{self.measured} measured,"
+            f" ={self.skipped} already filled, !{self.failed} failed"
+        )
+
+
+def backfill_dt(conn, machine, shots=None, force=False):
+    """Fill ``shots.dt`` for the phantom rows missing it.
+
+    ``machine`` scopes the pass the way :func:`rescan` does; ``shots`` is an
+    optional set of shot numbers to restrict to; ``force`` re-measures rows
+    that already carry a value. Never touches non-phantom rows, and never
+    clears a stored value it cannot replace -- a file that disappeared since
+    rescan keeps its old measurement rather than going NULL.
+    """
+    rows = conn.execute(
+        "SELECT machine, shot, diagnostic, preprocessed, path, dt FROM shots"
+        " WHERE machine = ? AND diagnostic = ?"
+        " ORDER BY shot, preprocessed",
+        (machine, PHANTOM_DIAGNOSTIC),
+    ).fetchall()
+
+    considered, measured, skipped, failed = 0, 0, 0, 0
+    for row in rows:
+        if shots is not None and row["shot"] not in shots:
+            continue
+        considered += 1
+        if row["dt"] is not None and not force:
+            skipped += 1
+            continue
+        value = frame_dt(row["path"])
+        if value is None:
+            failed += 1
+            continue
+        with conn:
+            conn.execute(
+                "UPDATE shots SET dt = ? WHERE machine = ? AND shot = ?"
+                " AND diagnostic = ? AND preprocessed = ?",
+                (
+                    value,
+                    row["machine"],
+                    row["shot"],
+                    row["diagnostic"],
+                    row["preprocessed"],
+                ),
+            )
+        measured += 1
+    return DtBackfillStats(
+        considered=considered, measured=measured, skipped=skipped, failed=failed
+    )
+
+
+# ---------------------------------------------------------------------------
 # The browser table: index joined to metadata
 # ---------------------------------------------------------------------------
 
@@ -208,6 +304,7 @@ TABLE_COLUMNS = [
     "machine",
     "shot",
     *DIAGNOSTICS,
+    "phantom_dt",
     "I_p",
     "n_e_bar",
     "f_GW",
@@ -272,7 +369,8 @@ def shot_table(conn, discharge_db_path):
         "       MAX(CASE WHEN preprocessed = 0 THEN 1 ELSE 0 END) AS raw,"
         "       MAX(CASE WHEN preprocessed = 1 THEN 1 ELSE 0 END) AS prep,"
         "       SUM(COALESCE(bytes, 0)) AS bytes,"
-        "       MAX(has_metadata) AS has_metadata"
+        "       MAX(has_metadata) AS has_metadata,"
+        "       MAX(dt) AS dt"  # NULL until `fusion-ui backfill-dt` runs
         "  FROM shots GROUP BY machine, shot, diagnostic"
     ).fetchall()
 
@@ -289,9 +387,12 @@ def shot_table(conn, discharge_db_path):
                 shot=row["shot"],
                 bytes=0,
                 has_metadata=False,
+                phantom_dt=float("nan"),
                 **{diagnostic: "" for diagnostic in DIAGNOSTICS},
             )
         record[row["diagnostic"]] = _availability(row["raw"], row["prep"])
+        if row["diagnostic"] == PHANTOM_DIAGNOSTIC and row["dt"] is not None:
+            record["phantom_dt"] = float(row["dt"])
         record["bytes"] += row["bytes"] or 0
         record["has_metadata"] |= bool(row["has_metadata"])
 
@@ -328,9 +429,13 @@ def shot_table(conn, discharge_db_path):
 
 
 def index_fingerprint(conn):
-    """A cheap value that changes whenever ``shots`` does -- a cache key."""
+    """A cheap value that changes whenever ``shots`` does -- a cache key.
+
+    ``COUNT(dt)`` is in there so a ``backfill-dt`` pass shows up in the browser
+    without restarting the server: filling NULLs changes no byte count or mtime.
+    """
     row = conn.execute(
-        "SELECT COUNT(*), COALESCE(SUM(bytes), 0), COALESCE(MAX(mtime), '')"
-        " FROM shots"
+        "SELECT COUNT(*), COALESCE(SUM(bytes), 0), COALESCE(MAX(mtime), ''),"
+        "       COUNT(dt) FROM shots"
     ).fetchone()
     return tuple(row)

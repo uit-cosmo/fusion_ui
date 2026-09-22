@@ -225,6 +225,7 @@ fusion-ui init-db          # create or migrate the app's SQLite database
 fusion-ui rescan           # index the data tree into `shots` (cron this)
 fusion-ui import-results   # seed `scalars` from density_scan/results.json (once)
 fusion-ui precompute PLOT  # run a plot's compute over every shot to warm the cache
+fusion-ui backfill-dt      # measure phantom frame intervals into `shots.dt`
 fusion-ui status           # resolved paths, index and result counts
 ```
 

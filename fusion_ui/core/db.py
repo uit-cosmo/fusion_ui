@@ -156,12 +156,32 @@ def _migrate_to_2(conn):
     conn.executescript(_MIGRATE_2)
 
 
+# ---------------------------------------------------------------------------
+# Schema (version 3)
+# ---------------------------------------------------------------------------
+
+# `dt` is the file's frame interval in seconds, measured off its time axis by
+# `fusion-ui backfill-dt`. Only phantom rows carry one: the APD samples at a
+# fixed rate while the fast camera's frame rate varies shot to shot, which is
+# what the browser's phantom-dt column reports. Plain ALTER TABLE: no
+# constraint or existing row is touched, and rescan's upsert names its columns
+# explicitly, so rescans neither fill nor clear it.
+_MIGRATE_3 = """
+ALTER TABLE shots ADD COLUMN dt REAL;
+"""
+
+
+def _migrate_to_3(conn):
+    conn.executescript(_MIGRATE_3)
+
+
 # Index = the schema version the migration produces. Append, never rewrite:
 # a database file already at version N only runs MIGRATIONS[N:].
 MIGRATIONS = [
     None,  # version 0 is "empty file"
     _migrate_to_1,
     _migrate_to_2,
+    _migrate_to_3,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS) - 1
