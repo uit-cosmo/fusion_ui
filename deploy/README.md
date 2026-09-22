@@ -44,14 +44,18 @@ changes.
 ## 1. Service account and checkout
 
 `$APP_DIR` is the checkout the service runs from (`install.sh` deploys its own
-checkout by default; `--app-dir` overrides) and `$SRC_DIR` holds the sibling
-dependency checkouts (`src/` next to it by default; `--src-dir` overrides).
+checkout by default; `--app-dir` overrides) and `$SRC_DIR` is where the
+dependency checkouts live (the checkout's parent directory by default;
+`--src-dir` overrides).
 
 ```bash
-APP_DIR=~/fusion_ui; SRC_DIR=~/src
+APP_DIR=~/fusion_ui; SRC_DIR=~
 sudo useradd --system --create-home --home-dir /var/lib/fusionui fusionui
-sudo mkdir -p "$APP_DIR" && sudo chown fusionui:fusionui "$APP_DIR"
-sudo -u fusionui git clone https://github.com/uit-cosmo/fusion_ui "$APP_DIR"
+# Your own clone is fine -- it stays yours. The service user only shares it:
+git clone https://github.com/uit-cosmo/fusion_ui "$APP_DIR"
+sudo chgrp -R fusionui "$APP_DIR" && sudo chmod -R g+w "$APP_DIR"
+sudo find "$APP_DIR" -type d -exec chmod g+s {} +
+sudo usermod -aG fusionui <you>   # log out and back in
 ```
 
 ### Private dependencies the server cannot clone
@@ -99,9 +103,9 @@ rsync -a --exclude .venv --exclude .git ~/Git/experimental_database <host>:/tmp/
 ssh <host> "sudo mkdir -p $SRC_DIR && sudo mv /tmp/experimental_database $SRC_DIR/"
 ```
 
-The installer chowns it to the service user (editable installs write `.egg-info`
-into the source tree) and skips the clone. The same applies to any dependency
-whose `git pull` fails: the checkout on disk is what gets installed.
+The installer group-shares it with the service user (editable installs write
+`.egg-info` into the source tree) and skips the clone. The same applies to any
+dependency whose `git pull` fails: the checkout on disk is what gets installed.
 
 The durable fix is a **read-only deploy key**, below. Set that up once and the
 installer updates this dependency like every other one.

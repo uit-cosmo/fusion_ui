@@ -48,7 +48,10 @@ GIT_ENV=(
 INSTALL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 APP_DIR=${APP_DIR:-$INSTALL_ROOT}
-SRC_DIR=${SRC_DIR:-$(dirname "$APP_DIR")/src}  # sibling checkouts live here
+# The dependencies live next to the checkout (~/experimental_database next to
+# ~/fusion_ui), not in a directory of their own -- so this defaults to the
+# checkout's parent, and an existing tree there is used as it stands.
+SRC_DIR=${SRC_DIR:-$(dirname "$APP_DIR")}
 STATE_DIR=${STATE_DIR:-/hdd1/fusion_ui}      # SQLite file + result cache
 SERVICE_USER=${SERVICE_USER:-fusionui}
 REPO_URL=${REPO_URL:-https://github.com/uit-cosmo/fusion_ui.git}
@@ -86,7 +89,7 @@ Usage: sudo bash $0 [options]
   --branch NAME       branch to deploy                 [$BRANCH]
   --repo-url URL      where to clone the app from      [$REPO_URL]
   --app-dir PATH      the checkout to run from (default: this checkout) [$APP_DIR]
-  --src-dir PATH      where dependency checkouts live  [$SRC_DIR]
+  --src-dir PATH      where dependency checkouts live (default: next to the checkout) [$SRC_DIR]
   --state-dir PATH    SQLite file and result cache     [$STATE_DIR]
   --user NAME         service account                  [$SERVICE_USER]
   --server-name NAME  hostname in the certificate/nginx[${SERVER_NAME:-detected}]
@@ -131,6 +134,16 @@ detect_subnet() {
   python3 -c 'import ipaddress,sys; print(ipaddress.ip_network(sys.argv[1], strict=False))' "$cidr"
 }
 as_service_user() { sudo -u "$SERVICE_USER" env "${GIT_ENV[@]}" "$@"; }
+
+# Group-share a tree with the service user instead of handing it over: a
+# checkout the maintainer already owns stays theirs, and the service (plus
+# anyone in its group) can still write into it -- pip install -e writes
+# .egg-info into the source tree, and git pull writes .git.
+share_with_service() {
+  chgrp -R "$SERVICE_USER" "$1"
+  chmod -R g+w "$1"
+  find "$1" -type d -exec chmod g+s {} +
+}
 
 # The address the server answers on -- the one the certificate has to cover
 # alongside the name, since people reach an unpublished machine by IP.
@@ -182,8 +195,11 @@ id -u "$SERVICE_USER" &>/dev/null ||
   useradd --system --create-home --home-dir "/var/lib/$SERVICE_USER" "$SERVICE_USER"
 
 step "2. Checkouts"
+# Only the group is touched here, never the owner: SRC_DIR is usually the
+# maintainer's own home directory, and chowning that would lock them out.
 mkdir -p "$SRC_DIR"
-chown "$SERVICE_USER:$SERVICE_USER" "$SRC_DIR"
+chgrp "$SERVICE_USER" "$SRC_DIR"
+chmod g+wxs "$SRC_DIR"
 for entry in "${DEPENDENCIES[@]}"; do
   name=${entry%%=*}; url=${entry#*=}; target="$SRC_DIR/$name"
   if [[ -d "$target/.git" ]]; then
@@ -214,9 +230,10 @@ MSG
       exit 1
     fi
   fi
-  # pip install -e writes .egg-info into the source tree, so the service user
-  # needs to own it -- including anything copied in as root.
-  chown -R "$SERVICE_USER:$SERVICE_USER" "$target"
+  # pip install -e writes .egg-info into the source tree and git pull writes
+  # .git, so the service user needs write access -- through the group, so a
+  # checkout copied in as root or owned by the maintainer keeps its owner.
+  share_with_service "$target"
 done
 
 # Fail with the list of branches rather than git's bare "couldn't find remote
@@ -233,7 +250,7 @@ if ! as_service_user git ls-remote --exit-code --heads "$REPO_URL" "$BRANCH" >/d
 fi
 
 mkdir -p "$APP_DIR"
-chown "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
+share_with_service "$APP_DIR"
 if [[ -d "$APP_DIR/.git" ]]; then
   as_service_user git -C "$APP_DIR" fetch origin "$BRANCH"
   as_service_user git -C "$APP_DIR" checkout "$BRANCH"
