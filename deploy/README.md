@@ -51,9 +51,11 @@ dependency checkouts live (the checkout's parent directory by default;
 ```bash
 APP_DIR=~/fusion_ui; SRC_DIR=~
 sudo useradd --system --create-home --home-dir /var/lib/fusionui fusionui
-# Your own clone is fine -- it stays yours. The service user only shares it:
+# Your own clone is fine -- it stays yours. The service user only shares it
+# (g+rwX, not just g+w: group-write alone leaves drwx------ directories
+# untraversable, and pip dies listing them):
 git clone https://github.com/uit-cosmo/fusion_ui "$APP_DIR"
-sudo chgrp -R fusionui "$APP_DIR" && sudo chmod -R g+w "$APP_DIR"
+sudo chgrp -R fusionui "$APP_DIR" && sudo chmod -R g+rwX "$APP_DIR"
 sudo find "$APP_DIR" -type d -exec chmod g+s {} +
 sudo usermod -aG fusionui <you>   # log out and back in
 ```

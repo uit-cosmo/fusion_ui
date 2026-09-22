@@ -137,11 +137,13 @@ as_service_user() { sudo -u "$SERVICE_USER" env "${GIT_ENV[@]}" "$@"; }
 
 # Group-share a tree with the service user instead of handing it over: a
 # checkout the maintainer already owns stays theirs, and the service (plus
-# anyone in its group) can still write into it -- pip install -e writes
-# .egg-info into the source tree, and git pull writes .git.
+# anyone in its group) can still read and write into it -- pip install -e
+# writes .egg-info into the source tree, and git pull writes .git. g+rwX, not
+# g+w: a drwx------ directory with only group-write added is still
+# untraversable, and pip dies listing it.
 share_with_service() {
   chgrp -R "$SERVICE_USER" "$1"
-  chmod -R g+w "$1"
+  chmod -R g+rwX "$1"
   find "$1" -type d -exec chmod g+s {} +
 }
 
