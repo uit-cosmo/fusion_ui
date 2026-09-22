@@ -201,7 +201,7 @@ step "2. Checkouts"
 # maintainer's own home directory, and chowning that would lock them out.
 mkdir -p "$SRC_DIR"
 chgrp "$SERVICE_USER" "$SRC_DIR"
-chmod g+wxs "$SRC_DIR"
+chmod g+xws "$SRC_DIR"
 for entry in "${DEPENDENCIES[@]}"; do
   name=${entry%%=*}; url=${entry#*=}; target="$SRC_DIR/$name"
   if [[ -d "$target/.git" ]]; then
