@@ -199,9 +199,13 @@ id -u "$SERVICE_USER" &>/dev/null ||
 step "2. Checkouts"
 # Only the group is touched here, never the owner: SRC_DIR is usually the
 # maintainer's own home directory, and chowning that would lock them out.
+# The service needs to traverse it (g+x), never to write it: sshd ignores
+# ~/.ssh/authorized_keys in a group-writable home, so g+w here locks the
+# maintainer out of key logins. A missing checkout is cloned into a staging
+# directory instead and moved in as root; g-w repairs earlier runs.
 mkdir -p "$SRC_DIR"
 chgrp "$SERVICE_USER" "$SRC_DIR"
-chmod g+xws "$SRC_DIR"
+chmod g+xs,g-w "$SRC_DIR"
 for entry in "${DEPENDENCIES[@]}"; do
   name=${entry%%=*}; url=${entry#*=}; target="$SRC_DIR/$name"
   if [[ -d "$target/.git" ]]; then
@@ -216,7 +220,13 @@ for entry in "${DEPENDENCIES[@]}"; do
     echo "  $name: copied in by hand, using as is"
   else
     echo "  $name: cloning"
-    if ! as_service_user git clone --depth 50 --quiet "$url" "$target"; then
+    stage=$(mktemp -d)
+    chown "$SERVICE_USER" "$stage"
+    if as_service_user git clone --depth 50 --quiet "$url" "$stage/$name"; then
+      mv "$stage/$name" "$target"
+      rmdir "$stage"
+    else
+      rm -rf "$stage"
       cat >&2 <<MSG
 
   Could not clone $name from $url.
