@@ -1140,11 +1140,19 @@ def test_method_fields_draws_one_v_r_map_per_method_on_one_scale(full):
     maps = [t for t in figure.data if isinstance(t, go.Heatmap)]
     assert len(maps) == 7
     from fusion_ui.views.bundle import Cuts
+    from fusion_ui.views.methods import describe_cut
 
+    # The title says what the figure is and where the rest is. Which cuts it was drawn at is the line
+    # across the top of the figure, which says them per method; the title does not repeat it, and
+    # "fewer than 8 lags or 200 events" was wrong for the methods that events do not cut.
     title = figure.layout.title.text
-    assert "Fields page" in title
-    # It says which cuts it drew at, whatever the page's defaults are.
-    assert f"{Cuts().min_lags} lags or {Cuts().min_events} events" in title
+    assert title.startswith("v_R of every method, on one scale")
+    assert "Fields page sets the cuts and draws the arrows" in title
+    cuts = Cuts()
+    assert f"{cuts.min_lags} lags" not in title
+    assert f"{cuts.min_events} events" not in title
+    assert "circled" not in title
+    assert describe_cut(cuts) in [a.text for a in figure.layout.annotations]
 
 
 def test_blob_parameters_draws_one_map_per_parameter_marking_dead_and_failed(sparse):

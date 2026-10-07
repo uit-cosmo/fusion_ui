@@ -137,24 +137,25 @@ def scalars(result):
 def render(result, params, target):
     """One v_R map per method, on one diverging scale.
 
-    Pure: the seven panels of ``fusion_ui.views``, at the view cuts the Fields page starts from (a pixel
-    resting on too few lags or events is circled, not coloured; dead and failed pixels are marked
-    differently). The Fields page has the arrows, the cuts and the pixel level.
+    Pure: the seven panels of ``fusion_ui.views`` at the view cuts the Fields page starts from. A pixel
+    resting on too few lags or events for its method is circled, not coloured, and dead and failed pixels
+    are marked differently. Which cuts those are is the line across the top of the figure
+    (``views.methods.describe_cut``), because they differ by method: the 2DCC and the TDEs off the record
+    are not cut by events. So the title does not repeat it: it says what the figure is and where the
+    rest is, since the Fields page sets the cuts and draws the arrows and the pixel level.
     """
-    cuts = Cuts()
     bundle = Bundle(
         shot=target.shot,
         fields=result,
         neighbour_step=params.tracking.neighbour_step,
-        cuts=cuts,
+        cuts=Cuts(),
     )
     figure = panels.velocity_panels(bundle, mode="vr")
     figure.update_layout(
         title=dict(
             text=(
-                "v_R of every method, on one scale.<br>Pixels on fewer than"
-                f" {cuts.min_lags} lags or {cuts.min_events} events are circled; the Fields"
-                " page sets the cuts and draws the arrows."
+                "v_R of every method, on one scale.<br>"
+                "The Fields page sets the cuts and draws the arrows."
             ),
             x=0.0,
             xanchor="left",
