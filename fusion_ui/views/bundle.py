@@ -29,8 +29,8 @@ class Cuts:
         field come from such pixels.
     min_events: fewest events the conditional average at a pixel may rest on, for the methods read
         off that average: the 2DCA maximum and centroid, and the TDEs applied to it. The 2DCC is
-        read off the cross-correlation of the whole record, and a TDE off the record off the
-        record: neither depends on the events, and this never cuts them.
+        read off the cross-correlation of the whole record, and a TDE off the record: neither
+        depends on the events, and this never cuts them.
     interior_only: leave out the pixels on the array's border, where the 2DCA track leaves the view
         within a few lags and a TDE loses half its neighbour pairs. Every method.
     """
