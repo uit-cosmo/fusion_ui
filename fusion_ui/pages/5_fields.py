@@ -321,10 +321,6 @@ def show_product(product, target):
             f"`{run['code_version'] or 'version unknown'}` · params `{product.params_hash[:12]}` "
             + " ".join(badges)
         )
-        if product.stale:
-            st.caption(
-                f"A recompute would differ from this result. Refresh it with `{product.refresh}`."
-            )
 
 
 def show_products(products, target):
@@ -335,6 +331,16 @@ def show_products(products, target):
     ):
         for product in products.values():
             show_product(product, target)
+        stale = [p for p in products.values() if p.ok and p.stale]
+        if stale:
+            # One command for all of them, not --force on each: that recomputes a product on whatever
+            # lies beneath it, which is still stale when the input or the bank is what changed.
+            st.caption(
+                "The results marked stale were computed before their input file or an upstream result "
+                "changed. This recomputes exactly the stale results of this shot, whatever their "
+                "settings, upstream first, each with the parameters it was stored with:"
+            )
+            st.code(stale[0].refresh, language="bash")
 
 
 # ---------------------------------------------------------------------------

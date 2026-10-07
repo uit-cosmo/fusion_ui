@@ -22,6 +22,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from fusion_ui import config
 from fusion_ui.core import params_ui, precompute, store, versions
 
 KEYS = ("pixel_averages", "method_fields", "blob_parameters")
@@ -57,7 +58,7 @@ class Product:
     code_note: Optional[str] = None
     #: What fills it, when it is not ok.
     command: Optional[str] = None
-    #: What recomputes it, when it is stale.
+    #: What recomputes it, when it is stale: :func:`refresh_command`, the same for every product.
     refresh: Optional[str] = None
 
     @property
@@ -273,6 +274,26 @@ def stale_reasons(conn):
     return {run["id"]: run["stale"] for run in store.stale_runs(conn)}
 
 
+def refresh_command(found, target):
+    """The command that recomputes the stale results of ``target`` in place.
+
+    ``fusion-ui precompute pixel_averages method_fields blob_parameters --stale --shot N``, with
+    ``--machine M`` when the target is not on the configured machine. Not ``--force`` on the one
+    product: that recomputes it on whatever lies beneath it, and when the input file or the bank is
+    what changed the result would still be stale afterwards. ``--stale`` recomputes exactly the stale
+    results of that shot, whatever their settings, upstream first and each with the parameters it was
+    stored with, for all four reasons ``store.stale_runs`` gives: the input changed, the upstream was
+    deleted, the upstream was recomputed in place, or the upstream is stale itself. Every product is
+    named, in dependency order: a result whose stale upstream is not named is left alone.
+    """
+    products = [found[key] for key in KEYS if key in found]
+    plots = [spec.key for spec in precompute.in_dependency_order(products)]
+    parts = ["fusion-ui", "precompute", *plots, "--stale", "--shot", str(target.shot)]
+    if target.machine != config.MACHINE:
+        parts += ["--machine", target.machine]
+    return " ".join(parts)
+
+
 def collect(conn, target, found, method_params, load, stale=None, current=None):
     """``{key: Product}`` for the three products of ``target`` under ``method_params``.
 
@@ -337,8 +358,6 @@ def collect(conn, target, found, method_params, load, stale=None, current=None):
             dataset=dataset,
             stale=reason,
             code_note=commit_note(run, current),
-            refresh=(
-                precompute.command(spec, target, params, "--force") if reason else None
-            ),
+            refresh=refresh_command(found, target) if reason else None,
         )
     return products

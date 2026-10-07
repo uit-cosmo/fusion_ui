@@ -327,7 +327,9 @@ def test_a_product_whose_input_changed_is_marked_stale_with_the_command_that_ref
     deployment,
 ):
     deployment.seed(SHOT)
-    assert "stale" not in " ".join(m.value for m in run(selection=SELECTION).markdown)
+    fresh = run(selection=SELECTION)
+    assert "stale" not in " ".join(m.value for m in fresh.markdown)
+    assert commands(fresh) == []  # nothing to fill, nothing to refresh
     deployment.touch(f"apd_{SHOT}_preprocessed.nc", 1_700_000_500)
     app = run(selection=SELECTION)
     assert (
@@ -341,8 +343,15 @@ def test_a_product_whose_input_changed_is_marked_stale_with_the_command_that_ref
         == 3
     )
     assert [e.proto.expanded for e in app.expander] == [True]
-    refresh = " ".join(c.value for c in app.caption if "Refresh it with" in c.value)
-    assert f"`fusion-ui precompute method_fields --shot {SHOT} --force`" in refresh
+    # One command, shown once under the three products: it recomputes exactly the stale results of
+    # this shot, upstream first. `--force` on a product would recompute it on a stale upstream.
+    assert commands(app) == [
+        "fusion-ui precompute pixel_averages method_fields blob_parameters"
+        f" --stale --shot {SHOT}"
+    ]
+    assert [c.value for c in app.caption if "recomputes exactly" in c.value]
+    assert not [c for c in app.caption if "Refresh it with" in c.value]
+    assert "--force" not in " ".join(commands(app))
     assert figures(app)  # still drawn: stale is information, not an error
 
 
