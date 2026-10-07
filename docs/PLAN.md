@@ -463,6 +463,21 @@ exploratory, cross-diagnostic cousin. Labels are magnetic coordinates from
 distance to the separatrix, not a flux coordinate) and window-mean rho for
 probe channels. The basket is view state, never a parameter.
 
+### Phase 06 — Decorrelation fields — planned
+
+Every method's velocity field (2DCA by maximum and by centroid, 2DCC, the TDEs)
+and every pixel's conditional average at several lags, for every shot. The
+2DCA at every pixel is computed once per shot in batch, and the methods are
+derived from it. The physics stays in `fusion_scripts` behind a pure API, and a
+new Fields page browses the results. The plan, written for an orchestrator that
+launches one agent per job, is
+[`docs/PHASE_06_DECORRELATION.md`](PHASE_06_DECORRELATION.md).
+
+Its first piece is built, though not yet deployed: a dead-pixel mask estimated
+from each raw shot (`density_scan/dead_pixels.py` in fusion_scripts), and the
+`dead_pixels` view, which draws every pixel's PDF and spectrum against it. That
+piece also added `PlotSpec.preprocessed`.
+
 ## Who builds what
 
 The split is about how expensive a wrong decision is to undo, not difficulty in
