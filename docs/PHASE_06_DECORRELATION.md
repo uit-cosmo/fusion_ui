@@ -27,8 +27,9 @@ and the paper's `reliable()` as a Fields-page toggle
 `velocity_field` is gone, and `fusion-ui prune` clears its runs in J7. J4b
 merged (02bb826): the paper's `reliable()` as a Fields-page checkbox, and the
 page tested on the real specs. J5 merged (6ee5e8b): the multi-shot jump to the
-Fields page, and labels for the 32 names. J5b is running: three small fixes
-before G3. Everything else is planned and not started.
+Fields page, and labels for the 32 names. J5b merged (4fe2104): three small
+fixes. Everything for G3 is merged (777 fast and 12 slow tests); G3, J6, J6d and
+what follows are not started.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -1139,6 +1140,18 @@ labels.
   - whether 44 characters a line suits a long title such as `level_com`'s;
   - the seed's `theta` convention differs from the new `theta_f`. The page
     plots one source at a time, so the label carries no caveat.
+
+**J5b landed 2026-10-07 (4fe2104, 777 tests).**
+
+- **The title of `method_fields.render`** no longer states the cut. The figure
+  says it across its top (`describe_cut`), and it differs by method.
+- **A blob point that no settings go with.** A `blob_parameters` point that no
+  `method_fields` settings go with (other `blobs` fit settings, or a 2DCA
+  window never run with the fields) opens its exact run on the single-shot
+  page. The Fields page would show other numbers there. A request to the Fields
+  page now always names settings.
+- **The scalar picker** shows "name — label" for the 32 names, and stores the
+  raw name.
 
 ### JD — Deploy the dead-pixel view · orchestrator + user
 
