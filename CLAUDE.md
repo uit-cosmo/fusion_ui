@@ -25,8 +25,8 @@ Phase 06 (decorrelation fields: every method's velocity field and every
 pixel's average, computed in batch from a `fusion_scripts` API) is planned in
 `docs/PHASE_06_DECORRELATION.md`, as jobs for an orchestrator. Read it before
 touching `pixel_averages`, `method_fields`, `blob_parameters`, `dead_pixels`,
-the Fields page or `precompute --workers`. Its dead-pixel view is built but not
-yet deployed (job JD).
+the Fields page or `precompute --workers`. Its dead-pixel view is deployed (job
+JD, 2026-10-07).
 
 `docs/PLAN.md` closes phase 03 with the five things that need a physicist
 rather than a model — twelve new scalar names to confirm, and four estimator

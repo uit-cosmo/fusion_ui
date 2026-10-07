@@ -11,9 +11,13 @@ this file and the files its job lists. `docs/PLAN.md` and `CLAUDE.md` still
 hold the app's architecture and conventions; this file adds to them and does
 not repeat them.
 
-Status, 2026-10-07: the dead-pixel detector and its view are on main in both
-repos but not deployed ([Dead pixels](#dead-pixels-done-2026-10-07)). Everything
-else is planned and not started.
+Status, 2026-10-07: JD done. The dead-pixel view is deployed and cached for all
+111 raw shots ([Dead pixels](#dead-pixels-done-2026-10-07)), and G1, the user's
+check of the masks, is open. J0 is half done. The server's 828 cache files are
+frozen on both machines, but the `_ca` group is waiting on the user: the
+server's velocity-estimation (b3b6945) cannot run `fields.ca_tde_field`, which
+was written against fc5e59a. J2a is running. Everything else is planned and not
+started.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -501,8 +505,7 @@ Neither is in the cache key, on purpose.
 
 ### Dead pixels (done, 2026-10-07)
 
-Built, tested and pushed to main on 2026-10-07, but **not yet deployed** (JD
-does that).
+Built, tested and pushed to main on 2026-10-07, and deployed the same day (JD).
 
 - **fusion_scripts, `density_scan/dead_pixels.py`.**
   - `estimate(ds)` returns `dead`, `evidence` (−1 no data, 0 dead, 1 follows a
