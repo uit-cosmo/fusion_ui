@@ -3,8 +3,8 @@
 ``rescan`` is the one that goes on cron; ``status`` is the one to run after
 deploying; ``import-results`` is run once, to seed the scalar store from
 ``density_scan``; ``precompute`` (phase 04) warms the cache overnight, for
-several plots and on several workers since phase 06. ``prune`` arrives with
-phase 05.
+several plots and on several workers since phase 06. ``prune`` deletes every
+stored result of one plot, and counts them first.
 """
 
 import argparse
@@ -12,7 +12,7 @@ import os
 import sys
 
 from fusion_ui import config
-from fusion_ui.core import catalog, db, seed, shared
+from fusion_ui.core import catalog, db, seed, shared, store
 
 
 def _resolve(attribute):
@@ -213,6 +213,46 @@ def _precompute_plan(args, conn, keys, specs, params):
         force=args.force,
         retry_failed=args.retry_failed,
     )
+
+
+def cmd_prune(args):
+    """Delete every stored result of one plot: blobs, runs, scalars, parameter sets.
+
+    Counts first and prints, and deletes only with ``--yes``; without it the
+    exit status is 1, so a script cannot mistake a count for a deletion. The key
+    need not be registered: this is how the results of a removed spec go. The
+    deletion is :func:`fusion_ui.core.store.prune`, whose docstring says in what
+    order, and why. Imports nothing of the analysis packages.
+    """
+    conn = db.open_db(args.database)
+    try:
+        plan = store.plan_prune(conn, args.plot)
+        if plan.empty:
+            known = ", ".join(f"{plot} ({n})" for plot, n in plan.plots.items())
+            print(
+                f"The ledger holds nothing to prune for plot {args.plot!r}. Plots"
+                f" with runs: {known or 'none'}.",
+                file=sys.stderr,
+            )
+            return 1
+        # Flushed, so that stdout stays ahead of stderr in a log (`2>&1 | tee`).
+        for line in plan.lines():
+            _print_flushed(line)
+        if plan.refusal:  # also without --yes: it is not a matter of confirming
+            print(plan.refusal, file=sys.stderr)
+            return 1
+        if not args.yes:
+            print(
+                "Nothing was deleted. Run it again with --yes to delete these.",
+                file=sys.stderr,
+            )
+            return 1
+        report = store.prune(conn, plan)
+        for line in report.lines():
+            _print_flushed(line)
+        return 1 if report.kept else 0
+    finally:
+        conn.close()
 
 
 def cmd_backfill_dt(args):
@@ -438,6 +478,26 @@ def build_parser():
         " they inherit (default: 10 with --workers above 1, else unchanged)",
     )
     precompute.set_defaults(func=cmd_precompute)
+
+    prune = subparsers.add_parser(
+        "prune",
+        help="delete every stored result of one plot (counts first; --yes deletes)",
+    )
+    prune.add_argument(
+        "--plot",
+        required=True,
+        metavar="KEY",
+        help="plot key whose blobs, runs, scalars and parameter sets go. It need"
+        " not be registered any more, which is how a removed spec's results are"
+        " cleared; the other plots are untouched",
+    )
+    prune.add_argument(
+        "--yes",
+        action="store_true",
+        help="delete. Without it the counts are printed, nothing is deleted and"
+        " the exit status is 1",
+    )
+    prune.set_defaults(func=cmd_prune)
 
     backfill = subparsers.add_parser(
         "backfill-dt",
