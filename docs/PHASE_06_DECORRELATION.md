@@ -13,11 +13,9 @@ not repeat them.
 
 Status, 2026-10-07: JD done. The dead-pixel view is deployed and cached for all
 111 raw shots ([Dead pixels](#dead-pixels-done-2026-10-07)), and G1, the user's
-check of the masks, is open. J0 is half done. The server's 828 cache files are
-frozen on both machines, but the `_ca` group is waiting on the user: the
-server's velocity-estimation (b3b6945) cannot run `fields.ca_tde_field`, which
-was written against fc5e59a. J2a is running. Everything else is planned and not
-started.
+check of the masks, is open. J0 done at 828 files: the user left the `_ca`
+group out of phase 06 (Decisions). J1 and J2a are running. Everything else is
+planned and not started.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -32,6 +30,7 @@ started.
 | The old `velocity_field` | Remove the spec and its stored results |
 | Lags | Flexible: chosen in the view, with a shorter 2DCA window where a shot's dynamics are faster |
 | W7-X | Comes later. Nothing in the API may assume C-Mod beyond its defaults |
+| The `_ca` group | Left out of phase 06 (2026-10-07). The paper's `ca_tde_field` needs velocity-estimation fc5e59a, which the server does not have. Ported to the server's b3b6945, its numbers move (median 0.2–0.7%, up to 12% in v_R). It comes back as its own product once its algorithm is chosen (L9) |
 
 ## Facts every agent needs
 
@@ -50,7 +49,10 @@ not say otherwise):
 
   `ca_tde_field` adds velocity_estimation's cross-conditional-average TDE
   (`TDEMethod.CA`). `ca_field` caches it as `apd<shot>_tde_ca.nc`, and the
-  radial profiles read that file.
+  radial profiles read that file. It is written against velocity-estimation
+  fc5e59a (`CAOptions(delta, window)`) and raises `TypeError` under b3b6945,
+  whose CA method selects events with PlasmaPy. It is **not part of phase 06**
+  and stays as it is (Decisions).
 - `decorrelation/apd_check/cmod_scan.py` is the multi-shot entry point. It fills
   the per-pixel averages in parallel over (shot, row) with `fields.fill_row`.
   Then, per shot, it runs `fields.compute` and `blob_parameters`, which gives 13
@@ -157,6 +159,24 @@ not say otherwise):
   have to be found from the signal. The laptop's older raw 1160616 files carry
   NaN there, from an older mask that also marked the live pixel (4, 7).
 
+**Environments** (checked 2026-10-07):
+
+- **Use `~/Git/fusion_ui/.venv` for every phase-06 test, regression and run,
+  in both repos.** It matches the server's `~/fusion_ui/.venv` package for
+  package: numpy 1.26.4, scipy 1.15.3, xarray 2025.6.1, netCDF4 1.7.4,
+  plasmapy 2024.10.0, and the same commits, all editable, of imaging-methods
+  (8a9bc07), velocity-estimation (b3b6945), fpp-analysis-tools (6f98750) and
+  experimental_database (47b2d6b).
+- The laptop's `~/Git/fusion_scripts/.venv`, where the paper's scripts run,
+  differs: velocity-estimation fc5e59a in site-packages, fppanalysis 0.2.0 from
+  PyPI, xarray 2025.1.2, netCDF4 1.7.2, h5py 3.15.1. It belongs to the user,
+  and no job changes it.
+- fusion_scripts' tests on main: all 29 pass in the paper venv. In the app venv,
+  20 pass, and three modules need `figure_provenance` or `seaborn`, which the app
+  venv lacks (1 failure, 2 collection errors). That is the baseline to keep.
+- The two machines' 1160616 preprocessed files are byte-identical, and so are
+  their discharge DBs.
+
 **Pitfalls that have bitten before**:
 
 - Import `netCDF4` before `h5py` in any process that can load both, or every
@@ -168,6 +188,14 @@ not say otherwise):
   wrong code without any error.
 - Development uses synthetic fixtures or one small shot. Never loop over the
   data tree.
+- A fusion_scripts worktree has no `.env` (gitignored) and its own, empty
+  `decorrelation/cache/`, since `config.DECORRELATION_CACHE` is fixed to the
+  checkout `config` is imported from. Copy `~/Git/fusion_scripts/.env` in (or
+  export `FUSION_DISCHARGE_DB` and `FUSION_DATA_FOLDER`). When a check needs
+  cached averages, seed that cache with a writable copy of J0's snapshot. Never
+  run anything from `~/Git/fusion_scripts` itself: its cache is the paper's.
+- `*.nc` is gitignored in fusion_scripts. A committed netCDF fixture needs a
+  narrow `!` exception in `.gitignore`, not `git add -f`.
 
 ## Design
 
@@ -328,7 +356,6 @@ for each track T in max, com, 2dcc:
 nevents                                    (y, x)
 vr3_tde vz3_tde vr2_tde vz2_tde cc_tde     (y, x)   TDE off the record (CC)
 vr3_catde vz3_catde vr2_catde vz2_catde    (y, x)   TDE on the conditional average
-vr3_ca vz3_ca vr2_ca vz2_ca events_ca      (y, x)   velocity_estimation TDEMethod.CA
 dead                                       (y, x)
 attrs min_cc, settings stamp, dead_mask_source
 ```
@@ -336,8 +363,8 @@ attrs min_cc, settings stamp, dead_mask_source
 - The variable names are those of `apd<shot>_velocities.nc`, so the regression
   compares them by name and the paper's figure code could read a blob as it is.
 - `level_*`, `pos_*` and `fit_*` are new. They are what the pixel view draws.
-- The `_ca` group comes from `apd<shot>_tde_ca.nc` (`vr vz vr2 vz2 events`),
-  renamed.
+- There is no `_ca` group (velocity_estimation's `TDEMethod.CA`): it is left
+  out of phase 06 (Decisions, L9).
 - dtypes are those of `fields.velocity_fields` today: `where(~dead)` makes the
   `(y, x)` variables float64, with NaN at dead pixels.
 
@@ -347,16 +374,15 @@ attrs min_cc, settings stamp, dead_mask_source
 
 **Scalars** are written per live pixel as `(x, y, name)`:
 
-- `method_fields`, 25 names: `vr_max vz_max nlags_max vr_com vz_com nlags_com
+- `method_fields`, 20 names: `vr_max vz_max nlags_max vr_com vz_com nlags_com
   level_com vr_2dcc vz_2dcc nlags_2dcc nevents vr3_tde vz3_tde vr2_tde vz2_tde
-  cc_tde vr3_catde vz3_catde vr2_catde vz2_catde vr3_ca vz3_ca vr2_ca vz2_ca
-  events_ca`;
+  cc_tde vr3_catde vz3_catde vr2_catde vz2_catde`;
 - `blob_parameters`, 12 names: its variables except `nevents`, which
   `method_fields` already writes.
 
 Dead pixels get no rows, since they were never computed. A NaN at a live pixel
 is written as NULL, meaning "tried and failed", as `velocity_field` does. That
-makes about 1700 + 820 rows per shot. None of these names exist in the store
+makes about 1360 + 820 rows per shot. None of these names exist in the store
 yet. `PLAN.md`'s phase-03 rule applies: the user confirms new scalar names
 before they go on an axis (gate G2).
 
@@ -378,7 +404,8 @@ packages).
 **Shot level**
 
 - One panel per method: 2DCA max, 2DCA centroid, 2DCC, 3TDE (CC), 2TDE (CC),
-  3TDE on the CA, 2TDE on the CA, 3TDE (CA), 2TDE (CA).
+  3TDE on the CA, 2TDE on the CA. (3TDE and 2TDE by velocity_estimation's CA
+  method wait for L9.)
 - **One arrow scale and one key for all panels**, so the methods compare by eye.
   Start from `plots/velocity_field.py:figure` and replace its per-figure scale
   with a shared one.
@@ -603,6 +630,16 @@ is to undo, not by how hard it is, and so does this table.
 
 ### J0 — Freeze the regression baseline · orchestrator
 
+**Done 2026-10-07, at 828 files.** The `ca_field` step below raised `TypeError`
+under the server's velocity-estimation, before writing anything, and the user
+left the `_ca` group out (Decisions). The snapshot is
+`/hdd1/fusion_ui/reference/decorrelation_8c59f96` and
+`~/Data/reference/decorrelation_8c59f96`: 810 averages, 9 velocities, 9 blobs
+and a README, read-only. Checksums are in `decorrelation_8c59f96.sha256` beside
+it and verified on both machines. The server's fusion_scripts was at 8c59f96
+when JD's pull moved it to 7b761fd, which changes no code the snapshot came
+from.
+
 `cmod_scan` rewrites the decorrelation cache whenever it runs, so copy it
 before anything changes. Add the `_ca` group, which the server lacks; it takes
 minutes.
@@ -648,7 +685,7 @@ regression locally.
     before refactoring and commit it.
 - `decorrelation/apd_check/regress_pipeline.py --reference DIR [--shot N]`.
   It recomputes fields and blobs from the reference averages (no 2DCA, so
-  minutes) and compares them variable by variable, including the `_ca` group.
+  minutes) and compares them variable by variable. There is no `_ca` group.
   It also recomputes one average with `average()` and compares it with the
   cached file. A `--fusion-ui` mode, used by J7, compares the products in the
   store instead.
@@ -658,13 +695,15 @@ regression locally.
 - `regress_pipeline` passes on the laptop against J0's snapshot for all nine
   1160616 shots: the same NaN pattern, and values equal to ≤1e-12 relative,
   which in practice should mean bit-equal;
-- the fusion_scripts tests pass;
+- the new tests pass in the app venv, and the existing tests keep their
+  baseline in both venvs ([Environments](#facts-every-agent-needs));
 - `~/Git/fusion_ui/.venv/bin/python -c "import decorrelation.pipeline"` runs
   from the worktree root;
 - `python -m decorrelation.apd_check.cmod_scan 1160616027 -j 2 --force` still
-  runs. The averages are cached, so it recomputes that shot's velocities and
-  blobs only, rewriting them in the laptop's cache; the snapshot stays the
-  reference.
+  runs, in the app venv from the worktree root. Seed the worktree's cache with a
+  writable copy of the snapshot first: the averages are then cached, so it
+  recomputes that shot's velocities and blobs only, rewriting them in the
+  worktree's cache. The snapshot stays the reference.
 
 **Pitfalls:**
 
@@ -675,6 +714,8 @@ regression locally.
 - `warnings` are silenced in the loops.
 - `experimental_database` is imported lazily.
 - Units are metres.
+- Leave `ca_tde_field` and `ca_field` as they are. They are the paper's, need
+  velocity-estimation fc5e59a, and are not part of the API.
 - **Never relax the tolerance to pass.** A mismatch is a finding: stop and
   report it. Escalate to Fable 5.1 if it cannot be explained.
 
@@ -780,7 +821,7 @@ plus:
 - the hash test passes: `averages.threshold` moves all three keys,
   `tracking.*` only `method_fields`', and `blobs.*` only `blob_parameters`'.
 
-Then **stop for G2**: list the keys and the 37 names for the user before
+Then **stop for G2**: list the keys and the 32 names for the user before
 merging.
 
 ### J4 — Fields page and builders · Sonnet 5.5 · fusion_ui
@@ -807,7 +848,7 @@ so start against synthetic blobs from a fixture factory
 - Clicking a multi-shot point sourced from `method_fields` or `blob_parameters`
   opens the Fields page on that shot and settings, and on that pixel when the
   aggregate is a fixed pixel.
-- Add a label table for the 37 names, e.g. `vr_com` → "v_R, 2DCA centroid
+- Add a label table for the 32 names, e.g. `vr_com` → "v_R, 2DCA centroid
   [m/s]".
 
 **Accept when** a multi-shot `AppTest` covers the jump and a test covers the
@@ -1028,10 +1069,11 @@ Agent(subagent_type="general-purpose", model="opus" | "sonnet" | "haiku",
 - **fusion_scripts jobs.** Worktree isolation would give a fusion_ui tree, so
   the brief tells the agent to make its own:
   `git -C ~/Git/fusion_scripts worktree add ~/Git/fusion_scripts-<job> -b phase06/<job>`.
-- Agents run Python from the worktree root. Use
-  `~/Git/fusion_scripts/.venv/bin/python` for fusion_scripts tests and
-  `~/Git/fusion_ui/.venv/bin/python` for fusion_ui (and for checking what the
-  service will import).
+- Agents run Python from the worktree root, with
+  `~/Git/fusion_ui/.venv/bin/python` in both repos: it matches the server
+  ([Environments](#facts-every-agent-needs)). fusion_scripts jobs also run the
+  existing tests with `~/Git/fusion_scripts/.venv/bin/python`, so the paper's
+  environment keeps working.
 - Merge J1 before starting J3, so that no job needs an unmerged branch of the
   other repo on its path.
 
@@ -1091,6 +1133,7 @@ is reached.
 | L7 | **An adaptive 2DCA window.** Read the window off each shot (e.g. a multiple of its median duration time) instead of fixing 60 samples, the way the contour level is read off each average. Only if per-shot parameter sets prove too manual | Opus 5.5 |
 | L8 | **W7-X and phantom data** through the same products. The API is kept machine-agnostic for this (invariant 9) | Opus 5.5 for the first, Sonnet 5.5 after |
 | L6 | **One cache.** `figures.py`/`cmod_scan` read fusion_ui's blobs instead of their own cache | Opus 5.5 |
+| L9 | **The CA TDE** (velocity_estimation's `TDEMethod.CA`, the paper's `_ca` group) as its own product, once the user chooses its event selector: fc5e59a's in-package `cond_av`, which the paper used, or PlasmaPy's `ConditionalEvents` in b3b6945. On 1160616027 they differ by a median of 0.2–0.7%, at most 12% in v_R, and about 2% in events (2026-10-07). The paper's nine files are kept in `~/Data/reference/tde_ca_fc5e59a_laptop/` | Opus 5.5 |
 
 ## Open questions for the user
 
@@ -1101,3 +1144,5 @@ is reached.
    `/hdd1/fusion_data/apd/superseded/` be deleted?
 4. Should the 2DCA window adapt to each shot by itself (L7), or are per-shot
    parameter sets enough?
+5. Which CA-TDE event selector is the right one (L9)? And should the paper's
+   venv be aligned with the app's ([Environments](#facts-every-agent-needs))?
