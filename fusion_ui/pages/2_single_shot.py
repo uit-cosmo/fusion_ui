@@ -113,8 +113,22 @@ def pick_shot_and_target(table):
 
     has_raw, has_preprocessed = targets[diagnostic]
     if has_raw and has_preprocessed:
+        # The browser lands on the preprocessed file whenever there is one. A selection that names
+        # the raw file one -- the Fields page's link to the dead-pixel view, a multi-shot point
+        # computed on a raw file -- has to open on it, or the plot it came for is not offered.
+        wants_raw = (
+            on_this_machine
+            and selection["shot"] == shot
+            and selection["diagnostic"] == diagnostic
+            and selection.get("preprocessed") is False
+        )
         preprocessed = (
-            st.sidebar.radio("Version", ["Preprocessed", "Raw"], horizontal=True)
+            st.sidebar.radio(
+                "Version",
+                ["Preprocessed", "Raw"],
+                index=1 if wants_raw else 0,
+                horizontal=True,
+            )
             == "Preprocessed"
         )
     else:
