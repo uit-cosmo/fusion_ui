@@ -200,3 +200,98 @@ def test_seed_session_state_keeps_a_present_zero_value():
     params_ui.seed_session_state(state, "p", im.GaussFitParams(size_max=0.0))
     assert state["p.size_max.__auto__"] is False
     assert state["p.size_max"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# The strict inverse: parameters a person wrote down (--params-json)
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class Optionals:
+    inner: Simple = None
+    size_max: float = None
+
+
+def test_every_registered_spec_round_trips_through_its_stored_form():
+    """What `param_sets.params_json` holds, and what the single-shot page tells
+    people to save, rebuilds to the parameters that hash to it."""
+    import fusion_ui.plots  # noqa: F401 - registers every spec
+    from fusion_ui.core import registry
+
+    for key, spec in registry.REGISTRY.items():
+        digest, text = params_ui.hash_params(key, spec.params())
+        for form in (text, json.loads(text), json.loads(text)["params"]):
+            back = params_ui.from_canonical(spec.params, form, plot_key=key)
+            assert params_ui.hash_params(key, back)[0] == digest, key
+
+
+def test_from_canonical_rebuilds_types_and_none():
+    form = params_ui.canonical(Optionals(size_max=None))
+    assert params_ui.from_canonical(Optionals, form) == Optionals()
+    form = params_ui.canonical(WithEnum(Colour.blue))
+    assert params_ui.from_canonical(WithEnum, form).colour is Colour.blue
+
+
+@pytest.mark.parametrize(
+    "values, message",
+    [
+        ({"flag": "false"}, "expected true or false"),
+        ({"flag": 1}, "expected true or false"),
+        ({"count": 2.5}, "whole number"),
+        ({"count": True}, "for a int field"),
+        ({"scale": "2.5"}, "finite number"),
+        ({"name": 7}, "expected a string"),
+        ({"name": None, "extra": 1}, "no field 'extra'"),
+    ],
+)
+def test_from_canonical_refuses_what_from_dict_would_coerce(values, message):
+    whole = {"count": 3, "scale": 1.0, "flag": False, "name": "a", **values}
+    form = {"__type__": params_ui._type_name(Simple), "values": whole}
+    with pytest.raises(ValueError, match=message):
+        params_ui.from_canonical(Simple, form)
+
+
+def test_from_canonical_wants_every_field():
+    values = {"count": 3, "scale": 1.0, "flag": False}
+    form = {"__type__": params_ui._type_name(Simple), "values": values}
+    with pytest.raises(ValueError, match="missing 'name'"):
+        params_ui.from_canonical(Simple, form)
+
+
+def test_from_canonical_checks_the_class_and_the_plot():
+    text = params_ui.hash_params("p", Simple())[1]
+    with pytest.raises(ValueError, match="parameter set of plot 'p', not of 'q'"):
+        params_ui.from_canonical(Simple, text, plot_key="q")
+    with pytest.raises(ValueError, match="but the plot's parameters are"):
+        params_ui.from_canonical(WithEnum, text)
+    form = {"__type__": params_ui._type_name(WithEnum), "values": {"colour": "green"}}
+    with pytest.raises(ValueError, match="expected one of"):
+        params_ui.from_canonical(WithEnum, form)
+
+
+def test_with_values_changes_only_what_it_names():
+    base = Nests(inner=Simple(count=4))
+    changed = params_ui.with_values(base, {"inner": {"scale": 2}})
+    assert changed == Nests(inner=Simple(count=4, scale=2.0))
+    assert isinstance(changed.inner.scale, float)
+    assert base == Nests(inner=Simple(count=4)), "the input is not modified"
+    assert changed.inner is not base.inner
+    assert params_ui.with_values(base, {}) == base
+
+
+def test_with_values_refuses_unknown_names_and_bad_leaves():
+    with pytest.raises(ValueError, match="inner: Simple has no field 'scael'"):
+        params_ui.with_values(Nests(), {"inner": {"scael": 2.0}})
+    with pytest.raises(ValueError, match="inner.flag: expected true or false"):
+        params_ui.with_values(Nests(), {"inner": {"flag": "yes"}})
+    with pytest.raises(ValueError, match="expected an object of fields"):
+        params_ui.with_values(Nests(), {"inner": 3})
+
+
+def test_with_values_fills_a_none_subtree_only_completely():
+    """Nothing to keep under a None, so a change there names every field."""
+    with pytest.raises(ValueError, match="missing"):
+        params_ui.with_values(Optionals(), {"inner": {"count": 1}})
+    full = {"count": 1, "scale": 1.0, "flag": False, "name": "a"}
+    assert params_ui.with_values(Optionals(), {"inner": full}).inner == Simple(count=1)

@@ -35,6 +35,7 @@ unrecognised raises rather than guessing:
     colliding hash with no error at all -- hence the explicit guard.
 """
 
+import copy
 import dataclasses
 import hashlib
 import json
@@ -346,6 +347,165 @@ def from_dict(params_cls, values, prefix=""):
             hints.get(field.name, field.type), values[field.name], path
         )
     return params_cls(**kwargs)
+
+
+# ---------------------------------------------------------------------------
+# The strict inverse, for parameters a person wrote down
+#
+# from_dict reads back what this app wrote itself, so it coerces freely. A
+# parameter file passed to `fusion-ui precompute --params-json` may have been
+# typed by hand, and there the lenient rules mislead: bool("false") is True,
+# float("2.5") turns a string into a number, and a misspelt field is silently
+# dropped. These raise instead, naming the dotted path.
+# ---------------------------------------------------------------------------
+
+
+def _strict_leaf(annotation, value, path):
+    """One leaf of a hand-written parameter set, checked against its annotation.
+
+    ``None`` is accepted anywhere, as :func:`_leaf` writes it anywhere (see
+    ``size_max``).
+    """
+    if value is None:
+        return None
+    if isinstance(annotation, type) and issubclass(annotation, Enum):
+        if not isinstance(value, str) or value not in annotation.__members__:
+            raise ValueError(
+                f"{path}: expected one of {sorted(annotation.__members__)}, "
+                f"got {value!r}"
+            )
+        return annotation[value]
+    if annotation is bool:
+        if not isinstance(value, bool):
+            raise ValueError(f"{path}: expected true or false, got {value!r}")
+        return value
+    if isinstance(value, bool):
+        raise ValueError(f"{path}: got {value!r} for a {annotation.__name__} field")
+    if annotation is int:
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        raise ValueError(f"{path}: expected a whole number, got {value!r}")
+    if annotation is float:
+        if not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError(f"{path}: expected a finite number, got {value!r}")
+        return float(value)
+    if annotation is str:
+        if not isinstance(value, str):
+            raise ValueError(f"{path}: expected a string, got {value!r}")
+        return value
+    raise TypeError(f"{path}: no rule to rebuild {annotation!r} from {value!r}")
+
+
+def _strict_tree(params_cls, values, prefix, base):
+    """``params_cls`` built from ``values``, every name checked.
+
+    ``base`` is ``None`` for a complete parameter set, where every field must
+    be given; otherwise the instance whose fields ``values`` replaces, leaving
+    the rest as they are.
+    """
+    where = prefix or "the top level"
+    if not isinstance(values, dict):
+        raise ValueError(f"{where}: expected an object of fields, got {values!r}")
+    fields = {f.name: f for f in _dataclass_fields(params_cls)}
+    unknown = sorted(set(values) - set(fields))
+    if unknown:
+        raise ValueError(
+            f"{where}: {params_cls.__name__} has no field "
+            + ", ".join(repr(name) for name in unknown)
+            + f" (it has {', '.join(fields)})"
+        )
+    if base is None:
+        missing = [name for name in fields if name not in values]
+        if missing:
+            raise ValueError(
+                f"{where}: {params_cls.__name__} is missing "
+                + ", ".join(repr(name) for name in missing)
+            )
+    hints = _hints(params_cls)
+    kwargs = {}
+    for name, value in values.items():
+        path = f"{prefix}.{name}" if prefix else name
+        annotation, _ = _unwrap_optional(hints.get(name, fields[name].type))
+        if _dataclass_fields(annotation) is None:
+            kwargs[name] = _strict_leaf(annotation, value, path)
+        elif value is None:
+            kwargs[name] = None
+        else:
+            current = None if base is None else getattr(base, name)
+            if current is not None and not dataclasses.is_dataclass(current):
+                current = None
+            kwargs[name] = _strict_tree(annotation, value, path, current)
+    if base is None:
+        return params_cls(**kwargs)
+    return dataclasses.replace(base, **kwargs)
+
+
+def from_canonical(params_cls, canonical_form, plot_key=None):
+    """The ``params_cls`` instance a canonical form describes: the inverse of
+    :func:`canonical`, strictly.
+
+    ``canonical_form`` is what :func:`canonical` returns (``{"__type__",
+    "values"}``) or the payload :func:`hash_params` hashes and
+    ``param_sets.params_json`` stores (``{"plot", "params"}``), as a dict or
+    as its JSON text. It is the complete parameter set, so it must name
+    ``params_cls`` as its ``__type__``, name ``plot_key`` as its plot when one
+    is given, and give every field at every level and no other. Each leaf is
+    checked as ``_strict_leaf`` checks it.
+
+    What comes back hashes as the parameters it describes: ``hash_params`` of
+    it is what the store records for them, so a result computed from it is the
+    one a page asking for the same parameters finds.
+    """
+    form = canonical_form
+    if isinstance(form, (str, bytes)):
+        form = json.loads(form)
+    if not isinstance(form, dict):
+        raise ValueError(f"expected a canonical parameter set, got {form!r}")
+    if "plot" in form or "params" in form:
+        unknown = sorted(set(form) - {"plot", "params"})
+        if unknown or "params" not in form:
+            raise ValueError(
+                "a stored parameter set has exactly the keys 'plot' and 'params', "
+                f"not {sorted(form)}"
+            )
+        if plot_key is not None and form.get("plot") != plot_key:
+            raise ValueError(
+                f"this is the parameter set of plot {form.get('plot')!r}, "
+                f"not of {plot_key!r}"
+            )
+        form = form["params"]
+    if not isinstance(form, dict) or set(form) != {"__type__", "values"}:
+        raise ValueError(
+            "a canonical parameter set has exactly the keys '__type__' and "
+            f"'values', not {sorted(form) if isinstance(form, dict) else form!r}"
+        )
+    expected = _type_name(params_cls)
+    if form["__type__"] != expected:
+        raise ValueError(
+            f"this parameter set is a {form['__type__']}, but the plot's "
+            f"parameters are a {expected}"
+        )
+    return _strict_tree(params_cls, form["values"], "", None)
+
+
+def with_values(params, values):
+    """A copy of ``params`` with the fields named in ``values`` replaced.
+
+    ``values`` is part of a canonical ``values`` tree, e.g. ``{"averages":
+    {"window": 30}}``: what a person writes to change a few knobs and keep the
+    rest. Checked as strictly as :func:`from_canonical` checks a whole set,
+    except that a field may be left out to keep its value -- a name the class
+    does not have still raises, so a typo cannot be dropped silently. A nested
+    field whose value is ``None`` has nothing to keep, so a change to it must
+    give all of its fields. ``params`` itself is not modified.
+    """
+    if isinstance(params, type) or not dataclasses.is_dataclass(params):
+        raise TypeError(f"expected a dataclass instance, got {params!r}")
+    # A deep copy first, so that the fields left alone are not shared with
+    # the caller's instance either.
+    return _strict_tree(type(params), values, "", copy.deepcopy(params))
 
 
 # ---------------------------------------------------------------------------
