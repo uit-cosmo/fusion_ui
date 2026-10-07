@@ -175,6 +175,49 @@ def _migrate_to_3(conn):
     conn.executescript(_MIGRATE_3)
 
 
+# ---------------------------------------------------------------------------
+# Schema (version 4)
+# ---------------------------------------------------------------------------
+
+
+# What a stored result was computed *from*, so that a result whose input has
+# since changed can be told apart from a current one (`store.stale_runs`).
+#
+# `input_mtime` is the input file's mtime as `shots.mtime` recorded it when the
+# run was written -- the same string, so the two compare directly. A rescan that
+# sees the file rewritten changes `shots.mtime`, and the run is stale.
+#
+# `upstream_run_id` is the run a chained result was computed on. Deleting that
+# run (Recompute, `--force`) nulls the link; recomputing it in place leaves the
+# link and makes the upstream row newer than this one. Either way it is stale.
+#
+# Rows written before v4 keep NULL in both and count as *unknown*, never as
+# stale: nothing says what they were computed from, and calling them stale
+# would recompute every legacy result at once.
+#
+# Plain ALTER TABLE, so no existing row or constraint is touched. It runs in one
+# explicit transaction with `init_db`'s version bump (Python's sqlite3 would
+# otherwise run each DDL statement on its own), and each step checks first, so
+# even a half-applied migration is finished by the next `init-db` rather than
+# failing on a duplicate column.
+def _migrate_to_4(conn):
+    if not conn.in_transaction:
+        conn.execute("BEGIN")
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
+    if "input_mtime" not in columns:
+        conn.execute("ALTER TABLE runs ADD COLUMN input_mtime TEXT")
+    if "upstream_run_id" not in columns:
+        conn.execute(
+            "ALTER TABLE runs ADD COLUMN upstream_run_id INTEGER"
+            " REFERENCES runs(id) ON DELETE SET NULL"
+        )
+    # Deleting a run looks up the rows that point at it; without an index
+    # every delete scans the whole ledger.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_runs_upstream ON runs (upstream_run_id)"
+    )
+
+
 # Index = the schema version the migration produces. Append, never rewrite:
 # a database file already at version N only runs MIGRATIONS[N:].
 MIGRATIONS = [
@@ -182,6 +225,7 @@ MIGRATIONS = [
     _migrate_to_1,
     _migrate_to_2,
     _migrate_to_3,
+    _migrate_to_4,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS) - 1
