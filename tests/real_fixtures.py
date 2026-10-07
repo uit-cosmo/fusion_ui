@@ -95,8 +95,9 @@ class Deployment:
     def copy(self, where):
         """The ledger and the data tree in ``where``, to change; the blobs stay where they are, read only.
 
-        The database holds the blobs' absolute paths, so a copy reads the same files and cannot write to
-        them. Only the index is rebuilt, from the copy's own data tree.
+        The database holds the blobs' absolute paths, so a copy reads the same files; a test must not
+        delete a run's blob (``store.delete_run`` does). The copy's index still names the original data
+        file: a test that changes the copy's tree rescans it (``catalog.rescan`` on ``copy.data``).
         """
         root = Path(where)
         shutil.copytree(self.data, root / "alcator")

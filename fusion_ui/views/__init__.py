@@ -172,7 +172,9 @@ PIXEL_VIEWS = [
         build=tracks.tracks_figure,
         caption=(
             "Where each track put the structure at each lag, as a displacement from the reference pixel. "
-            "Highlighted: the lags the slope rests on; dashed: the stored velocity as a line; "
+            "Highlighted: the lags the slope rests on that have a position (the tracker fills a lag it lost "
+            "by interpolating, and that lag counts in the fit but has no position to show, so fewer points "
+            "can be highlighted than the lags counted); dashed: the stored velocity as a line; "
             "dash-dot: the straight lines the two TDE velocities imply."
         ),
     ),
