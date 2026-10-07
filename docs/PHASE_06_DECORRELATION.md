@@ -26,8 +26,9 @@ and the paper's `reliable()` as a Fields-page toggle
 (48a3e33): the three product specs, with G2's names. J10 merged (bdf4806):
 `velocity_field` is gone, and `fusion-ui prune` clears its runs in J7. J4b
 merged (02bb826): the paper's `reliable()` as a Fields-page checkbox, and the
-page tested on the real specs. J5 is in review. Everything else is planned and
-not started.
+page tested on the real specs. J5 merged (6ee5e8b): the multi-shot jump to the
+Fields page, and labels for the 32 names. J5b is running: three small fixes
+before G3. Everything else is planned and not started.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -1108,6 +1109,36 @@ CPU).** What later jobs build on:
 
 **Accept when** a multi-shot `AppTest` covers the jump and a test covers the
 labels.
+
+**Landed 2026-10-07 (6ee5e8b, 772 tests).** What later jobs build on:
+
+- **Labels.** `core/scalar_labels.LABELS` labels exactly the 32 names. Each
+  label ends in a unit from a closed set, or in `[no unit]`.
+  - The blob parameters' units are checked against `views/numbers`.
+  - The eight shared names are worded by the quantity, and a test checks that
+    each older source named writes them.
+  - A name without a label shows as itself.
+  - `axis_title` and `wrapped` (44 characters a line) make the multi-shot
+    y-axis title.
+- **The jump.** The pure part is `fusion_ui/jump.py`, which sits outside
+  `core/` because it needs `views.products.related_params`.
+  - A `method_fields` point opens the Fields page on its own settings.
+  - A `blob_parameters` point opens it on the first `method_fields` settings,
+    in the picker's order, whose related blob hash is its own, preferring one
+    with a good run on the shot.
+  - The pixel goes only with a fixed-pixel aggregate.
+  - Other sources still open the single-shot page.
+  - AppTest cannot click a Plotly point, so the tests replace
+    `decimate.selection_points`. A real click is for J8.
+- **The single-shot page.** A cached batch-only result at non-default
+  parameters shows the JSON its `--params-json` command reads, through the
+  same helper as `show_batch_missing`.
+- **For J8:**
+  - the label wording: "size in x/y", radial and poloidal FWHM for `lr` and
+    `lz`, "2DCA max", "(CC)";
+  - whether 44 characters a line suits a long title such as `level_com`'s;
+  - the seed's `theta` convention differs from the new `theta_f`. The page
+    plots one source at a time, so the label carries no caveat.
 
 ### JD — Deploy the dead-pixel view · orchestrator + user
 
