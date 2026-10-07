@@ -42,7 +42,7 @@ from fusion_ui.views.figures import (
     padded_range,
 )
 from fusion_ui.views.geometry import grid_axes, pitch
-from fusion_ui.views.methods import METHODS, Status, panel
+from fusion_ui.views.methods import METHODS, Status, describe_cut, panel
 from fusion_ui.views.overlays import Legend
 
 ROWS, COLUMNS = 2, 4
@@ -54,11 +54,18 @@ MODES = {"arrows": "Arrows", "vr": "v_R map", "vz": "v_Z map"}
 #: a two-point TDE blows up where a component is small and would otherwise set the range alone.
 MAP_PERCENTILE = 95
 
-_MARKS = (
-    (Status.FAILED, "no fit", FAILED_STYLE),
-    (Status.CUT, "cut by the view", CUT_STYLE),
-    (Status.DEAD, "dead pixel (mask)", DEAD_STYLE),
-)
+
+def _marks(cuts):
+    """What each pixel that is not a number is called in the legend; the cut says which cut it is."""
+    return (
+        (Status.FAILED, "no fit", FAILED_STYLE),
+        (
+            Status.CUT,
+            "not reliable (the paper's cut)" if cuts.paper else "cut by the view",
+            CUT_STYLE,
+        ),
+        (Status.DEAD, "dead pixel (mask)", DEAD_STYLE),
+    )
 
 
 def _axes(cell):
@@ -123,10 +130,10 @@ def _dots(p, R, Z, axes):
     )
 
 
-def _mark_traces(p, R, Z, axes, legend):
+def _mark_traces(p, R, Z, axes, legend, marks):
     """The pixels that are not numbers: no fit, cut by the view, dead -- each its own mark."""
     traces = []
-    for status, name, style in _MARKS:
+    for status, name, style in marks:
         ys, xs = np.nonzero(p.status == status)
         if not len(xs):
             continue
@@ -322,10 +329,25 @@ def velocity_panels(bundle, mode="arrows", arrow_gain=1.0):
         )
 
     traces, legend = [], Legend()
-    meta = dict(mode=mode)
+    marks = _marks(bundle.cuts)
+    meta = dict(mode=mode, cut="paper" if bundle.cuts.paper else "method")
     annotations = [
         cell_title(cells[CELL_OF[i] - 1], p.method.label) for i, p in enumerate(panels)
     ]
+    # Which cut is on, across the top of the figure: the same data reads differently under the other.
+    annotations.append(
+        dict(
+            text=describe_cut(bundle.cuts),
+            x=0.0,
+            y=1.0,
+            xref="paper",
+            yref="paper",
+            xanchor="left",
+            yanchor="top",
+            showarrow=False,
+            font=dict(size=11, color="#666"),
+        )
+    )
 
     if mode == "arrows":
         # The 2DCA tracks set the scale; with none drawn (every fit failed) the others do.
@@ -374,7 +396,7 @@ def velocity_panels(bundle, mode="arrows", arrow_gain=1.0):
             traces += _arrow_traces(p, R, Z, axes, scale)
             if p.ok.any():
                 traces.append(_dots(p, R, Z, axes))
-            traces += _mark_traces(p, R, Z, axes, legend)
+            traces += _mark_traces(p, R, Z, axes, legend, marks)
             traces += _selected_trace(bundle, R, Z, axes)
         annotations += _key(traces, x_range, y_range, spacing, scale, key_speed)
     else:
@@ -421,7 +443,7 @@ def velocity_panels(bundle, mode="arrows", arrow_gain=1.0):
             )
             if p.ok.any():
                 traces.append(_dots(p, R, Z, axes))
-            traces += _mark_traces(p, R, Z, axes, legend)
+            traces += _mark_traces(p, R, Z, axes, legend, marks)
             traces += _selected_trace(bundle, R, Z, axes)
 
     # The key cell holds the arrow key or nothing: its axes carry no ticks either way.

@@ -37,6 +37,7 @@ FILES = (
 SHOT = 1160616027
 SELECTION = {"machine": "cmod", "shot": SHOT, "diagnostic": "apd", "preprocessed": True}
 LABELS = ("pixel_averages", "method_fields", "blob_parameters")
+PAPER = "The paper's cut, reliable()"
 
 
 class Deployment:
@@ -237,6 +238,8 @@ def test_the_page_never_computes_or_records_whatever_it_is_asked_to_show(
     widget(app, "number_input", "Minimum events").set_value(700)
     rerun(app)
     widget(app, "checkbox", "Interior pixels only").check()
+    rerun(app)
+    widget(app, "checkbox", PAPER).check()
     rerun(app)
     assert deployment.counts() == before
     assert deployment.world.calls == []
@@ -600,6 +603,51 @@ def test_the_view_cuts_are_view_state_and_move_pixels_without_a_new_parameter_se
     )  # moving a cut mints no param_sets row and recomputes nothing
 
 
+def test_the_papers_cut_is_a_checkbox_that_shows_the_same_pixels_in_every_panel(
+    deployment,
+):
+    """The default is the cuts per method. The checkbox swaps them for the paper's ``reliable()``: the
+    same pixels in every panel, the border always out, and the figure says which cut it is.
+    """
+    deployment.seed(SHOT)
+    app = run(selection=SELECTION)
+    before = deployment.counts()
+    assert widget(app, "checkbox", PAPER).value is False
+    (per_method,) = figures(app)
+    assert per_method["layout"]["meta"]["cut"] == "method"
+    edge = {(x, y) for x in range(9) for y in range(10) if x in (0, 8) or y in (0, 9)}
+
+    def shown(figure):
+        return {
+            panel: {
+                (int(c[0]), int(c[1]))
+                for t in kinds(figure, "pixels")
+                if t["meta"]["panel"] == panel
+                for c in t["customdata"]
+            }
+            for panel in ("max", "com", "2dcc", "tde3", "tde2", "catde3", "catde2")
+        }
+
+    assert shown(per_method)["com"] & edge  # the border is drawn, as the page starts
+
+    widget(app, "checkbox", PAPER).check()
+    rerun(app)
+    (paper,) = figures(app)
+    assert paper["layout"]["meta"]["cut"] == "paper"
+    pixels = shown(paper)
+    assert not any(pixels[panel] & edge for panel in pixels)
+    # The rule asks the centroid and both TDEs for a number, so those three panels draw exactly its
+    # pixels, and every other panel draws some of them: what it lacks is its own method's failure.
+    assert pixels["com"] and pixels["com"] <= shown(per_method)["com"]
+    assert pixels["com"] == pixels["tde3"] == pixels["tde2"]
+    assert all(pixels[panel] <= pixels["com"] for panel in pixels)
+    said = [
+        a["text"] for a in paper["layout"]["annotations"] if a["text"].startswith("Cut")
+    ]
+    assert len(said) == 1 and "paper's reliable()" in said[0]
+    assert deployment.counts() == before  # view state: nothing recorded
+
+
 @pytest.fixture
 def both_versions(monkeypatch, tmp_path, apd_dataset_path, fields_world):
     """One tiny real APD file, raw and preprocessed, indexed: what the single-shot page can open."""
@@ -698,6 +746,7 @@ def test_view_state_survives_a_visit_to_another_page(deployment):
     widget(app, "number_input", "Minimum events").set_value(700)
     widget(app, "slider", "Panels").set_value(7)
     widget(app, "radio", "Show").set_value("vz")
+    widget(app, "checkbox", PAPER).check()
     rerun(app)
 
     app.switch_page("pages/2_single_shot.py")
@@ -711,6 +760,7 @@ def test_view_state_survives_a_visit_to_another_page(deployment):
     assert widget(app, "number_input", "Minimum events").value == 700
     assert widget(app, "slider", "Panels").value == 7
     assert widget(app, "radio", "Show").value == "vz"
+    assert widget(app, "checkbox", PAPER).value is True
     assert app.session_state["fields.pixel"] == (5, 4)
 
 

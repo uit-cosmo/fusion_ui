@@ -8,6 +8,11 @@ numbers can be held against what the track actually did. A velocity is one numbe
 plausible whatever it is; a track that latched onto the array edge or never straightens out is
 obvious here.
 
+**A fitted lag can have no position.** The tracker fills a lag it lost by interpolation before the
+slope is fitted (``decorrelation.pipeline.track``): that lag is in ``fit_*`` and counted in
+``nlags_*``, but there is no stored position to draw at it. Only the lags that are both fitted and
+tracked are highlighted, so there can be fewer highlighted points than lags counted.
+
 Positions are drawn as displacements from the reference pixel in millimetres, against the lag in
 microseconds. The fitted line is the stored velocity as a line through the mean of the fitted
 points: that is the least-squares line itself when the estimator is ``lsq`` (the deck's), and the
