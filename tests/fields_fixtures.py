@@ -460,9 +460,16 @@ class World:
     # -- registry ----------------------------------------------------------
 
     def install(self):
-        """Register the stand-ins, remembering whatever was registered under those keys."""
+        """Register the stand-ins, remembering whatever was registered under those keys.
+
+        Only the first time: a test may install again after a second world was swapped in and out
+        (``test_the_mask_is_shown_with_its_source``), and the second call would otherwise remember the
+        stand-ins themselves and put *them* back at the end, leaving the real specs replaced for every test
+        that runs after this one.
+        """
         for key, spec in self.specs().items():
-            self._saved[key] = registry.REGISTRY.get(key)
+            if key not in self._saved:
+                self._saved[key] = registry.REGISTRY.get(key)
             registry.REGISTRY[key] = spec
         return self
 
