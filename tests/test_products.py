@@ -144,7 +144,8 @@ def test_the_three_specs_are_imported_bank_first_and_after_the_older_ones():
     ]
     positions = [imported.index(k) for k in KEYS]
     assert positions == sorted(positions)
-    assert imported.index("velocity_field") < positions[0]
+    older = [name for name in imported if name not in KEYS]
+    assert older and all(imported.index(name) < positions[0] for name in older)
     assert imported[-3:] == list(KEYS), "after every older spec"
     assert set(KEYS) <= set(registry.REGISTRY)
 

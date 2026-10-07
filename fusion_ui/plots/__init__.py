@@ -22,7 +22,6 @@ from fusion_ui.plots import (  # noqa: F401 - imported to register
     velocity_2dca_tde,
     trajectories,
     two_sided_exp,
-    velocity_field,
     pixel_averages,
     method_fields,
     blob_parameters,
@@ -30,9 +29,14 @@ from fusion_ui.plots import (  # noqa: F401 - imported to register
 
 # Order is not cosmetic below two_dca: register() rejects a spec whose
 # upstream is not yet in the registry, so every requires="two_dca" spec has
-# to be imported after it. velocity_tde and velocity_field are unchained --
-# they run their own analysis off the raw record -- so they are free to sit
-# anywhere; they are grouped with their nearest relatives instead.
+# to be imported after it. velocity_tde is unchained -- it runs its own
+# analysis off the raw record -- so it is free to sit anywhere; it is grouped
+# with its nearest relatives instead.
+#
+# There is no velocity_field here any more: phase 06 replaced that spec, a
+# different estimator from the paper's, by the three products below. Runs
+# stored under its key stay in the ledger, unregistered, until
+# `fusion-ui prune --plot velocity_field` clears them.
 #
 # The same holds for the three decorrelation products at the end:
 # method_fields and blob_parameters require pixel_averages, the only batch-only
@@ -53,7 +57,6 @@ __all__ = [
     "velocity_2dca_tde",
     "trajectories",
     "two_sided_exp",
-    "velocity_field",
     "pixel_averages",
     "method_fields",
     "blob_parameters",

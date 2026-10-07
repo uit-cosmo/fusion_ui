@@ -40,12 +40,21 @@ chain. A page reads such results with :func:`lookup`, and asks
 mtime as the index recorded it, and the upstream run it was built on. Neither
 is in the cache key. :func:`stale_runs` compares them with the index and the
 ledger as they are now.
+
+**Deleting a whole plot is deliberate, and counted first.** :func:`plan_prune`
+counts every run of one plot key, its scalars, its blobs and the parameter sets
+nothing else will reference; :func:`prune` deletes them -- blobs first, then the
+ledger in one transaction -- for a plot that is no longer registered as well as
+for one that is. ``fusion-ui prune --plot KEY`` is the front end.
 """
 
 import math
 import os
+import sqlite3
 import tempfile
 import time
+from collections import Counter
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import lru_cache
 
@@ -768,3 +777,325 @@ def stale_runs(conn, plot=None):
         listed["stale"] = why
         stale.append(listed)
     return stale
+
+
+# ---------------------------------------------------------------------------
+# Pruning
+# ---------------------------------------------------------------------------
+
+
+class PruneError(RuntimeError):
+    """:func:`prune` refused to start, or could not write the ledger.
+
+    The message says which, and what state that leaves behind. A
+    ``RuntimeError``, so ``fusion-ui`` prints it and exits 1, like every other
+    refusal.
+    """
+
+
+def _inside(path, root):
+    """Whether ``path`` is an entry of the tree ``root``, which is already resolved.
+
+    The directories on the way are resolved, so neither ``..`` nor a symlinked
+    directory can lead out of the tree. The last component is not: removing a
+    link removes the link and never what it points at.
+    """
+    entry = os.path.join(
+        os.path.realpath(os.path.dirname(path)), os.path.basename(path)
+    )
+    return os.path.commonpath([root, entry]) == root
+
+
+@dataclass
+class PrunePlan:
+    """Everything one plot owns, counted and not yet deleted: see :func:`plan_prune`."""
+
+    plot: str
+    runs: list  # the plot's ``runs`` rows, in id order
+    scalars: dict  # run id -> its ``scalars`` rows, for the runs that have any
+    present: list  # blob paths that are on disk
+    missing: list  # blob paths the ledger lists that are not on disk any more
+    outside: list  # (run id, blob path) lying outside ``CACHE_DIR``: refused
+    locked: list  # present blob paths in a directory this user cannot write
+    params: list  # hashes of the ``param_sets`` rows nothing will reference
+    dependents: list  # (run id, plot, upstream run id) of other plots' runs on these
+    plots: dict  # every plot in the ledger -> its runs, for a mistyped key's hint
+
+    @property
+    def empty(self):
+        """Nothing to delete: no run of the plot and no parameter set of it."""
+        return not self.runs and not self.params
+
+    @property
+    def refusal(self):
+        """Why :func:`prune` will not run on this plan, or ``None``."""
+        if not self.outside:
+            return None
+        shown = "\n".join(f"  run {i}: {path}" for i, path in self.outside[:5])
+        more = len(self.outside) - 5
+        return (
+            f"Refusing to prune {self.plot!r}: {len(self.outside)} of its runs list a"
+            f" blob outside the result cache ({config.CACHE_DIR}), and prune never"
+            f" deletes there:\n{shown}"
+            + (f"\n  ... and {more} more" if more > 0 else "")
+            + "\nNothing was deleted. Check FUSION_UI_CACHE against the ledger's"
+            " blob paths."
+        )
+
+    def lines(self):
+        """The counts, a line each, for whoever is about to say ``--yes``."""
+        statuses = Counter(run["status"] for run in self.runs)
+        kinds = ", ".join(f"{name} {n}" for name, n in sorted(statuses.items()))
+        rows = [
+            ("plot", self.plot),
+            ("runs", f"{len(self.runs)}  ({kinds})"),
+            ("scalar rows", sum(self.scalars.values())),
+            (
+                "blob files",
+                f"{len(self.present)} on disk, {len(self.missing)} listed but"
+                " already missing",
+            ),
+        ]
+        if self.locked:
+            folders = sorted({os.path.dirname(path) for path in self.locked})
+            more = f" and {len(folders) - 3} more" if len(folders) > 3 else ""
+            rows.append(
+                (
+                    "unwritable",
+                    f"{len(self.locked)} blob files in {len(folders)} directories"
+                    " this user cannot write, so their runs would be kept:"
+                    f" {', '.join(folders[:3])}{more}",
+                )
+            )
+        rows.append(
+            ("param sets", f"{len(self.params)} that nothing will reference any more")
+        )
+        if self.outside:
+            rows.append(("outside cache", f"{len(self.outside)} blob paths: refused"))
+        if self.dependents:
+            built = Counter(plot for _, plot, _ in self.dependents)
+            names = ", ".join(f"{plot} {n}" for plot, n in sorted(built.items()))
+            rows.append(
+                (
+                    "built on them",
+                    f"{len(self.dependents)} runs of other plots ({names}): they lose"
+                    " their upstream link, so the store treats them as stale",
+                )
+            )
+        else:
+            rows.append(("built on them", "no run of another plot"))
+        return [f"{label:<14}{value}" for label, value in rows]
+
+
+@dataclass
+class PruneReport:
+    """What :func:`prune` did."""
+
+    plot: str
+    runs: int = 0  # ledger rows deleted
+    scalars: int = 0  # scalar rows that went with them
+    blobs: int = 0  # blob files removed
+    gone: int = 0  # blob files that were already missing
+    params: int = 0  # ``param_sets`` rows deleted
+    stale: int = 0  # runs of other plots that lost their upstream
+    #: (run id, blob path, why) for each run left in the ledger because its blob
+    #: could not be removed
+    kept: list = field(default_factory=list)
+
+    def lines(self):
+        """What was done, a line each; what was not, and what to do about it, last."""
+        lines = [
+            f"{'deleted':<14}{self.runs} runs, {self.scalars} scalar rows,"
+            f" {self.blobs} blob files, {self.params} param sets"
+        ]
+        if self.gone:
+            lines.append(
+                f"{'already gone':<14}{self.gone} blob files the ledger listed were"
+                " not on disk"
+            )
+        if self.stale:
+            lines.append(
+                f"{'now stale':<14}{self.stale} runs of other plots lost their upstream"
+            )
+        if self.kept:
+            lines.append(
+                f"{'KEPT':<14}{len(self.kept)} runs, because their blob file could"
+                " not be removed:"
+            )
+            lines += [f"  {path}  {why}" for _, path, why in self.kept[:10]]
+            if len(self.kept) > 10:
+                lines.append(f"  ... and {len(self.kept) - 10} more")
+            lines.append(
+                "Their ledger rows stay, so that no blob is left that nothing names."
+                " Fix the permissions on those files' directories and run the same"
+                " command again."
+            )
+        return lines
+
+
+def plan_prune(conn, plot):
+    """Count what pruning ``plot`` would delete, and delete nothing.
+
+    ``plot`` is a plain string matched against ``runs.plot``. It need not be
+    registered -- that is the point: a removed spec leaves its results behind.
+
+    Needs ``CACHE_DIR`` (``RuntimeError`` when it is not configured), to tell
+    the blobs that are the cache's to remove from any that are not. A blob that
+    is listed but missing is counted and not a problem; one that lies outside
+    the cache makes the plan :attr:`~PrunePlan.refusal`; one in a directory this
+    user cannot write is counted as ``locked``, and :func:`prune` will keep its
+    run.
+
+    ``params`` is every ``param_sets`` row of the plot that no other plot's run
+    and no preset references: the ones these runs leave unreferenced, and any
+    already unreferenced (a request that raised before its run was recorded).
+    """
+    root = os.path.realpath(config.CACHE_DIR)
+    runs = conn.execute(
+        "SELECT * FROM runs WHERE plot = ? ORDER BY id", (plot,)
+    ).fetchall()
+    scalars = {
+        row[0]: row[1]
+        for row in conn.execute(
+            "SELECT s.run_id, COUNT(*) FROM scalars s JOIN runs r ON r.id = s.run_id"
+            " WHERE r.plot = ? GROUP BY s.run_id",
+            (plot,),
+        )
+    }
+    present, missing, outside = [], [], []
+    for run in runs:
+        path = run["blob_path"]
+        if not path:
+            continue
+        if not _inside(path, root):
+            outside.append((run["id"], path))
+        elif os.path.lexists(path):
+            present.append(path)
+        else:
+            missing.append(path)
+    # Only a forecast: prune does not look, it tries. Removing a file needs write
+    # and search permission on its directory, and one the other writer made may
+    # grant this user neither -- better said here than found out half way through.
+    locked = [
+        path
+        for path in present
+        if not os.access(os.path.dirname(path), os.W_OK | os.X_OK)
+    ]
+    params = [
+        row[0]
+        for row in conn.execute(
+            "SELECT hash FROM param_sets WHERE plot = ?"
+            "   AND hash NOT IN (SELECT params_hash FROM runs WHERE plot <> ?)"
+            "   AND hash NOT IN (SELECT params_hash FROM presets)"
+            " ORDER BY hash",
+            (plot, plot),
+        )
+    ]
+    dependents = [
+        (row["id"], row["plot"], row["upstream_run_id"])
+        for row in conn.execute(
+            "SELECT id, plot, upstream_run_id FROM runs WHERE plot <> ?"
+            "   AND upstream_run_id IN (SELECT id FROM runs WHERE plot = ?)"
+            " ORDER BY id",
+            (plot, plot),
+        )
+    ]
+    plots = {
+        row[0]: row[1]
+        for row in conn.execute(
+            "SELECT plot, COUNT(*) FROM runs GROUP BY plot ORDER BY plot"
+        )
+    }
+    return PrunePlan(
+        plot=plot,
+        runs=runs,
+        scalars=scalars,
+        present=present,
+        missing=missing,
+        outside=outside,
+        locked=locked,
+        params=params,
+        dependents=dependents,
+        plots=plots,
+    )
+
+
+def prune(conn, plan):
+    """Delete what ``plan`` counted, and return a :class:`PruneReport`.
+
+    **Blobs first, then the ledger, in one transaction.** Each run's blob is
+    removed before anything is written, and the rows of every run whose blob is
+    gone are then deleted together, with the parameter sets nothing references
+    any more. The other way round, a blob that cannot be removed -- a
+    ``PermissionError`` in a directory the other writer made is the usual one --
+    would stay on disk with no row to name it, where nothing finds it again: the
+    cache never evicts, and a second prune has no run left to take its path from.
+    This way that run simply keeps its row, the report lists it, and the same
+    command, run again once the permissions are fixed, takes up where this one
+    stopped. A row whose blob is gone is a state the store already handles
+    (:func:`result` recomputes it, :func:`lookup` reports it), so an interruption
+    between the two steps costs a second run and nothing else.
+
+    A blob that is already missing is counted, not an error. Only files under
+    ``CACHE_DIR`` are removed -- never a directory -- and a plan with a blob
+    outside it is refused whole, before anything is touched.
+
+    Scalars go by ``ON DELETE CASCADE``, and the runs of other plots that were
+    built on a deleted one lose their ``upstream_run_id`` by ``ON DELETE SET
+    NULL``, which is what :func:`stale_runs` reports them stale by. Both need
+    ``foreign_keys`` on, as :func:`fusion_ui.core.db.connect` sets it; a
+    connection without it is refused, since it would leave orphans without a word.
+
+    Run it while nothing is computing the plot. A run written after the plan was
+    made is not in it and is left alone, but one recomputed in place meanwhile
+    is deleted by its id and leaves its fresh blob unlisted.
+
+    Raises :class:`PruneError` when the plan is refused, or when the ledger
+    cannot be written; in that case it is unchanged, and the message says how
+    many blobs were removed already.
+    """
+    if plan.refusal:
+        raise PruneError(plan.refusal)
+    if not conn.execute("PRAGMA foreign_keys").fetchone()[0]:
+        raise PruneError(
+            "Refusing to prune on a connection with foreign keys off: the scalars"
+            " would not follow their runs. Open it with fusion_ui.core.db.open_db."
+            " Nothing was deleted."
+        )
+    report = PruneReport(plan.plot)
+    deletable = []
+    for run in plan.runs:
+        path = run["blob_path"]
+        if path:
+            try:
+                os.remove(path)
+                report.blobs += 1
+            except FileNotFoundError:
+                report.gone += 1
+            except OSError as error:
+                why = f"{type(error).__name__}: {error.strerror or error}"
+                report.kept.append((run["id"], path, why))
+                continue
+        deletable.append(run["id"])
+
+    try:
+        with conn:
+            report.runs = conn.executemany(
+                "DELETE FROM runs WHERE id = ?", [(run_id,) for run_id in deletable]
+            ).rowcount
+            report.params = conn.execute(
+                "DELETE FROM param_sets WHERE plot = ?"
+                "   AND hash NOT IN (SELECT params_hash FROM runs)"
+                "   AND hash NOT IN (SELECT params_hash FROM presets)",
+                (plan.plot,),
+            ).rowcount
+    except sqlite3.Error as error:
+        raise PruneError(
+            f"The ledger could not be updated ({error}), so it is unchanged, but"
+            f" {report.blobs} blob files were removed already and those runs now"
+            " read as not stored. Run the same command again to finish."
+        ) from error
+    deleted = set(deletable)
+    report.scalars = sum(plan.scalars.get(run_id, 0) for run_id in deleted)
+    report.stale = sum(1 for _, _, upstream in plan.dependents if upstream in deleted)
+    return report

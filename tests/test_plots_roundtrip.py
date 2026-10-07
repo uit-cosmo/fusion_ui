@@ -26,7 +26,7 @@ CENTRE = 4  # the reference pixel on the 9x9 blob fixture
 #: Specs whose render needs a Streamlit runtime (a slider, a click target) and
 #: so cannot be called from a plain test. The round trip of their *result* is
 #: still checked; only the drawing is skipped.
-DRAWS_INTO_STREAMLIT = {"two_dca", "velocity_field", "dead_pixels"}
+DRAWS_INTO_STREAMLIT = {"two_dca", "dead_pixels"}
 
 #: Live specs have no blob to round trip, and the probe specs want an ASP file
 #: rather than the imaging fixture. The three decorrelation products want a
