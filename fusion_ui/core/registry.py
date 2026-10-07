@@ -38,6 +38,14 @@ a duplicate blob. Because ``upstream_params`` reads out of the downstream
 parameters, the two hashes stay in step -- change the 2DCA threshold and both
 the average and everything derived from it get a new cache entry.
 
+A cached spec may also be *batch only* (``batch_only=True``): too expensive
+to start from a page, so it is computed by ``fusion-ui precompute`` and pages
+only ever read it back from cache. The 2DCA at every pixel of a shot is this
+-- 35 to 70 minutes on one core, inside a Streamlit process that serves the
+whole group. A spec built on a batch-only one is still computed on demand,
+but only once every batch-only link beneath it is cached; see
+:func:`fusion_ui.core.store.missing_batch_upstreams`.
+
 What must never enter a spec's ``params``: view state. A frame index, a
 selected pixel, a zoom -- those live in ``st.session_state`` keyed off
 :attr:`Target.key`. A slider drag must not mint a new ``param_sets`` row.
@@ -136,6 +144,12 @@ class PlotSpec:
     #: the preprocessed one only, ``None`` either. The dead-pixel check needs
     #: the raw file -- preprocessing interpolates dead pixels away.
     preprocessed: Optional[bool] = None
+    #: Computed only by ``fusion-ui precompute``, never from a page: the store
+    #: refuses to compute it unless the caller says it is a batch job, the
+    #: single-shot page shows it from cache or names the command that fills
+    #: it, and many-pixel mode offers neither it nor anything built on it.
+    #: Only a cached spec can be batch only.
+    batch_only: bool = False
 
     @property
     def cached(self):
@@ -159,6 +173,11 @@ def register(spec):
         raise ValueError(f"a PlotSpec is already registered under {spec.key!r}")
     if not spec.diagnostics:
         raise ValueError(f"{spec.key!r} accepts no diagnostics")
+    if spec.batch_only and spec.compute is None:
+        raise ValueError(
+            f"{spec.key!r} is batch only but a live spec: there is nothing to "
+            "compute in batch, so nothing a page could read back"
+        )
     if spec.requires is not None:
         # Checked at registration, not at compute time: a typo here would
         # otherwise surface as a failed run on someone's shot.
@@ -188,6 +207,14 @@ def register(spec):
 
 def get(key):
     return REGISTRY[key]
+
+
+def chain(spec):
+    """``[spec, its upstream, …]`` down the ``requires`` links."""
+    links = [spec]
+    while links[-1].requires is not None:
+        links.append(get(links[-1].requires))
+    return links
 
 
 def for_diagnostic(diagnostic, preprocessed=None):

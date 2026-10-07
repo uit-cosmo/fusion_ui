@@ -34,6 +34,18 @@ def test_supported_matches_the_per_pixel_specs_and_the_live_trace():
     assert not multipixel.supported(registry.get("velocity_field"))
 
 
+def test_nothing_built_on_a_batch_only_spec_runs_on_many_pixels(monkeypatch):
+    """N pixel runs could each have to start the batch compute in the page."""
+    import dataclasses
+
+    batch_only = dataclasses.replace(registry.get("two_dca"), batch_only=True)
+    monkeypatch.setitem(registry.REGISTRY, "two_dca", batch_only)
+    assert not multipixel.supported(batch_only)
+    # velocity_contour itself is an ordinary per-pixel spec, built on it.
+    assert not multipixel.supported(registry.get("velocity_contour"))
+    assert multipixel.supported(registry.get("taud_psd"))
+
+
 def test_with_pixel_stamps_a_top_level_pair_without_mutating():
     params = spectra.TaudPsdParams(refx=6, refy=6)
     stamped = multipixel.with_pixel(params, 2, 3)

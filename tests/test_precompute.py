@@ -313,6 +313,67 @@ def test_a_permission_error_is_reported_not_recorded(indexed, monkeypatch):
     assert any("without recording" in line for line in lines)
 
 
+@pytest.fixture
+def batch_only_spec():
+    """A batch-only spec, registered for one test."""
+    import dataclasses
+
+    import xarray as xr
+
+    @dataclasses.dataclass
+    class BankParams:
+        window: int = 60
+
+    spec = registry.register(
+        registry.PlotSpec(
+            key="test_bank",
+            label="Test bank",
+            diagnostics=("apd",),
+            params=BankParams,
+            render=lambda result, params, target: None,
+            compute=lambda ds, params: xr.Dataset({"y": ("t", [1.0, 2.0])}),
+            batch_only=True,
+        )
+    )
+    yield spec
+    registry.REGISTRY.pop(spec.key, None)
+
+
+def test_precompute_is_the_batch_job_that_fills_a_batch_only_spec(
+    indexed, batch_only_spec
+):
+    targets = precompute.targets_for(indexed, batch_only_spec, "cmod")
+    stats = precompute.run(indexed, batch_only_spec, targets, batch_only_spec.params())
+    assert (stats.computed, stats.failed) == (1, 0)
+
+    run = indexed.execute("SELECT * FROM runs").fetchone()
+    assert run["status"] == "ok"
+    # What it was computed from: the file's mtime as the index has it.
+    (mtime,) = indexed.execute("SELECT mtime FROM shots").fetchone()
+    assert run["input_mtime"] == mtime
+
+
+def test_command_names_the_shot_and_only_what_differs(indexed, batch_only_spec):
+    import dataclasses
+
+    (target,) = precompute.targets_for(indexed, batch_only_spec, "cmod")
+    params = batch_only_spec.params()
+    assert (
+        precompute.command(batch_only_spec, target, params)
+        == "fusion-ui precompute test_bank --shot 1234"
+    )
+    assert precompute.command(batch_only_spec, target, params, "--retry-failed") == (
+        "fusion-ui precompute test_bank --shot 1234 --retry-failed"
+    )
+    assert precompute.command(
+        batch_only_spec, target, dataclasses.replace(params, window=30)
+    ) == ("fusion-ui precompute test_bank --shot 1234 --params-json params.json")
+    elsewhere = dataclasses.replace(target, machine="w7x")
+    assert precompute.command(batch_only_spec, elsewhere, params) == (
+        "fusion-ui precompute test_bank --shot 1234 --machine w7x"
+    )
+
+
 def test_output_writable_is_false_when_the_directory_cannot_be_made(
     indexed, monkeypatch
 ):

@@ -119,6 +119,27 @@ def test_a_spec_cannot_accept_a_diagnostic_its_upstream_refuses():
         )
 
 
+def test_a_spec_is_not_batch_only_unless_it_says_so():
+    assert spec("heavy", compute=lambda ds, p: ds).batch_only is False
+
+
+def test_a_batch_only_spec_must_be_cached():
+    """A live spec computes nothing, so there is nothing a batch could fill."""
+    with pytest.raises(ValueError, match="batch only but a live spec"):
+        registry.register(spec("bank", batch_only=True))
+    registry.register(spec("bank", compute=lambda ds, p: ds, batch_only=True))
+    assert registry.get("bank").batch_only
+
+
+def test_a_spec_may_be_built_on_a_batch_only_one():
+    registry.register(spec("bank", compute=lambda ds, p: ds, batch_only=True))
+    registry.register(derived("fields", requires="bank", upstream_params=lambda p: p))
+    assert [s.key for s in registry.chain(registry.get("fields"))] == [
+        "fields",
+        "bank",
+    ]
+
+
 def target(**kwargs):
     defaults = dict(
         machine="cmod",
