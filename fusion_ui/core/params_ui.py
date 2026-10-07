@@ -133,6 +133,24 @@ HELP = {
     ),
 }
 
+# The decorrelation products (``method_fields``, ``blob_parameters``) nest the same imaging_methods
+# classes one level down, under ``tracking`` and ``blobs``, and the paths above start at the top of
+# the tree being walked: the same knobs, with the same words, under their longer names.
+HELP.update(
+    {
+        f"tracking.{path}": text
+        for path, text in list(HELP.items())
+        if path.startswith("position_filter.")
+    }
+)
+HELP.update(
+    {
+        f"blobs.{path}": text
+        for path, text in list(HELP.items())
+        if path.startswith("taud_estimation.")
+    }
+)
+
 
 # ---------------------------------------------------------------------------
 # Annotations

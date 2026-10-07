@@ -29,8 +29,17 @@ CENTRE = 4  # the reference pixel on the 9x9 blob fixture
 DRAWS_INTO_STREAMLIT = {"two_dca", "velocity_field", "dead_pixels"}
 
 #: Live specs have no blob to round trip, and the probe specs want an ASP file
-#: rather than the imaging fixture.
-SKIP = {"raw_frames", "probe_trace"}
+#: rather than the imaging fixture. The three decorrelation products want a
+#: preprocessed record with its dead-pixel mask stored (this fixture has none),
+#: and the bank under the other two is batch only. Their round trip is
+#: ``tests/test_products.py``'s: the stored blob equals the API's, bit for bit.
+SKIP = {
+    "raw_frames",
+    "probe_trace",
+    "pixel_averages",
+    "method_fields",
+    "blob_parameters",
+}
 
 
 def cached_imaging_specs():

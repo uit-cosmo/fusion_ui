@@ -88,7 +88,9 @@ def counts(conn):
 # -- settings ---------------------------------------------------------------------------------
 
 
-def test_a_settings_difference_is_a_list_of_the_leaves_that_differ():
+def test_a_settings_difference_is_a_list_of_the_leaves_that_differ(fields_world):
+    # With the stand-ins installed: ``with_window`` builds its parameters from whatever is registered
+    # under the key, which is the real spec (another tree of leaves) once that exists.
     spec = ff.World().specs()["method_fields"]
     _, default = params_ui.hash_params("method_fields", spec.params())
     short = ff.with_window(40)
