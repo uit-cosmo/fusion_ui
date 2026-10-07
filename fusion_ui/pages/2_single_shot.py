@@ -233,6 +233,19 @@ def when(created_at):
         return created_at
 
 
+def show_params_to_save(spec, params, container=st):
+    """The parameter set a command's ``--params-json`` file holds, when it is not the defaults.
+
+    :func:`fusion_ui.core.precompute.command` names :data:`~fusion_ui.core.precompute.PARAMS_FILE` for
+    any other parameters, and the page cannot write a file for the person: it shows what to save.
+    Nothing is shown for the defaults, which the command needs no file for.
+    """
+    if precompute.is_default(spec, params):
+        return
+    container.caption(f"with these parameters saved as `{precompute.PARAMS_FILE}`:")
+    container.code(params_ui.hash_params(spec.key, params)[1], language="json")
+
+
 def provenance(run, conn, spec, target, params):
     """What produced this figure, and the button to do it again.
 
@@ -252,10 +265,16 @@ def provenance(run, conn, spec, target, params):
         f"params `{run['params_hash'][:12]}`"
     )
     if spec.batch_only:
+        # The command names a --params-json file when the parameters are not the
+        # defaults, and the page cannot write it: show what goes in it, as
+        # `show_batch_missing` does, and let the sentence run on into it.
+        saved = not precompute.is_default(spec, params)
         left.caption(
             "Computed in batch only. To compute it again, run "
-            f"`{precompute.command(spec, target, params, '--force')}`."
+            f"`{precompute.command(spec, target, params, '--force')}`"
+            + ("" if saved else ".")
         )
+        show_params_to_save(spec, params, left)
         return
     if right.button("Recompute", key=f"recompute.{run['id']}"):
         store.delete_run(conn, run)
@@ -297,9 +316,7 @@ def show_batch_missing(missing, target):
             # plain precompute; only --force replaces it.
             flags = ("--force",) if run is not None else ()
         st.code(precompute.command(link, target, link_params, *flags), language="bash")
-        if not precompute.is_default(link, link_params):
-            st.caption(f"with these parameters saved as `{precompute.PARAMS_FILE}`:")
-            st.code(params_ui.hash_params(link.key, link_params)[1], language="json")
+        show_params_to_save(link, link_params)
 
 
 def draw(spec, result, params, target):
