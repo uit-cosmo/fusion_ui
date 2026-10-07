@@ -35,6 +35,23 @@ def test_targets_for_picks_only_shots_the_spec_accepts(indexed):
     assert precompute.targets_for(indexed, registry.get("probe_trace"), "cmod") == []
 
 
+def test_targets_skip_the_file_version_a_spec_does_not_accept(
+    monkeypatch, tmp_path, apd_dataset_path
+):
+    """dead_pixels reads raw files only: the preprocessed file has them interpolated away."""
+    import shutil
+
+    shutil.copy(apd_dataset_path, apd_dataset_path.with_name("apd_1234_preprocessed.nc"))
+    conn = db.open_db(tmp_path / "state" / "versions.sqlite")
+    catalog.rescan(conn, str(apd_dataset_path.parent.parent), "cmod", None)
+    versions = lambda key: [  # noqa: E731
+        t.preprocessed for t in precompute.targets_for(conn, registry.get(key), "cmod")
+    ]
+    assert versions("taud_psd") == [False, True]
+    assert versions("dead_pixels") == [False]
+    conn.close()
+
+
 def test_targets_come_back_in_a_fixed_order(indexed):
     """The query orders the fill; the query plan must not get a say in it."""
     spec = registry.get("taud_psd")

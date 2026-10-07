@@ -21,6 +21,13 @@ parameter forms, result store), 03 (velocity and conditional averaging) and
 04 (multi-shot view and precompute CLI) — **done**. Phase 05 (hardening) is
 next.
 
+Phase 06 (decorrelation fields: every method's velocity field and every
+pixel's average, computed in batch from a `fusion_scripts` API) is planned in
+`docs/PHASE_06_DECORRELATION.md`, as jobs for an orchestrator. Read it before
+touching `pixel_averages`, `method_fields`, `blob_parameters`, `dead_pixels`,
+the Fields page or `precompute --workers`. Its dead-pixel view is built but not
+yet deployed (job JD).
+
 `docs/PLAN.md` closes phase 03 with the five things that need a physicist
 rather than a model — twelve new scalar names to confirm, and four estimator
 behaviours worth knowing before any of it goes on a multi-shot axis. They
@@ -31,11 +38,12 @@ twelve names and four behaviours decide what people will see there.
 `core/multishot.py` and `core/precompute.py` are in,
 `pages/2_single_shot.py` is a thin dispatcher over the registry,
 `pages/3_multi_shot.py` draws the scalar scatter (its pure logic lives in
-`core/multishot.py`), and `fusion_ui/plots/` holds twelve specs:
+`core/multishot.py`), and `fusion_ui/plots/` holds thirteen specs:
 
 | module | spec | |
 |---|---|---|
 | `raw.py` | `raw_frames` | live: frames, click-a-pixel trace, mp4 export |
+| `dead_pixels.py` | `dead_pixels` | cached, raw files only: the dead-pixel mask preprocessing uses, with every pixel's PDF and spectrum to check it by eye |
 | `probe.py` | `probe_trace` | live: the ragged ASP/FSP trace |
 | `spectra.py` | `taud_psd` | cached: the PSD duration-time fit |
 | `two_dca.py` | `two_dca` | cached: the conditional average — **the base of the phase-03 chain** |
@@ -203,6 +211,7 @@ class PlotSpec:
     requires:    str | None = None        # plot key of an upstream spec
     upstream_params: Callable | None = None   # (params) -> the upstream's params
     description: str = ""
+    preprocessed: bool | None = None      # False raw only, True preprocessed only
 ```
 
 - **`compute is None` means live.** The time-sliced dataset *is* the result:
@@ -230,6 +239,12 @@ class PlotSpec:
   the filesystem.** `core/store.py` does all of that. Keeping them pure is what
   makes them testable and what will let phase 05 move compute into a process
   pool without touching a single spec.
+- **`preprocessed` says which version of a file a spec runs on**: `False` the
+  raw file only, `True` the preprocessed one only, `None` either. The
+  single-shot page offers a spec only on a version it accepts (`registry.
+  for_diagnostic(diagnostic, preprocessed)`), and `precompute` skips the other
+  version. `dead_pixels` is raw-only, because preprocessing interpolates dead
+  pixels away.
 - **Diagnostics are strings** — `"apd"`, `"asp"` — matching `catalog.DIAGNOSTICS`,
   `shots.diagnostic` and `loader.dataset_path`. `experimental_database`'s
   `Diagnostic` enum stays an implementation detail inside `core/loader.py`.

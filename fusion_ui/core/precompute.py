@@ -75,6 +75,8 @@ def targets_for(conn, spec, machine=None, shots=None):
     for row in rows:
         if row["diagnostic"] not in spec.diagnostics:
             continue
+        if not spec.accepts(row["preprocessed"]):
+            continue
         if shots is not None and row["shot"] not in shots:
             continue
         targets.append(

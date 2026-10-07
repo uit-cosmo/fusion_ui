@@ -54,6 +54,16 @@ def test_for_diagnostic_filters_and_keeps_registration_order():
     assert registry.for_diagnostic("nothing") == []
 
 
+def test_for_diagnostic_can_filter_on_the_file_version():
+    registry.register(spec("either", ("apd",)))
+    registry.register(spec("raw_only", ("apd",), preprocessed=False))
+    registry.register(spec("preprocessed_only", ("apd",), preprocessed=True))
+    keys = lambda p: [s.key for s in registry.for_diagnostic("apd", p)]  # noqa: E731
+    assert keys(None) == ["either", "raw_only", "preprocessed_only"]
+    assert keys(False) == ["either", "raw_only"]
+    assert keys(True) == ["either", "preprocessed_only"]
+
+
 def test_compute_decides_whether_a_spec_is_cached():
     assert not spec("live").cached
     assert spec("heavy", compute=lambda ds, p: ds).cached

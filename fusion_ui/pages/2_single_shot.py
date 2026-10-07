@@ -173,13 +173,22 @@ def window_caption(target):
 # ---------------------------------------------------------------------------
 
 
-def pick_spec(diagnostic):
-    specs = registry.for_diagnostic(diagnostic)
+def pick_spec(diagnostic, preprocessed):
+    specs = registry.for_diagnostic(diagnostic, preprocessed)
     if not specs:
-        st.error(f"No plot is registered for diagnostic {diagnostic!r}.", icon="⚠️")
+        kind = "preprocessed" if preprocessed else "raw"
+        st.error(
+            f"No plot is registered for {kind} {diagnostic!r} files.", icon="⚠️"
+        )
         return None
+    # The key is shared with the multi-shot page's click-to-jump, so it stays
+    # per diagnostic. The raw and preprocessed files offer different plots: a
+    # choice the other version does not offer falls back to the first one.
+    key = f"spec.{diagnostic}"
+    if key in st.session_state and st.session_state[key] not in specs:
+        del st.session_state[key]
     spec = st.sidebar.selectbox(
-        "Plot", specs, format_func=lambda s: s.label, key=f"spec.{diagnostic}"
+        "Plot", specs, format_func=lambda s: s.label, key=key
     )
     if spec.description:
         st.sidebar.caption(spec.description)
@@ -244,7 +253,7 @@ def main():
     if target is None:
         return
 
-    spec = pick_spec(target.diagnostic)
+    spec = pick_spec(target.diagnostic, target.preprocessed)
     if spec is None:
         return
 

@@ -10,6 +10,7 @@ from streamlit.testing.v1 import AppTest
 import fusion_ui.plots  # noqa: F401 - registers the specs the page offers
 from fusion_ui import config
 from fusion_ui.core import catalog, db, registry, store
+from fusion_ui.plots import dead_pixels
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 APP = str(REPO_ROOT / "fusion_ui" / "app.py")
@@ -216,6 +217,7 @@ def test_the_plot_picker_offers_only_specs_for_this_diagnostic(single_shot_deplo
     app = AppTest.from_file(SINGLE_SHOT, default_timeout=60).run()
     assert widget(app, "selectbox", "Plot").options == [
         "Frames and pixel trace",
+        "Dead pixels (PDF and spectrum of every pixel)",
         "Duration time (PSD fit)",
         "Blob velocity (TDE, whole record)",
         "Conditional average (2DCA)",
@@ -517,3 +519,20 @@ def test_a_browser_selection_on_the_other_machine_is_honoured(two_machine_deploy
     assert widget(app, "selectbox", "Machine").value == "other"
     assert widget(app, "selectbox", "Shot").value == 5678
     assert widget(app, "selectbox", "Diagnostic").value == "asp"
+
+
+def test_the_dead_pixel_view_draws_its_method_and_grid(single_shot_deployment):
+    """Its render draws into Streamlit itself: the method, a view toggle and one panel per pixel."""
+    app = AppTest.from_file(SINGLE_SHOT, default_timeout=120)
+    app.session_state["spec.apd"] = registry.get("dead_pixels")
+    app.run()
+    widget(app, "button", "Compute").click().run()
+    assert not app.exception
+    assert not app.error
+    assert [e.label for e in app.expander] == ["How dead pixels are found"]
+    assert widget(app, "radio", "Show").options == list(dead_pixels.VIEWS)
+
+    conn = db.connect(single_shot_deployment)
+    names = {r["name"] for r in conn.execute("SELECT name FROM scalars")}
+    conn.close()
+    assert names == {"dead", "psd_ratio", "number_dead"}

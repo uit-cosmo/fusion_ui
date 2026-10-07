@@ -132,10 +132,18 @@ class PlotSpec:
     upstream_params: Optional[Callable] = None
     #: One line under the plot picker.
     description: str = ""
+    #: Which version of a file this accepts: ``False`` the raw file only, ``True``
+    #: the preprocessed one only, ``None`` either. The dead-pixel check needs
+    #: the raw file -- preprocessing interpolates dead pixels away.
+    preprocessed: Optional[bool] = None
 
     @property
     def cached(self):
         return self.compute is not None
+
+    def accepts(self, preprocessed):
+        """Whether this spec runs on the raw (``False``) or preprocessed file."""
+        return self.preprocessed is None or self.preprocessed == bool(preprocessed)
 
 
 REGISTRY = {}
@@ -182,6 +190,12 @@ def get(key):
     return REGISTRY[key]
 
 
-def for_diagnostic(diagnostic):
-    """Every spec that accepts ``diagnostic``, in registration order."""
-    return [s for s in REGISTRY.values() if diagnostic in s.diagnostics]
+def for_diagnostic(diagnostic, preprocessed=None):
+    """Every spec that accepts ``diagnostic``, in registration order; only those
+    that run on that version of the file when ``preprocessed`` is given."""
+    return [
+        s
+        for s in REGISTRY.values()
+        if diagnostic in s.diagnostics
+        and (preprocessed is None or s.accepts(preprocessed))
+    ]

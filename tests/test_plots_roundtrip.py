@@ -12,6 +12,8 @@ per spec: the next spec added gets the check for free, which is the only way a
 guard like this stays true.
 """
 
+import dataclasses
+
 import numpy as np
 import pytest
 import xarray as xr
@@ -24,7 +26,7 @@ CENTRE = 4  # the reference pixel on the 9x9 blob fixture
 #: Specs whose render needs a Streamlit runtime (a slider, a click target) and
 #: so cannot be called from a plain test. The round trip of their *result* is
 #: still checked; only the drawing is skipped.
-DRAWS_INTO_STREAMLIT = {"two_dca", "velocity_field"}
+DRAWS_INTO_STREAMLIT = {"two_dca", "velocity_field", "dead_pixels"}
 
 #: Live specs have no blob to round trip, and the probe specs want an ASP file
 #: rather than the imaging fixture.
@@ -88,6 +90,8 @@ def test_a_stored_result_survives_the_cache_and_still_renders(
     netCDF encoding. That is what the page does on every visit after the first.
     """
     params = at_centre(spec.params())
+    if not spec.accepts(target.preprocessed):
+        target = dataclasses.replace(target, preprocessed=not target.preprocessed)
 
     first, run = store.result(conn, spec, target, params, blobs)
     assert run["status"] == "ok", f"{spec.key}: {run['error']}"

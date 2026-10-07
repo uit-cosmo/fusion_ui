@@ -12,6 +12,7 @@ already be registered, which is checked when the downstream registers.
 from fusion_ui.plots import (  # noqa: F401 - imported to register
     probe,
     raw,
+    dead_pixels,
     spectra,
     velocity_tde,
     two_dca,
@@ -32,6 +33,7 @@ from fusion_ui.plots import (  # noqa: F401 - imported to register
 __all__ = [
     "probe",
     "raw",
+    "dead_pixels",
     "spectra",
     "velocity_tde",
     "two_dca",
