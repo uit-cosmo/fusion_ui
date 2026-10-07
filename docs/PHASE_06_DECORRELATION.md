@@ -16,7 +16,9 @@ Status, 2026-10-07: JD done. The dead-pixel view is deployed and cached for all
 check of the masks, is open. J0 done at 828 files: the user left the `_ca`
 group out of phase 06 (Decisions). J2a merged (e8d87f8): schema v4, `lookup`,
 `stale_runs`, `batch_only`, and `code_version` with all four repositories.
-J1, J2b and J4 are running. Everything else is planned and not started.
+J2b merged (342d57f): `precompute` takes several plots, `--workers`,
+`--run-day`, `--stale` and `--params-json`. J4 is done and back with its agent
+for review fixes. J1 is running. Everything else is planned and not started.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -812,6 +814,37 @@ plus a two-link chain):
 - `--stale` picks only the targets whose input mtime changed;
 - an infrastructure error stays unrecorded;
 - the single-worker output is unchanged.
+
+**Landed 2026-10-07 (342d57f, 465 tests).** What later jobs build on:
+
+- One worker, the default, runs in the CLI's own process and reads the record
+  lazily, as before. Its output is line for line what it was: the orchestrator
+  checked 16 commands against faeaede.
+- Pool workers are spawned and import `precompute.WORKER_MODULES`
+  (`fusion_ui.plots`). They receive each parameter set pickled, so J3's params
+  classes must be importable at module level.
+- `--params-json` takes one of two things, and checks either before the
+  database is opened:
+  - a complete parameter set as `param_sets.params_json` stores it, accepted
+    only when its plot is the only one named;
+  - a partial values tree such as `{"averages": {"window": 30}}`, applied to
+    every plot named and refused unless every path fits every one.
+  
+  `params_ui.from_canonical` and `with_values` are the strict inverses.
+- `--stale` recomputes in place every stale run of the plots named, each with
+  its stored parameters, upstream first. A run whose upstream is stale and not
+  named is skipped, and the line names the command that fixes it. `--stale`
+  does not combine with `--force` or `--retry-failed`. The fix for any stale
+  product of a shot is `precompute pixel_averages method_fields blob_parameters
+  --stale --shot N`.
+- `--nice N` sets the niceness rather than adding to it, so `nice -n 10 …
+  --workers 7` computes at 10. It defaults to 10 when there are several workers.
+- Ctrl-C cancels the targets not yet started and stops running ones outside
+  the store's writes. A second Ctrl-C kills the workers.
+- Exit status is 0 for done, 1 when a worker died or a parameter file did not
+  fit, and 130 when interrupted.
+- Unchanged: a `PermissionError` reading the input file gets the
+  result-cache hint.
 
 ### J3 — The three product specs · Sonnet 5.5 · fusion_ui
 
