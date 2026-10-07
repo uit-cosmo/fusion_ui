@@ -23,6 +23,11 @@ three 2DCA tracks, which each fit a slope through the lags they tracked. The min
 applies to the methods read off the conditional average: the 2DCA maximum and centroid, and the
 TDEs applied to it. The 2DCC is read off the cross-correlation of the whole record and the other
 TDEs off the record, so no number of events cuts them. The interior-only cut applies to every panel.
+
+The paper cuts the other way: one rule for every method, ``reliable()`` of ``apd_check/figures.py``
+(``views.reliable``). With ``Cuts.paper`` set, every panel leaves out the pixels it leaves out and no
+others: a pixel is CUT in each panel where its own method found a number, and is still FAILED in the
+panel whose method found none.
 """
 
 import enum
@@ -30,6 +35,9 @@ from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
+
+from fusion_ui.views import reliable
+from fusion_ui.views.reliable import interior
 
 
 class Status(enum.IntEnum):
@@ -103,13 +111,6 @@ METHODS = (
 METHOD_BY_KEY = {method.key: method for method in METHODS}
 
 
-def interior(shape):
-    """``(y, x)`` bool: True away from the array's border."""
-    mask = np.zeros(shape, dtype=bool)
-    mask[1:-1, 1:-1] = True
-    return mask
-
-
 def _plural(n, word):
     return f"{n:g} {word}" + ("" if n == 1 else "s")
 
@@ -141,7 +142,8 @@ def panel(bundle, method):
     """The :class:`Panel` of ``method`` on ``bundle``'s ``method_fields``, with the view cuts applied.
 
     A variable the product lacks is read as all-NaN, so every pixel of that panel is a failed fit
-    rather than the page failing.
+    rather than the page failing. The cuts are per method, or with ``cuts.paper`` the paper's rule,
+    the same for every method (see the module docstring).
     """
     shape = bundle.shape
     nan = np.full(shape, np.nan)
@@ -160,16 +162,23 @@ def panel(bundle, method):
     finite = np.isfinite(vr) & np.isfinite(vz)
     live = ~dead
     too_few_lags = np.zeros(shape, dtype=bool)
-    if nlags is not None:
-        with np.errstate(invalid="ignore"):
-            too_few_lags = nlags < cuts.min_lags
     too_few_events = np.zeros(shape, dtype=bool)
-    if method.uses_events:
-        with np.errstate(invalid="ignore"):
-            too_few_events = events < cuts.min_events
-    edge = (~interior(shape)) if cuts.interior_only else np.zeros(shape, dtype=bool)
+    edge = np.zeros(shape, dtype=bool)
+    if cuts.paper:
+        kept = reliable.rule(bundle.fields, shape, cuts.min_lags, cuts.min_events)
+        left_out = ~kept.ok
+    else:
+        if nlags is not None:
+            with np.errstate(invalid="ignore"):
+                too_few_lags = nlags < cuts.min_lags
+        if method.uses_events:
+            with np.errstate(invalid="ignore"):
+                too_few_events = events < cuts.min_events
+        if cuts.interior_only:
+            edge = ~interior(shape)
+        left_out = too_few_lags | too_few_events | edge
 
-    cut = live & finite & (too_few_lags | too_few_events | edge)
+    cut = live & finite & left_out
     failed = live & ~finite
 
     status = np.full(shape, Status.OK, dtype=np.int8)
@@ -188,6 +197,9 @@ def panel(bundle, method):
         else:
             reason[y, x] = "no fit: the method returned no estimate"
     for y, x in zip(*np.nonzero(cut)):
+        if cuts.paper:
+            reason[y, x] = kept.reason[y, x]
+            continue
         parts = []
         if too_few_lags[y, x]:
             parts.append(f"{_plural(nlags[y, x], 'lag')} < {cuts.min_lags}")
@@ -208,3 +220,18 @@ def panel(bundle, method):
         cc=cc,
         colour=cc if method.colour == "cc" else events,
     )
+
+
+def describe_cut(cuts):
+    """Which cut is on, in a sentence: the shot-level figure writes it across its top."""
+    if cuts.paper:
+        return (
+            "Cut: the paper's reliable(), the same pixels in every panel: the 2DCA centroid on at least "
+            f"{cuts.min_lags} lags and {cuts.min_events} events, a number from it and from both TDEs, "
+            "away from the border"
+        )
+    text = (
+        f"Cut per method: the 2DCA tracks on at least {cuts.min_lags} lags; the 2DCA max and centroid and "
+        f"the TDEs on the CA on at least {cuts.min_events} events"
+    )
+    return text + ("; interior pixels only" if cuts.interior_only else "")
