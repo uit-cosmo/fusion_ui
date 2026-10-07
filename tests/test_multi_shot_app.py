@@ -361,6 +361,54 @@ def test_a_scalar_without_a_label_keeps_its_stored_name_on_the_axis(deployment):
     assert y_axis_title(app) == "vx_c (mean over pixels)"
 
 
+def test_the_scalar_picker_shows_a_labelled_name_with_its_label_and_stores_the_name(
+    deployment,
+):
+    """``vx_c`` is in the store with no label, and three of the 32 names are beside it."""
+    conn = db.open_db(deployment)
+    Products(conn)
+    conn.close()
+    app = run(MULTI_SHOT)
+    picker = widget(app, "selectbox", "Scalar")
+    assert picker.options == [
+        f"level_com — {scalar_labels.LABELS['level_com']}",
+        "lr — radial FWHM of the conditional average [m]",
+        "vr_com — v_R, 2DCA centroid [m/s]",
+        "vx_c",  # no label: as it is
+    ]
+    assert picker.value == "level_com"  # the stored name, whatever the picker shows
+
+    picker.set_value("vr_com")
+    app.run()
+    assert not app.exception, app.exception
+    assert app.session_state["ms.scalar"] == "vr_com"
+    assert widget(app, "selectbox", "Scalar").value == "vr_com"
+    # What is plotted is the stored scalar: the caption names it, and the axis its label.
+    assert any(c.value.startswith("vr_com · mean over pixels") for c in app.caption)
+    assert y_axis_title(app) == "v_R, 2DCA centroid [m/s] (mean over pixels)"
+
+    picker = widget(app, "selectbox", "Scalar")
+    picker.set_value("vx_c")
+    app.run()
+    assert app.session_state["ms.scalar"] == "vx_c"
+    assert y_axis_title(app) == "vx_c (mean over pixels)"
+
+
+def test_a_stored_name_set_before_the_page_runs_is_still_found_by_the_picker(
+    deployment,
+):
+    """The pickers' state is the raw name, as the tests above and any other page that seeds it set it."""
+    conn = db.open_db(deployment)
+    Products(conn)
+    conn.close()
+    app = AppTest.from_file(MULTI_SHOT, default_timeout=60)
+    app.session_state["ms.scalar"] = "lr"
+    app.run()
+    assert not app.exception, app.exception
+    assert widget(app, "selectbox", "Scalar").value == "lr"
+    assert any(c.value.startswith("lr · mean over pixels") for c in app.caption)
+
+
 # ---------------------------------------------------------------------------
 # A click on a point: the Fields page for the two phase-06 products, the
 # single-shot page for every other source.

@@ -123,6 +123,17 @@ def label(name):
     return name if entry is None else str(entry)
 
 
+def option(name):
+    """What the scalar picker shows for ``name``: ``name — label``, or the raw name when it has no label.
+
+    Only what is shown: the picker still stores the raw name, which is the store's key and what the page
+    reads values by. The name comes first so that the picker can still be searched by it, and the label is
+    the same text the axis shows.
+    """
+    entry = LABELS.get(name)
+    return name if entry is None else f"{name} — {entry}"
+
+
 def axis_title(name, collapse=None):
     """The y-axis title of the multi-shot scatter: the label, then how the pixels were collapsed.
 
@@ -138,6 +149,10 @@ TITLE_WIDTH = 44
 
 _KEPT_WHOLE = re.compile(r"\[[^\]]*\]|\([^)]*\)")
 
+#: The space that keeps a unit or an aggregate on one line: ``textwrap`` breaks only at ASCII whitespace, so
+#: a no-break space is never a place to break. Written as a code point, since the character is invisible.
+_NBSP = chr(0xA0)
+
 
 def wrapped(text, width=TITLE_WIDTH):
     """``text`` broken into lines of at most ``width`` characters, joined with ``<br>`` as Plotly takes them.
@@ -147,8 +162,8 @@ def wrapped(text, width=TITLE_WIDTH):
     brackets and the aggregate in parentheses are never broken in two, since ``[no`` on one line and
     ``unit]`` on the next reads as nothing. A word longer than ``width`` is left whole.
     """
-    glued = _KEPT_WHOLE.sub(lambda m: m.group().replace(" ", " "), text)
+    glued = _KEPT_WHOLE.sub(lambda m: m.group().replace(" ", _NBSP), text)
     lines = textwrap.wrap(
         glued, width=width, break_long_words=False, break_on_hyphens=False
     )
-    return "<br>".join(line.replace(" ", " ") for line in lines)
+    return "<br>".join(line.replace(_NBSP, " ") for line in lines)

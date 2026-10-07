@@ -13,9 +13,9 @@ other blob numbers than the one clicked.
 
 The page owns no analysis of its own: the scalar names come from whatever the
 store already holds -- the ``density_scan`` seed, or results computed through
-the single-shot view or ``fusion-ui precompute``. The y-axis names a scalar by
-what it is when :mod:`fusion_ui.core.scalar_labels` knows it, and by its stored
-name otherwise.
+the single-shot view or ``fusion-ui precompute``. The scalar picker and the
+y-axis name a scalar by what it is when :mod:`fusion_ui.core.scalar_labels`
+knows it, and by its stored name otherwise.
 """
 
 import json
@@ -147,7 +147,10 @@ def main():
     names = multishot.distinct_names(frame)
 
     # ---- sidebar: what to plot -------------------------------------------
-    name = st.sidebar.selectbox("Scalar", names, key="ms.scalar")
+    # Shown as "name — label" where there is a label; the value stays the stored name.
+    name = st.sidebar.selectbox(
+        "Scalar", names, format_func=scalar_labels.option, key="ms.scalar"
+    )
 
     sources = multishot.distinct_sources(frame, name)
     if "ms.source" in st.session_state and st.session_state["ms.source"] not in sources:
