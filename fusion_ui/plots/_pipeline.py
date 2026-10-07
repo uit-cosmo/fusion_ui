@@ -93,16 +93,21 @@ def average_at(bank):
     return lambda x, y: pipeline.at(bank, x, y)
 
 
-def live_scalars(result, names):
-    """``{(x, y, name): value}`` for every name in ``names`` at every live pixel of ``result``.
+def live_scalars(result, scalars):
+    """``{(x, y, name): value}`` at every live pixel of ``result``, one scalar per entry of ``scalars``.
+
+    ``scalars`` maps a scalar's name, as the store records it, to the variable of ``result`` it is read
+    from. Each spec writes the two side by side in its ``SCALARS``, because they are not always the same
+    word: the blob keeps the API's variable names, which the paper's code reads it by, while a scalar takes
+    the name the store already uses for that quantity. The value is the variable's, untouched.
 
     A dead pixel gets no row: it was never computed. A live pixel whose estimate failed gets a NaN, which
     the store writes as NULL, so "tried and failed" stays different from "never tried".
     """
     live_y, live_x = np.nonzero(~np.asarray(result["dead"].values, dtype=bool))
     out = {}
-    for name in names:
-        values = np.asarray(result[name].values, dtype=float)
+    for name, variable in scalars.items():
+        values = np.asarray(result[variable].values, dtype=float)
         for x, y in zip(live_x.tolist(), live_y.tolist()):
             out[(x, y, name)] = float(values[y, x])
     return out
