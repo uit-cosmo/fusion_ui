@@ -1,13 +1,14 @@
 """Smoke tests for the multi-shot page."""
 
 import dataclasses
+import json
 from pathlib import Path
 
 import pytest
 from streamlit.testing.v1 import AppTest
 
 import fusion_ui.plots  # noqa: F401
-from fusion_ui.core import catalog, db, registry, store
+from fusion_ui.core import catalog, db, registry, scalar_labels, store
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MULTI_SHOT = str(REPO_ROOT / "fusion_ui" / "pages" / "3_multi_shot.py")
@@ -168,3 +169,455 @@ def test_a_shot_level_scalar_is_not_labelled_as_a_pixel_collapse(deployment):
     caption = next(c.value for c in app.caption if "shots on" in c.value)
     assert "mean over pixels" not in caption
     assert "one value per shot" in caption
+
+
+# ---------------------------------------------------------------------------
+# The two phase-06 products in the ledger, as a batch leaves them.
+# ---------------------------------------------------------------------------
+
+APP = str(REPO_ROOT / "fusion_ui" / "app.py")
+
+#: The one shot of the conftest tree that has a preprocessed file, which is what the Fields page lists.
+SHOT = 1160616027
+
+#: Each seeded scalar's value at two pixels.
+PIXELS = ((5, 4, 400.0), (6, 4, 380.0))
+
+
+class Products:
+    """``method_fields`` and ``blob_parameters`` runs on SHOT, seeded the way a batch leaves them.
+
+    Under the real parameter classes, so the hashes are the ones the pages work with; there are no blobs,
+    since the click only reads the ledger. Each run writes one scalar at two pixels.
+    """
+
+    def __init__(self, conn):
+        from fusion_ui.views import products as prod
+
+        found, _ = prod.specs(registry)
+        method = found["method_fields"].params()
+        blob = found["blob_parameters"].params()
+
+        def window(params):
+            """The same settings with a 2DCA window of 40 samples: a shot with faster dynamics."""
+            return dataclasses.replace(
+                params, averages=dataclasses.replace(params.averages, window=40)
+            )
+
+        self.params = {
+            "method_fields": {
+                "default": method,
+                "short": window(method),
+                # The TDE only: the blob parameters that go with it are the default's.
+                "tde": dataclasses.replace(
+                    method, tde=dataclasses.replace(method.tde, min_cc=0.4)
+                ),
+            },
+            "blob_parameters": {
+                "default": blob,
+                "short": window(blob),
+                # The ellipse fit's own settings: no velocity setting goes with them.
+                "fit": dataclasses.replace(
+                    blob,
+                    blobs=dataclasses.replace(
+                        blob.blobs,
+                        gauss_fit=dataclasses.replace(
+                            blob.blobs.gauss_fit, size_penalty=3.0
+                        ),
+                    ),
+                ),
+            },
+        }
+        self.hash = {}
+        for plot, names in (
+            ("method_fields", ("vr_com", "level_com")),
+            ("blob_parameters", ("lr",)),
+        ):
+            for key, params in self.params[plot].items():
+                self.hash[plot, key] = self.seed(conn, plot, params, *names)
+
+    @staticmethod
+    def seed(conn, plot, params, *names):
+        target = registry.Target("cmod", SHOT, "apd", True, "", 0.0, 0.0, "none")
+        digest, _ = store.record_params(conn, plot, params)
+        run = store.record_run(
+            conn,
+            target,
+            plot,
+            digest,
+            blob_path=None,
+            status="ok",
+            error=None,
+            seconds=None,
+            code_version="test",
+        )
+        store.write_scalars(
+            conn,
+            run["id"],
+            {(x, y, name): value for name in names for x, y, value in PIXELS},
+        )
+        return digest
+
+    def source(self, plot, key):
+        return (plot, self.hash[plot, key], "apd", 1)
+
+
+@pytest.fixture
+def products(deployment):
+    conn = db.open_db(deployment)
+    try:
+        yield Products(conn)
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# What the y-axis calls a scalar: its label, or its stored name when it has none.
+# ---------------------------------------------------------------------------
+
+
+def y_axis_title(app):
+    (chart,) = app.get("plotly_chart")
+    return json.loads(chart.proto.spec)["layout"]["yaxis"]["title"]["text"]
+
+
+def test_the_axis_title_names_a_labelled_scalar_by_what_it_is(deployment):
+    conn = db.open_db(deployment)
+    Products(conn)
+    conn.close()
+    app = AppTest.from_file(MULTI_SHOT, default_timeout=60)
+    app.session_state["ms.scalar"] = "vr_com"
+    app.run()
+    assert not app.exception, app.exception
+    assert y_axis_title(app) == "v_R, 2DCA centroid [m/s] (mean over pixels)"
+    # The aggregate is still named, and the caption still says which stored scalar it is.
+    app.sidebar.selectbox(key="ms.aggregate").set_value("median")
+    app.run()
+    # One line more than fits is broken at the aggregate, not inside it.
+    assert y_axis_title(app) == "v_R, 2DCA centroid [m/s]<br>(median over pixels)"
+    assert any(c.value.startswith("vr_com · median over pixels") for c in app.caption)
+
+
+def test_a_long_title_is_broken_into_lines_the_axis_has_room_for(deployment):
+    """Plotly draws a rotated title on one line, and cuts it off where the plot ends: this one is 104
+    characters on a plot 520 pixels high. The label is whole, and so is the unit."""
+    conn = db.open_db(deployment)
+    Products(conn)
+    conn.close()
+    app = AppTest.from_file(MULTI_SHOT, default_timeout=60)
+    app.session_state["ms.scalar"] = "level_com"
+    app.run()
+    assert not app.exception, app.exception
+    plain = (
+        "contour level of the 2DCA centroid track, fraction of the average's maximum "
+        "[no unit] (mean over pixels)"
+    )
+    title = y_axis_title(app)
+    assert title == scalar_labels.wrapped(plain)
+    lines = title.split("<br>")
+    assert 2 <= len(lines) <= 3
+    assert all(len(line) <= scalar_labels.TITLE_WIDTH for line in lines)
+    assert " ".join(lines) == plain
+    # The unit and the aggregate are each on one line, never split across two.
+    assert any("[no unit]" in line for line in lines)
+    assert any("(mean over pixels)" in line for line in lines)
+
+
+def test_the_axis_title_of_a_shot_level_labelled_scalar_has_no_collapse(deployment):
+    """``number_events`` is shared with ``two_dca`` and the seed, and one number per shot here."""
+    conn = db.open_db(deployment)
+    for shot in (1160616027, 1110201007):
+        target = registry.Target("cmod", shot, "apd", True, "", 0.0, 0.0, "none")
+        params_hash, _ = store.record_params(conn, "shotlevel", _Params())
+        run = store.record_run(
+            conn,
+            target,
+            "shotlevel",
+            params_hash,
+            blob_path=None,
+            status="ok",
+            error=None,
+            seconds=None,
+            code_version="test",
+        )
+        store.write_scalars(conn, run["id"], {"number_events": 42.0})
+    conn.close()
+    app = AppTest.from_file(MULTI_SHOT, default_timeout=60)
+    app.session_state["ms.scalar"] = "number_events"
+    app.run()
+    assert not app.exception, app.exception
+    assert (
+        y_axis_title(app) == "number of events in the conditional average<br>[no unit]"
+    )
+
+
+def test_a_scalar_without_a_label_keeps_its_stored_name_on_the_axis(deployment):
+    app = run(MULTI_SHOT)
+    assert widget(app, "selectbox", "Scalar").options == ["vx_c"]
+    assert y_axis_title(app) == "vx_c (mean over pixels)"
+
+
+# ---------------------------------------------------------------------------
+# A click on a point: the Fields page for the two phase-06 products, the
+# single-shot page for every other source.
+# ---------------------------------------------------------------------------
+
+
+def click(monkeypatch, shot=SHOT):
+    """AppTest cannot click a Plotly point: the page reads the chart's event through this function."""
+    from fusion_ui.core import decimate
+
+    monkeypatch.setattr(
+        decimate,
+        "selection_points",
+        lambda event: [{"customdata": ["cmod", shot, 0.72, 1.42, 0.55]}],
+    )
+
+
+def open_multi_shot(**state):
+    """The whole multipage app on the multi-shot page, so that a page switch has somewhere to go."""
+    app = AppTest.from_file(APP, default_timeout=60)
+    app.run()
+    assert not app.exception, app.exception
+    for key, value in state.items():
+        app.session_state[key.replace("__", ".")] = value
+    app.switch_page("pages/3_multi_shot.py")
+    app.run()
+    assert not app.exception, [e.value for e in app.exception]
+    return app
+
+
+def sidebar(app, label):
+    matches = [w for w in app.sidebar.selectbox if w.label == label]
+    assert matches, [w.label for w in app.sidebar.selectbox]
+    return matches[0]
+
+
+def titles(app):
+    return [t.value for t in app.title]
+
+
+def fixed_pixel(source, scalar, x=6, y=4):
+    """The sidebar's state for a scatter of ``source`` collapsed to one pixel."""
+    return {
+        "ms__scalar": scalar,
+        "ms__source": source,
+        "ms__aggregate": "pixel",
+        "ms__pixel__x": x,
+        "ms__pixel__y": y,
+    }
+
+
+def ledger_counts(database):
+    conn = db.connect(database)
+    try:
+        return {
+            table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in ("runs", "param_sets", "scalars", "presets")
+        }
+    finally:
+        conn.close()
+
+
+SELECTION = {
+    "machine": "cmod",
+    "shot": SHOT,
+    "diagnostic": "apd",
+    "preprocessed": True,
+}
+
+
+def test_a_point_nobody_clicked_stays_on_the_multi_shot_page(deployment, products):
+    app = open_multi_shot(
+        **fixed_pixel(products.source("method_fields", "short"), "vr_com")
+    )
+    assert titles(app) == ["Multi shot"]
+    assert "fields.open" not in app.session_state
+
+
+def test_a_method_fields_point_opens_the_fields_page_on_its_shot_settings_and_pixel(
+    deployment, products, monkeypatch
+):
+    click(monkeypatch)
+    app = open_multi_shot(
+        **fixed_pixel(products.source("method_fields", "short"), "vr_com")
+    )
+    assert titles(app) == ["Fields"]
+    assert sidebar(app, "Shot").value == SHOT
+    # The point's own parameters, which are not the default's.
+    assert sidebar(app, "Settings").value == products.hash["method_fields", "short"]
+    assert (
+        products.hash["method_fields", "short"]
+        != products.hash["method_fields", "default"]
+    )
+    assert app.session_state["fields.pixel"] == (6, 4)
+    # The other pages follow, and the request was read once: it is not left to be read again.
+    assert app.session_state["selection"] == SELECTION
+    assert "fields.open" not in app.session_state
+
+
+def test_the_pixel_goes_only_with_a_fixed_pixel_aggregate(
+    deployment, products, monkeypatch
+):
+    click(monkeypatch)
+    app = open_multi_shot(
+        ms__scalar="vr_com", ms__source=products.source("method_fields", "short")
+    )
+    assert titles(app) == ["Fields"]
+    assert sidebar(app, "Settings").value == products.hash["method_fields", "short"]
+    assert sidebar(app, "Shot").value == SHOT
+    assert app.session_state["fields.pixel"] is None
+    for how in ("median", "maximum"):
+        app = open_multi_shot(
+            ms__scalar="vr_com",
+            ms__source=products.source("method_fields", "short"),
+            ms__aggregate=how,
+            ms__pixel__x=6,
+            ms__pixel__y=4,
+        )
+        assert titles(app) == ["Fields"]
+        assert app.session_state["fields.pixel"] is None, how
+
+
+@pytest.mark.parametrize("key", ["default", "short"])
+def test_a_blob_parameters_point_opens_on_the_method_fields_settings_that_go_with_it(
+    deployment, products, monkeypatch, key
+):
+    click(monkeypatch)
+    app = open_multi_shot(
+        **fixed_pixel(products.source("blob_parameters", key), "lr", x=5)
+    )
+    assert titles(app) == ["Fields"]
+    # The settings picker is a method_fields hash, and the one that maps to this blob run.
+    assert sidebar(app, "Settings").value == products.hash["method_fields", key]
+    assert sidebar(app, "Shot").value == SHOT
+    assert app.session_state["fields.pixel"] == (5, 4)
+    assert app.session_state["selection"] == SELECTION
+
+
+def test_a_blob_point_that_several_settings_go_with_opens_on_the_one_with_fields_on_the_shot(
+    deployment, products, monkeypatch
+):
+    """The default and the TDE variant give the same blob run; the default has no fields on this shot."""
+    conn = db.open_db(deployment)
+    target = registry.Target("cmod", SHOT, "apd", True, "", 0.0, 0.0, "none")
+    default = store.find_run(
+        conn, target, "method_fields", products.hash["method_fields", "default"]
+    )
+    store.delete_run(conn, default)
+    conn.close()
+
+    click(monkeypatch)
+    app = open_multi_shot(
+        **fixed_pixel(products.source("blob_parameters", "default"), "lr")
+    )
+    assert titles(app) == ["Fields"]
+    assert sidebar(app, "Settings").value == products.hash["method_fields", "tde"]
+    # With every method_fields run there, the default is the one: it comes first in the picker.
+    conn = db.open_db(deployment)
+    Products.seed(
+        conn, "method_fields", products.params["method_fields"]["default"], "vr_com"
+    )
+    conn.close()
+    app = open_multi_shot(
+        **fixed_pixel(products.source("blob_parameters", "default"), "lr")
+    )
+    assert sidebar(app, "Settings").value == products.hash["method_fields", "default"]
+
+
+def test_a_blob_point_with_settings_no_velocity_run_has_still_opens_the_shot_and_the_pixel(
+    deployment, products, monkeypatch
+):
+    """The ellipse fit's own settings are in no method_fields parameter set: nothing goes with it, so the
+    page is opened on the shot and the pixel, and keeps the settings it had."""
+    click(monkeypatch)
+    app = open_multi_shot(
+        fields__settings=products.hash["method_fields", "short"],
+        **fixed_pixel(products.source("blob_parameters", "fit"), "lr"),
+    )
+    assert titles(app) == ["Fields"]
+    assert sidebar(app, "Shot").value == SHOT
+    assert app.session_state["fields.pixel"] == (6, 4)
+    assert sidebar(app, "Settings").value == products.hash["method_fields", "short"]
+    assert app.session_state["selection"] == SELECTION
+    # Nothing remembered: the default, as for any first visit.
+    app = open_multi_shot(
+        **fixed_pixel(products.source("blob_parameters", "fit"), "lr")
+    )
+    assert titles(app) == ["Fields"]
+    assert sidebar(app, "Settings").value == products.hash["method_fields", "default"]
+    assert app.session_state["fields.pixel"] == (6, 4)
+
+
+def test_the_jump_reads_the_ledger_and_writes_nothing(
+    deployment, products, monkeypatch
+):
+    before = ledger_counts(deployment)
+    click(monkeypatch)
+    for plot, key, name in (
+        ("method_fields", "short", "vr_com"),
+        ("blob_parameters", "short", "lr"),
+        ("blob_parameters", "fit", "lr"),
+    ):
+        app = open_multi_shot(**fixed_pixel(products.source(plot, key), name))
+        assert titles(app) == ["Fields"], (plot, key)
+    assert ledger_counts(deployment) == before
+
+
+def test_a_point_from_an_unregistered_source_opens_the_single_shot_page(
+    deployment, monkeypatch
+):
+    """The seed's rows, and any plot this deployment no longer has: the jump is the shot alone."""
+    click(monkeypatch)
+    app = open_multi_shot(ms__scalar="vx_c")
+    assert titles(app) == ["Single shot"]
+    assert app.session_state["selection"] == SELECTION
+    assert "fields.open" not in app.session_state
+
+
+def test_a_point_from_a_registered_source_opens_the_single_shot_page_on_its_plot(
+    deployment, monkeypatch
+):
+    conn = db.open_db(deployment)
+    spec = registry.get("taud_psd")
+    params = spec.params(refx=3, refy=2)
+    target = registry.Target("cmod", SHOT, "apd", True, "", 0.0, 0.0, "none")
+    digest, _ = store.record_params(conn, "taud_psd", params)
+    run = store.record_run(
+        conn,
+        target,
+        "taud_psd",
+        digest,
+        blob_path=None,
+        status="ok",
+        error=None,
+        seconds=None,
+        code_version="test",
+    )
+    store.write_scalars(conn, run["id"], {(3, 2, "taud_psd"): 2e-5})
+    conn.close()
+
+    click(monkeypatch)
+    app = open_multi_shot(ms__scalar="taud_psd")
+    assert titles(app) == ["Single shot"]
+    assert app.session_state["selection"] == SELECTION
+    # The plot that made the point, with the parameters that made it, ready to show from cache.
+    assert app.session_state["spec.apd"].key == "taud_psd"
+    assert app.session_state["params.taud_psd.refx"] == 3
+    assert app.session_state["params.taud_psd.refy"] == 2
+    assert "fields.open" not in app.session_state
+
+
+def test_a_product_point_falls_back_to_the_single_shot_page_without_a_fields_page(
+    deployment, products, monkeypatch
+):
+    """A deployment that has not registered method_fields has nothing for the Fields page to read."""
+    from fusion_ui.core import registry as registry_module
+
+    click(monkeypatch)
+    monkeypatch.delitem(registry_module.REGISTRY, "method_fields")
+    app = open_multi_shot(
+        **fixed_pixel(products.source("method_fields", "short"), "vr_com")
+    )
+    assert titles(app) == ["Single shot"]
+    assert "fields.open" not in app.session_state

@@ -4,11 +4,15 @@ Reads the scalar store (:func:`fusion_ui.core.store.scalar_frame`) and the shot
 catalog's metadata, collapses per-pixel scalars to one number per shot, and
 draws the scatter coloured by confinement mode. Clicking a point jumps to that
 shot's single-shot view with the parameters that produced it, so an outlier is
-one click from being explained.
+one click from being explained. A point from ``method_fields`` or
+``blob_parameters`` opens the Fields page instead (:mod:`fusion_ui.jump`): on
+that shot and settings, and on the pixel when the aggregate is a fixed pixel.
 
 The page owns no analysis of its own: the scalar names come from whatever the
 store already holds -- the ``density_scan`` seed, or results computed through
-the single-shot view or ``fusion-ui precompute``.
+the single-shot view or ``fusion-ui precompute``. The y-axis names a scalar by
+what it is when :mod:`fusion_ui.core.scalar_labels` knows it, and by its stored
+name otherwise.
 """
 
 import json
@@ -18,8 +22,16 @@ import plotly.express as px
 import streamlit as st
 
 import fusion_ui.plots  # noqa: F401 - importing the package registers every spec
-from fusion_ui import config, ui
-from fusion_ui.core import decimate, multishot, params_ui, registry, store
+from fusion_ui import config, jump, ui
+from fusion_ui.core import (
+    decimate,
+    multishot,
+    params_ui,
+    registry,
+    scalar_labels,
+    store,
+)
+from fusion_ui.views import products as prod
 
 st.set_page_config(page_title="Multi shot · Shot Explorer", layout="wide")
 
@@ -40,12 +52,7 @@ def jump_to_single_shot(conn, machine, shot, source):
     have no spec to restore, so the jump is just the shot.
     """
     plot, params_hash, diagnostic, preprocessed = source
-    st.session_state["selection"] = {
-        "machine": machine,
-        "shot": shot,
-        "diagnostic": diagnostic,
-        "preprocessed": bool(preprocessed),
-    }
+    st.session_state["selection"] = jump.selection(machine, shot, source)
 
     if plot in registry.REGISTRY:
         spec = registry.get(plot)
@@ -59,6 +66,39 @@ def jump_to_single_shot(conn, machine, shot, source):
         st.session_state[f"ready.{spec.key}.{target_key}"] = True
 
     st.switch_page("pages/2_single_shot.py")
+
+
+def jump_to_fields(conn, machine, shot, source, how, pixel):
+    """Open the Fields page on the shot, the settings and, for a fixed pixel, the pixel.
+
+    The selection is set as for any jump, so that the other pages follow, and
+    the Fields page reads ``fields.open`` once (its ``apply_request``). Its
+    settings are ``method_fields`` parameter sets, so a ``blob_parameters``
+    point is matched to the ones that go with it
+    (:func:`fusion_ui.jump.settings_for`). The ledger is read here for that,
+    and nothing is written.
+    """
+    plot, params_hash, _, _ = source
+    st.session_state["selection"] = jump.selection(machine, shot, source)
+    found, _ = prod.specs(registry)
+    options = prod.settings(conn, found["method_fields"], machine)
+    good = {o.hash for o in options if shot in prod.good_shots(conn, machine, o.hash)}
+    settings = jump.settings_for(plot, params_hash, found, options, good)
+    st.session_state["fields.open"] = jump.fields_request(shot, settings, how, pixel)
+    st.switch_page("pages/5_fields.py")
+
+
+def jump_to_point(conn, machine, shot, source, how, pixel):
+    """Open what a clicked point came from.
+
+    The Fields page for the two phase-06 products, the single-shot page for
+    every other source. A deployment without ``method_fields`` has no Fields
+    page to open, so those points go to the single-shot page too.
+    """
+    if jump.opens_fields(source[0]) and "method_fields" in registry.REGISTRY:
+        jump_to_fields(conn, machine, shot, source, how, pixel)
+    else:
+        jump_to_single_shot(conn, machine, shot, source)
 
 
 def main():
@@ -204,7 +244,7 @@ def main():
         },
         labels={
             "_x": x_label,
-            "value": f"{name} ({collapse})" if collapse else name,
+            "value": scalar_labels.wrapped(scalar_labels.axis_title(name, collapse)),
             "_mode": "confinement mode",
         },
     )
@@ -222,7 +262,7 @@ def main():
         clicked = multishot.clicked_shot(point)
         if clicked is not None:
             machine, shot = clicked
-            jump_to_single_shot(conn, machine, shot, source)
+            jump_to_point(conn, machine, shot, source, how, pixel)
             break
 
 
