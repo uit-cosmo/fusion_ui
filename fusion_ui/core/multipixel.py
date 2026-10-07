@@ -79,9 +79,14 @@ def supported(spec) -> bool:
     already-open dataset). Correctly excludes ``probe_trace`` (live, no
     overlay) and ``velocity_field`` (deliberately no ``refx``/``refy`` -- it
     sweeps every pixel internally, so there is nothing to stamp).
+
+    Never true for a spec with a batch-only link in its chain: N pixel runs
+    could each have to start that batch compute, which a page must never do.
     """
     if not spec.cached:
         return spec.overlay is not None
+    if any(link.batch_only for link in _chain(spec)):
+        return False
     return _tree_has_pixel_pair(spec.params)
 
 
@@ -160,10 +165,7 @@ def median_seconds(conn, plot) -> Optional[float]:
 
 def _chain(spec):
     """``[spec, its upstream, …]`` down the ``requires`` links."""
-    chain = [spec]
-    while chain[-1].requires is not None:
-        chain.append(registry.get(chain[-1].requires))
-    return chain
+    return registry.chain(spec)
 
 
 def _hashes_along_chain(chain, params):

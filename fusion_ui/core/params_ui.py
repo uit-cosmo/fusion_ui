@@ -578,6 +578,9 @@ def panel(spec, target, ds=None, container=None):
     four-minute analysis. ``ready`` is ``False`` until it has been pressed for
     this target; the parameters themselves persist across targets, so moving to
     the next shot is one click rather than a re-entry of every value.
+
+    A batch-only spec is never computed from a page, so its button reads
+    **Show**: it only commits the form, and the page looks the result up.
     """
     import streamlit as st
 
@@ -599,6 +602,7 @@ def panel(spec, target, ds=None, container=None):
     # outside the form).
     with container.form(f"form.{spec.key}"):
         params = form(spec.params, key_prefix, container=st, spec=spec, ds=ds)
-        if st.form_submit_button("Compute", use_container_width=True):
+        label = "Show" if spec.batch_only else "Compute"
+        if st.form_submit_button(label, use_container_width=True):
             st.session_state[ready_key] = True
     return params, bool(st.session_state.get(ready_key))

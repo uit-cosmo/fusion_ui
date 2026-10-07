@@ -10,15 +10,30 @@ What the page does own is the chrome every plot should have and none should
 have to write: the time-window caption, the figure container, the error surface
 for a failed run, and the provenance line -- because a result computed by last
 month's ``imaging_methods`` is the trap that makes people distrust the tool.
+
+One rule it enforces for every spec: nothing batch only is ever computed here.
+A batch-only spec is looked up and shown, or the command that fills it is; a
+spec built on one is computed only once every batch-only link beneath it is
+cached. Everything this page computes runs inside the process that serves the
+whole group.
 """
 
 import os
+from datetime import datetime
 
 import streamlit as st
 
 import fusion_ui.plots  # noqa: F401 - importing the package registers every spec
 from fusion_ui import ui
-from fusion_ui.core import catalog, loader, multipixel, params_ui, registry, store
+from fusion_ui.core import (
+    catalog,
+    loader,
+    multipixel,
+    params_ui,
+    precompute,
+    registry,
+    store,
+)
 
 st.set_page_config(page_title="Single shot · Shot Explorer", layout="wide")
 
@@ -195,23 +210,39 @@ def pick_spec(diagnostic, preprocessed):
     return spec
 
 
-def provenance(run, conn):
+def when(created_at):
+    """A ledger timestamp to the second: microseconds are kept for ordering runs
+    against each other, not for reading."""
+    try:
+        return datetime.fromisoformat(created_at).isoformat(timespec="seconds")
+    except (TypeError, ValueError):
+        return created_at
+
+
+def provenance(run, conn, spec, target, params):
     """What produced this figure, and the button to do it again.
 
     ``code_version`` is stored but deliberately not part of the cache key --
     hashing it would invalidate every result on every commit. Showing it, and
     offering Recompute next to it, leaves the judgement with the person looking
-    at the plot.
+    at the plot. A batch-only result gets the command instead of the button:
+    Recompute would delete a result this page cannot compute again.
     """
     if run is None:
         return
     left, right = st.columns([5, 1])
     elapsed = f" in {run['seconds']:.1f} s" if run["seconds"] is not None else ""
     left.caption(
-        f"Computed {run['created_at']}{elapsed} · "
+        f"Computed {when(run['created_at'])}{elapsed} · "
         f"{run['code_version'] or 'version unknown'} · "
         f"params `{run['params_hash'][:12]}`"
     )
+    if spec.batch_only:
+        left.caption(
+            "Computed in batch only. To compute it again, run "
+            f"`{precompute.command(spec, target, params, '--force')}`."
+        )
+        return
     if right.button("Recompute", key=f"recompute.{run['id']}"):
         store.delete_run(conn, run)
         st.rerun()
@@ -220,12 +251,69 @@ def provenance(run, conn):
 def show_failure(run, conn):
     st.error(run["error"], icon="⚠️")
     st.caption(
-        f"Failed {run['created_at']} · {run['code_version'] or 'version unknown'}. "
+        f"Failed {when(run['created_at'])} · "
+        f"{run['code_version'] or 'version unknown'}. "
         "The failure is recorded, so this will not retry on its own."
     )
     if st.button("Retry", key=f"retry.{run['id']}"):
         store.delete_run(conn, run)
         st.rerun()
+
+
+def show_batch_missing(missing, target):
+    """The command that fills each batch-only result this view lacks.
+
+    ``missing`` is ``[(spec, params, run), …]`` as
+    :func:`fusion_ui.core.store.missing_batch_upstreams` returns it. Nothing is
+    computed here: a batch-only analysis takes most of an hour on one core, and
+    this page runs inside the process that serves everyone.
+    """
+    for link, link_params, run in missing:
+        if run is not None and run["status"] == "failed":
+            st.error(f"{link.label} failed in batch: {run['error']}", icon="⚠️")
+            flags = ("--retry-failed",)
+        else:
+            st.warning(
+                f"{link.label} is computed in batch only, and is not cached for "
+                f"{target.label} with these parameters. Nothing is computed "
+                "here; fill it from the command line on the server:",
+                icon="⏳",
+            )
+            # An `ok` row whose blob cannot be read is skipped as cached by a
+            # plain precompute; only --force replaces it.
+            flags = ("--force",) if run is not None else ()
+        st.code(precompute.command(link, target, link_params, *flags), language="bash")
+        if not precompute.is_default(link, link_params):
+            st.caption(f"with these parameters saved as `{precompute.PARAMS_FILE}`:")
+            st.code(params_ui.hash_params(link.key, link_params)[1], language="json")
+
+
+def draw(spec, result, params, target):
+    """Render ``result``; ``False`` when the render itself failed."""
+    try:
+        figure = spec.render(result, params, target)
+    except Exception as error:  # noqa: BLE001 - a plot bug must not kill the page
+        st.error(f"{type(error).__name__}: {error}", icon="⚠️")
+        st.caption(f"Rendering {spec.label.lower()} failed.")
+        return False
+    if figure is not None:
+        st.plotly_chart(figure, use_container_width=True)
+    return True
+
+
+def show_batch_only(conn, spec, target, params):
+    """A batch-only spec: its stored result, or the command that fills it.
+
+    Read with :func:`fusion_ui.core.store.lookup`, which never computes, so
+    there is no Compute to wait for: the form's Show button only commits new
+    parameters.
+    """
+    result, run = store.lookup(conn, spec, target, params)
+    if result is None:
+        show_batch_missing([(spec, params, run)], target)
+        return
+    if draw(spec, result, params, target):
+        provenance(run, conn, spec, target, params)
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +361,19 @@ def main():
         return
 
     params, ready = params_ui.panel(spec, target, ds=ds)
+    conn = ui.get_connection()
+
+    if spec.batch_only:
+        show_batch_only(conn, spec, target, params)
+        return
+
+    # Built on a batch-only result that is not cached: say what to run rather
+    # than offer a Compute that would have to start it in this process.
+    missing = store.missing_batch_upstreams(conn, spec, target, params)
+    if missing:
+        show_batch_missing(missing, target)
+        return
+
     if not ready:
         st.info(
             f"Press **Compute** in the sidebar to run {spec.label.lower()} on "
@@ -281,10 +382,16 @@ def main():
         )
         return
 
-    conn = ui.get_connection()
     try:
         with st.spinner(f"Computing {spec.label.lower()}…" if spec.cached else ""):
             result, run = store.result(conn, spec, target, params, ds)
+    except store.BatchOnlyError as error:
+        # The check above passed, but a batch-only link went missing since (a
+        # `--force` deleting it) or its blob would not load: the store refused.
+        digest, _ = params_ui.hash_params(error.spec.key, error.params)
+        row = store.find_run(conn, target, error.spec.key, digest)
+        show_batch_missing([(error.spec, error.params, row)], target)
+        return
     except Exception as error:  # noqa: BLE001 - never show a traceback for a plot
         st.error(f"{type(error).__name__}: {error}", icon="⚠️")
         st.caption(
@@ -297,15 +404,8 @@ def main():
         show_failure(run, conn)
         return
 
-    try:
-        figure = spec.render(result, params, target)
-    except Exception as error:  # noqa: BLE001 - a plot bug must not kill the page
-        st.error(f"{type(error).__name__}: {error}", icon="⚠️")
-        st.caption(f"Rendering {spec.label.lower()} failed.")
-        return
-    if figure is not None:
-        st.plotly_chart(figure, use_container_width=True)
-    provenance(run, conn)
+    if draw(spec, result, params, target):
+        provenance(run, conn, spec, target, params)
 
 
 main()

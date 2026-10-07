@@ -28,6 +28,18 @@ downstream result is actually missing -- a cache hit on the derived quantity
 must not pay for its upstream. Each link in the chain keeps its own ledger row,
 so the 2DCA average that four different plots are built on is computed and
 stored exactly once.
+
+**A batch-only spec is computed by batch jobs alone.** :func:`result` and
+:func:`compute_and_store` raise :class:`BatchOnlyError` rather than compute one
+unless the caller passes ``batch=True``, which only ``fusion-ui precompute``
+does -- including when the batch-only spec is an upstream reached through a
+chain. A page reads such results with :func:`lookup`, and asks
+:func:`missing_batch_upstreams` before computing anything built on one.
+
+**A result records what it was computed from** (schema v4): the input file's
+mtime as the index recorded it, and the upstream run it was built on. Neither
+is in the cache key. :func:`stale_runs` compares them with the index and the
+ledger as they are now.
 """
 
 import math
@@ -35,12 +47,13 @@ import os
 import tempfile
 import time
 from datetime import datetime, timezone
+from functools import lru_cache
 
 import pandas as pd
 import xarray as xr
 
 from fusion_ui import config
-from fusion_ui.core import params_ui, shared
+from fusion_ui.core import params_ui, shared, versions
 
 #: Sentinel for a scalar that belongs to the shot rather than to one pixel.
 #: Not NULL: SQLite permits NULLs in a non-INTEGER primary key, which would
@@ -49,21 +62,24 @@ SHOT_LEVEL = -1
 
 
 def _now():
-    # Same format as catalog uses for shots.mtime.
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # ISO 8601 in UTC, as catalog writes shots.mtime, but to the microsecond:
+    # stale_runs orders a run against its upstream by created_at, and an
+    # upstream recomputed within the same second as its downstream was
+    # written would otherwise not read as newer.
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
+@lru_cache(maxsize=None)
 def _code_version():
-    """``git describe`` for this app and imaging_methods, or ``None``.
+    """Each repository's commit as one string, or ``None``.
 
-    Imported lazily and defensively: this module is used from the CLI as well
-    as from a page, and a missing git checkout must not stop a result being
-    stored.
+    Read once per process: the code a process runs is the code it imported,
+    and a long batch must not run git again for every target. Defensive,
+    because a missing checkout must not stop a result being stored. See
+    :mod:`fusion_ui.core.versions`.
     """
     try:
-        from fusion_ui import ui
-
-        return " ".join(f"{k}={v}" for k, v in sorted(ui.code_version().items()))
+        return versions.as_text(versions.code_version())
     except Exception:  # noqa: BLE001 - provenance is nice to have, not required
         return None
 
@@ -129,12 +145,30 @@ def find_run(conn, target, plot, params_hash):
     ).fetchone()
 
 
+def input_mtime(conn, target):
+    """The input file's mtime as the index (``shots.mtime``) records it, or ``None``.
+
+    What a run stores in ``runs.input_mtime``: the same string, so that
+    :func:`stale_runs` can tell a rescan that saw the file rewritten by
+    comparing the two directly. ``None`` for a target that is not indexed.
+    """
+    row = conn.execute(
+        "SELECT mtime FROM shots WHERE machine = ? AND shot = ? AND diagnostic = ?"
+        "   AND preprocessed = ?",
+        (target.machine, target.shot, target.diagnostic, int(target.preprocessed)),
+    ).fetchone()
+    return None if row is None else row["mtime"]
+
+
 def record_run(conn, target, plot, params_hash, **columns):
     """Write the run row and return it, replacing any earlier attempt.
 
     An earlier attempt is genuinely superseded -- a failure that now succeeds,
     or a recompute under a newer ``code_version`` -- so the row is updated in
-    place and its scalars are cleared rather than accumulating.
+    place (keeping its ``id``) and its scalars are cleared rather than
+    accumulating. ``input_mtime`` and ``upstream_run_id`` are written on every
+    call, as ``NULL`` unless given, so an update in place never keeps the
+    previous attempt's provenance.
     """
     fields = {
         "machine": target.machine,
@@ -146,6 +180,8 @@ def record_run(conn, target, plot, params_hash, **columns):
         "plot": plot,
         "params_hash": params_hash,
         "created_at": _now(),
+        "input_mtime": None,
+        "upstream_run_id": None,
         **columns,
     }
     names = list(fields)
@@ -171,6 +207,10 @@ def delete_run(conn, run):
     (permissions, concurrent delete): a leftover blob under a hash path is
     overwritten on the next compute, but a leftover row would short-circuit
     ``result()`` back to the stale result forever.
+
+    Runs built on this one keep their results but lose their link to it
+    (``upstream_run_id`` is set NULL by the foreign key), which is what
+    :func:`stale_runs` reports them by.
     """
     path = run["blob_path"]
     if path:
@@ -329,7 +369,30 @@ def _write_blob(result, path, plot, params_hash, text, code_version, created_at)
 # ---------------------------------------------------------------------------
 
 
-def _fail(conn, target, spec, params_hash, message, seconds, code_version):
+class BatchOnlyError(RuntimeError):
+    """A batch-only spec is missing, and the caller is not a batch job.
+
+    Raised by :func:`compute_and_store` before it records a run, whether the
+    batch-only spec was asked for directly or is an upstream reached through a
+    chain, so ``runs`` gains no row for either: the analysis did not fail, it
+    was not run. ``spec`` and ``params`` name the batch-only link. A page
+    catches this and shows the command that fills the cache instead.
+    """
+
+    def __init__(self, spec, target, params):
+        self.spec = spec
+        self.target = target
+        self.params = params
+        super().__init__(
+            f"{spec.label} ({spec.key!r}) is computed in batch only, by"
+            f" `fusion-ui precompute {spec.key}`, and is not cached for"
+            f" {target.label} with these parameters"
+        )
+
+
+def _fail(
+    conn, target, spec, params_hash, message, seconds, code_version, **provenance
+):
     return None, record_run(
         conn,
         target,
@@ -340,19 +403,34 @@ def _fail(conn, target, spec, params_hash, message, seconds, code_version):
         error=message,
         seconds=seconds,
         code_version=code_version,
+        **provenance,
     )
 
 
-def compute_and_store(conn, spec, target, params, ds):
+def compute_and_store(conn, spec, target, params, ds, batch=False):
     """Run ``spec.compute``, store what it produced, return ``(result, run)``.
 
     On failure the exception is recorded and ``(None, run)`` comes back with
     ``run["status"] == "failed"``.
+
+    ``batch=True`` says the caller is a batch job (``fusion-ui precompute``),
+    the only thing allowed to compute a batch-only spec: otherwise a batch-only
+    ``spec``, or a batch-only upstream that has to be computed, raises
+    :class:`BatchOnlyError` before any run is recorded.
+
+    The row records what the result was computed from: ``input_mtime``, the
+    input file's mtime as the index has it now, and ``upstream_run_id``, the
+    run its upstream result came from -- also on a failure, so that retrying a
+    failed upstream marks the downstream failure stale too.
     """
     from fusion_ui.core import registry
 
+    if spec.batch_only and not batch:
+        raise BatchOnlyError(spec, target, params)
+
     params_hash, text = record_params(conn, spec.key, params)
     code_version = _code_version()
+    provenance = {"input_mtime": input_mtime(conn, target), "upstream_run_id": None}
 
     # An upstream is resolved before the clock starts, so ``seconds`` measures
     # this analysis and not the one it was waiting on -- each has its own row.
@@ -364,7 +442,10 @@ def compute_and_store(conn, spec, target, params, ds):
             target,
             spec.upstream_params(params),
             ds,
+            batch=batch,
         )
+        if upstream_run is not None:
+            provenance["upstream_run_id"] = upstream_run["id"]
         if upstream is None:
             reason = (
                 upstream_run["error"]
@@ -379,6 +460,7 @@ def compute_and_store(conn, spec, target, params, ds):
                 f"upstream {spec.requires!r} did not produce a result: {reason}",
                 None,
                 code_version,
+                **provenance,
             )
         arguments = (ds, params, upstream)
 
@@ -394,6 +476,7 @@ def compute_and_store(conn, spec, target, params, ds):
             f"{type(error).__name__}: {error}",
             time.perf_counter() - started,
             code_version,
+            **provenance,
         )
 
     created_at = _now()
@@ -418,6 +501,7 @@ def compute_and_store(conn, spec, target, params, ds):
             seconds=time.perf_counter() - started,
             code_version=code_version,
             created_at=created_at,
+            **provenance,
         )
         if spec.scalars is not None:
             write_scalars(conn, run["id"], spec.scalars(result_ds))
@@ -440,17 +524,20 @@ def compute_and_store(conn, spec, target, params, ds):
             f"{type(error).__name__}: {error}",
             time.perf_counter() - started,
             code_version,
+            **provenance,
         )
     return result_ds, run
 
 
-def result(conn, spec, target, params, ds):
+def result(conn, spec, target, params, ds, batch=False):
     """``(result, run)`` for one spec on one target -- the single entry point.
 
     A live spec (``compute is None``) gets its time-sliced input straight back
     and has no run row. A cached spec is looked up first, computed only if the
     ledger has nothing usable, and a recorded failure is returned as-is for the
-    page to surface.
+    page to surface. A batch-only spec, or one whose chain reaches a missing
+    batch-only link, is computed only with ``batch=True``; otherwise a miss
+    raises :class:`BatchOnlyError` (see :func:`compute_and_store`).
     """
     if spec.compute is None:
         return ds, None
@@ -465,4 +552,219 @@ def result(conn, spec, target, params, ds):
             return stored, run
         # The row survived but the blob did not -- someone cleared the cache
         # directory. Fall through and recompute rather than reporting nothing.
-    return compute_and_store(conn, spec, target, params, ds)
+    return compute_and_store(conn, spec, target, params, ds, batch=batch)
+
+
+# ---------------------------------------------------------------------------
+# Reading without computing
+# ---------------------------------------------------------------------------
+
+
+def lookup(conn, spec, target, params):
+    """``(result, run)`` from the ledger alone, for a page that must not compute.
+
+    Never computes, never resolves an upstream, and writes nothing -- not even
+    the ``param_sets`` row :func:`result` records.
+
+    - ``(None, None)``: nothing is stored for these parameters on this target.
+    - ``(None, run)``: a recorded failure (``run["status"] == "failed"``), or
+      an ``ok`` row whose blob is gone or unreadable, which a compute would
+      replace.
+    - ``(result, run)``: the stored result, loaded into memory.
+
+    A live spec stores nothing, so asking for one is a ``ValueError``.
+    """
+    if not spec.cached:
+        raise ValueError(f"{spec.key!r} is a live spec: nothing is stored for it")
+    params_hash, _ = params_ui.hash_params(spec.key, params)
+    run = find_run(conn, target, spec.key, params_hash)
+    if run is None or run["status"] != "ok":
+        return None, run
+    return load_result(conn, run), run
+
+
+def _blob_on_disk(run):
+    return (
+        run is not None
+        and run["status"] == "ok"
+        and bool(run["blob_path"])
+        and os.path.exists(run["blob_path"])
+    )
+
+
+def missing_batch_upstreams(conn, spec, target, params):
+    """The batch-only links in ``spec``'s chain that a compute here would need.
+
+    ``[(link, link_params, run), …]``, from ``spec`` itself down its
+    ``requires`` chain, with each link's parameters lifted out of the one above
+    it as the store lifts them. ``run`` is the link's ledger row: ``None`` when
+    nothing is stored, a ``failed`` row, or an ``ok`` row whose blob has gone.
+
+    The walk follows :func:`result`: a link whose result is cached ends it,
+    because nothing beneath a cache hit is resolved, and so does a recorded
+    failure, which is handed back as it is. Every batch-only link before that
+    point is listed. ``[]`` therefore means :func:`result` can resolve ``spec``
+    without starting a batch-only compute, which is when a page may compute a
+    derived spec inline. A failed batch-only link is listed too: only the
+    command line can retry it.
+
+    Reads the ledger and checks that blobs exist, but opens none: a page asks
+    this on every rerun. A blob that exists but cannot be read is caught later,
+    by :class:`BatchOnlyError`.
+    """
+    from fusion_ui.core import registry
+
+    links = registry.chain(spec)
+    if not any(link.batch_only for link in links):
+        return []
+    missing = []
+    current = params
+    for index, link in enumerate(links):
+        if index:
+            current = links[index - 1].upstream_params(current)
+        params_hash, _ = params_ui.hash_params(link.key, current)
+        run = find_run(conn, target, link.key, params_hash)
+        failed = run is not None and run["status"] == "failed"
+        if not failed and _blob_on_disk(run):
+            break
+        if link.batch_only:
+            missing.append((link, current, run))
+        if failed:
+            break
+    return missing
+
+
+# ---------------------------------------------------------------------------
+# Staleness
+# ---------------------------------------------------------------------------
+
+#: The input file's mtime in the index differs from the one the run recorded:
+#: a rescan saw the file rewritten (re-preprocessed, a corrected mask).
+STALE_INPUT = "input changed"
+#: The run's upstream row was deleted (Recompute, ``--force``, a retried
+#: failure); whatever replaced it is not what this result was built on.
+STALE_UPSTREAM_DELETED = "upstream deleted"
+#: The upstream row was written after this one: recomputed in place.
+STALE_UPSTREAM_RECOMPUTED = "upstream recomputed"
+#: Nothing about this run itself, but the run it was built on is stale.
+STALE_UPSTREAM_STALE = "upstream stale"
+
+_STALE_QUERY = """
+SELECT r.*, s.mtime AS index_mtime
+  FROM runs r
+  LEFT JOIN shots s
+    ON s.machine = r.machine AND s.shot = r.shot
+   AND s.diagnostic = r.diagnostic AND s.preprocessed = r.preprocessed
+ ORDER BY r.id
+"""
+
+
+def _instant(text):
+    """``created_at`` as an aware datetime (UTC when it says nothing), or ``None``."""
+    try:
+        moment = datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def _chained(plot):
+    """Whether runs of ``plot`` are always written with an upstream link."""
+    from fusion_ui.core import registry
+
+    spec = registry.REGISTRY.get(plot)
+    if spec is None or spec.requires is None:
+        return False
+    upstream = registry.REGISTRY.get(spec.requires)
+    return upstream is not None and upstream.cached
+
+
+def _judged(run):
+    """Whether staleness can be told for ``run`` at all.
+
+    Only when it recorded its input (``input_mtime``) and that input is still
+    in the index. A run written before schema v4, or for a target the index did
+    not hold, says nothing of what it was computed from; a run whose input has
+    left the index could not be recomputed.
+    """
+    return run["input_mtime"] is not None and run["index_mtime"] is not None
+
+
+def _own_staleness(run, rows):
+    """Why a judged ``run`` itself is stale, or ``None`` (see :func:`_judged`)."""
+    if run["index_mtime"] != run["input_mtime"]:
+        return STALE_INPUT
+    upstream_id = run["upstream_run_id"]
+    if upstream_id is None:
+        # The store links every chained run when it writes it, so a missing
+        # link on a v4 row means the upstream row was deleted since.
+        return STALE_UPSTREAM_DELETED if _chained(run["plot"]) else None
+    upstream = rows.get(upstream_id)
+    if upstream is None:
+        # A dangling link: the upstream was deleted by a connection that had
+        # foreign keys off, so SET NULL never fired.
+        return STALE_UPSTREAM_DELETED
+    mine, theirs = _instant(run["created_at"]), _instant(upstream["created_at"])
+    if mine is not None and theirs is not None and theirs > mine:
+        return STALE_UPSTREAM_RECOMPUTED
+    return None
+
+
+def stale_runs(conn, plot=None):
+    """Every run whose stored result a recompute might no longer reproduce.
+
+    ``[dict(run, stale=reason), …]`` in ``id`` order, of any status: a failure
+    on an input that has since changed may now succeed. ``plot`` restricts the
+    list to one plot's runs; the rules still follow their chains through every
+    other plot. ``reason`` is one of
+
+    - :data:`STALE_INPUT`: ``runs.input_mtime`` differs from ``shots.mtime``;
+    - :data:`STALE_UPSTREAM_DELETED`: the upstream link is NULL (or dangling)
+      on a run of a chained spec;
+    - :data:`STALE_UPSTREAM_RECOMPUTED`: the upstream row's ``created_at`` is
+      later than this row's;
+    - :data:`STALE_UPSTREAM_STALE`: none of those, but the upstream run is
+      stale itself, by any rule -- so a stale 2DCA average marks every result
+      built on it, however far down the chain.
+
+    Only a run whose input is recorded and indexed is judged. Every other run
+    is never listed, by any rule: one with no ``input_mtime`` -- written before
+    schema v4, or for a target the index did not hold -- is unknown, so legacy
+    results are not recomputed wholesale; one whose input file has left the
+    index could not be recomputed. Neither is stale itself, so neither passes
+    staleness on: a judged run built on one is judged by its own link alone
+    (deleted, or recomputed in place). A run and its upstream share a target,
+    and so a shots row, so a link never joins a judged run to one whose input
+    has left the index; it can join one to an unknown upstream, such as a run
+    written before v4.
+
+    Whether a plot is chained is read from the registry, so import
+    :mod:`fusion_ui.plots` first, as every entry point does; a plot that is
+    not registered is judged by the other rules.
+    """
+    rows = {row["id"]: dict(row) for row in conn.execute(_STALE_QUERY)}
+    reasons = {}
+
+    def reason(run_id, visiting):
+        if run_id in reasons:
+            return reasons[run_id]
+        run = rows[run_id]
+        found = None
+        if _judged(run):
+            found = _own_staleness(run, rows)
+            upstream_id = run["upstream_run_id"]
+            if found is None and upstream_id in rows and upstream_id not in visiting:
+                if reason(upstream_id, visiting | {run_id}) is not None:
+                    found = STALE_UPSTREAM_STALE
+        reasons[run_id] = found
+        return found
+
+    stale = []
+    for run_id, run in rows.items():
+        why = reason(run_id, frozenset())
+        if why is None or (plot is not None and run["plot"] != plot):
+            continue
+        listed = {k: v for k, v in run.items() if k != "index_mtime"}
+        listed["stale"] = why
+        stale.append(listed)
+    return stale

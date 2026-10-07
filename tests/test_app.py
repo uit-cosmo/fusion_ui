@@ -4,7 +4,9 @@ import dataclasses
 import os
 from pathlib import Path
 
+import numpy as np
 import pytest
+import xarray as xr
 from streamlit.testing.v1 import AppTest
 
 import fusion_ui.plots  # noqa: F401 - registers the specs the page offers
@@ -317,6 +319,237 @@ def test_a_failed_run_is_shown_rather_than_raised(single_shot_deployment, monkey
 
 def _boom(ds, params):
     raise ValueError("deliberate test failure")
+
+
+# ---------------------------------------------------------------------------
+# Batch-only specs on the page: shown from cache, or the command that fills
+# them -- never computed in the process that serves everyone.
+# ---------------------------------------------------------------------------
+
+#: What the toy specs computed, in order. AppTest runs the page in this same
+#: process, so this is how a test sees whether the page computed anything.
+TOY_CALLS = []
+
+
+@dataclasses.dataclass
+class ToyBankParams:
+    window: int = 60
+
+
+@dataclasses.dataclass
+class ToyFieldsParams:
+    bank: ToyBankParams = dataclasses.field(default_factory=ToyBankParams)
+    scale: float = 2.0
+
+
+def _toy_bank(ds, params):
+    TOY_CALLS.append("bank")
+    return xr.Dataset({"y": ("t", np.arange(4.0))})
+
+
+def _toy_fields(ds, params, upstream):
+    TOY_CALLS.append("fields")
+    return xr.Dataset({"y": upstream["y"] * params.scale})
+
+
+def _say_total(name):
+    def render(result, params, target):
+        import streamlit as st
+
+        st.markdown(f"{name} total {float(result['y'].sum()):g}")
+
+    return render
+
+
+@pytest.fixture
+def toy_bank(single_shot_deployment):
+    """A batch-only spec and a spec built on it, registered for one test."""
+    TOY_CALLS.clear()
+    bank = registry.register(
+        registry.PlotSpec(
+            key="toy_bank",
+            label="Toy bank",
+            diagnostics=("apd",),
+            params=ToyBankParams,
+            render=_say_total("toy bank"),
+            compute=_toy_bank,
+            batch_only=True,
+        )
+    )
+    fields = registry.register(
+        registry.PlotSpec(
+            key="toy_fields",
+            label="Toy fields",
+            diagnostics=("apd",),
+            params=ToyFieldsParams,
+            render=_say_total("toy fields"),
+            compute=_toy_fields,
+            requires="toy_bank",
+            upstream_params=lambda params: params.bank,
+        )
+    )
+    yield bank, fields
+    registry.REGISTRY.pop("toy_fields", None)
+    registry.REGISTRY.pop("toy_bank", None)
+    TOY_CALLS.clear()
+
+
+def fill_toy_bank(database, bank):
+    """What `fusion-ui precompute toy_bank --shot 1234` leaves behind."""
+    conn = db.open_db(database)
+    target = registry.Target(
+        machine="cmod",
+        shot=1234,
+        diagnostic="apd",
+        preprocessed=False,
+        path="unused",
+        t_start=1.0,
+        t_end=1.02,
+    )
+    _, run = store.result(conn, bank, target, ToyBankParams(), ds=None, batch=True)
+    conn.close()
+    TOY_CALLS.clear()
+    return run
+
+
+def ledger(database):
+    conn = db.connect(database)
+    rows = {r["plot"]: dict(r) for r in conn.execute("SELECT * FROM runs")}
+    conn.close()
+    return rows
+
+
+def markdown(app):
+    return [m.value for m in app.markdown]
+
+
+def test_a_batch_only_spec_is_shown_from_cache_without_computing(
+    single_shot_deployment, toy_bank
+):
+    bank, _ = toy_bank
+    seeded = fill_toy_bank(single_shot_deployment, bank)
+
+    app = AppTest.from_file(SINGLE_SHOT, default_timeout=60)
+    app.session_state["spec.apd"] = bank
+    app.run()  # no button pressed: a lookup never computes, so nothing to wait for
+    assert not app.exception, app.exception
+    assert not app.error, [e.value for e in app.error]
+
+    assert "toy bank total 6" in markdown(app)
+    assert TOY_CALLS == []
+    assert ledger(single_shot_deployment) == {"toy_bank": dict(seeded)}
+    # Its form commits with Show, and there is no Recompute to delete a
+    # result this page could not compute again -- the command instead.
+    buttons = [b.label for b in app.button]
+    assert "Show" in buttons and "Compute" not in buttons
+    assert "Recompute" not in buttons
+    assert any(
+        "fusion-ui precompute toy_bank --shot 1234 --force" in c for c in captions(app)
+    )
+    # Nor is it offered on many pixels.
+    assert not [r for r in app.sidebar.radio if r.label == "Pixels"]
+
+
+def test_a_missing_batch_only_spec_names_its_command_and_computes_nothing(
+    single_shot_deployment, toy_bank
+):
+    bank, _ = toy_bank
+    app = AppTest.from_file(SINGLE_SHOT, default_timeout=60)
+    app.session_state["spec.apd"] = bank
+    app.run()
+    assert not app.exception, app.exception
+    assert [c.value for c in app.code] == ["fusion-ui precompute toy_bank --shot 1234"]
+    assert app.warning
+
+    widget(app, "button", "Show").click().run()
+    assert not app.exception, app.exception
+    assert TOY_CALLS == []
+    assert ledger(single_shot_deployment) == {}
+
+
+def test_a_batch_only_spec_with_other_parameters_shows_them_to_save(
+    single_shot_deployment, toy_bank
+):
+    bank, _ = toy_bank
+    app = AppTest.from_file(SINGLE_SHOT, default_timeout=60)
+    app.session_state["spec.apd"] = bank
+    app.session_state["params.toy_bank.window"] = 30
+    app.run()
+    assert not app.exception, app.exception
+    command, saved = [c.value for c in app.code]
+    assert command == (
+        "fusion-ui precompute toy_bank --shot 1234 --params-json params.json"
+    )
+    assert '"window": 30' in saved and '"plot": "toy_bank"' in saved
+
+
+def test_a_spec_built_on_a_missing_batch_only_result_computes_nothing(
+    single_shot_deployment, toy_bank
+):
+    _, fields = toy_bank
+    app = AppTest.from_file(SINGLE_SHOT, default_timeout=60)
+    app.session_state["spec.apd"] = fields
+    app.run()
+    assert not app.exception, app.exception
+    assert [c.value for c in app.code] == ["fusion-ui precompute toy_bank --shot 1234"]
+
+    widget(app, "button", "Compute").click().run()
+    assert not app.exception, app.exception
+    assert [c.value for c in app.code] == ["fusion-ui precompute toy_bank --shot 1234"]
+    assert TOY_CALLS == []
+    assert ledger(single_shot_deployment) == {}
+
+
+def test_an_unreadable_batch_only_blob_is_not_recomputed_by_the_page(
+    single_shot_deployment, toy_bank
+):
+    """The blob exists, so the page's check passes; the store must refuse
+    anyway, and the page must name the command that replaces it."""
+    bank, fields = toy_bank
+    seeded = fill_toy_bank(single_shot_deployment, bank)
+    with open(seeded["blob_path"], "wb") as broken:
+        broken.write(b"not netCDF")
+
+    app = AppTest.from_file(SINGLE_SHOT, default_timeout=60)
+    app.session_state["spec.apd"] = fields
+    app.run()
+    widget(app, "button", "Compute").click().run()
+    assert not app.exception, app.exception
+    assert [c.value for c in app.code] == [
+        "fusion-ui precompute toy_bank --shot 1234 --force"
+    ]
+    assert TOY_CALLS == []
+    assert ledger(single_shot_deployment) == {"toy_bank": dict(seeded)}
+
+
+def test_a_spec_built_on_a_cached_batch_only_result_computes_inline(
+    single_shot_deployment, toy_bank
+):
+    bank, fields = toy_bank
+    seeded = fill_toy_bank(single_shot_deployment, bank)
+
+    app = AppTest.from_file(SINGLE_SHOT, default_timeout=60)
+    app.session_state["spec.apd"] = fields
+    app.run()
+    assert not app.exception, app.exception
+    assert app.info, "a derived spec still waits for Compute"
+    assert TOY_CALLS == []
+
+    widget(app, "button", "Compute").click().run()
+    assert not app.exception, app.exception
+    assert not app.error, [e.value for e in app.error]
+    assert "toy fields total 12" in markdown(app)
+    assert TOY_CALLS == ["fields"], "only the derived part is computed"
+
+    runs = ledger(single_shot_deployment)
+    assert runs["toy_bank"] == dict(seeded)
+    assert runs["toy_fields"]["upstream_run_id"] == seeded["id"]
+    conn = db.connect(single_shot_deployment)
+    (mtime,) = conn.execute(
+        "SELECT mtime FROM shots WHERE shot = 1234 AND diagnostic = 'apd'"
+    ).fetchone()
+    conn.close()
+    assert runs["toy_fields"]["input_mtime"] == mtime
 
 
 @pytest.fixture

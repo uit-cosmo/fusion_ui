@@ -6,13 +6,12 @@ landing page. Anything two of them need lives here instead.
 """
 
 import os
-import subprocess
 import threading
 
 import streamlit as st
 
 from fusion_ui import config
-from fusion_ui.core import catalog, db, rundays
+from fusion_ui.core import catalog, db, rundays, versions
 
 _local = threading.local()
 
@@ -51,40 +50,13 @@ def resolve(attribute):
 
 @st.cache_data(show_spinner=False)
 def code_version():
-    """``git describe`` for this app and for imaging_methods, best effort.
+    """The commit of each repository a result depends on, best effort.
 
     Shown under every figure from phase 02 on: a result computed by last
     month's imaging_methods is the trap that makes people distrust the tool.
+    See :mod:`fusion_ui.core.versions` for what is read and how.
     """
-    return {
-        "fusion_ui": _git_describe(config.REPO_ROOT),
-        "imaging_methods": _git_describe(_package_root("imaging_methods")),
-    }
-
-
-def _package_root(name):
-    try:
-        module = __import__(name)
-    except Exception:
-        return None
-    path = getattr(module, "__file__", None)
-    return os.path.dirname(os.path.dirname(path)) if path else None
-
-
-def _git_describe(path):
-    if not path or not os.path.isdir(str(path)):
-        return "unknown"
-    try:
-        out = subprocess.run(
-            ["git", "describe", "--always", "--dirty", "--tags"],
-            cwd=str(path),
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return "unknown"
-    return out.stdout.strip() if out.returncode == 0 else "unknown"
+    return versions.code_version()
 
 
 @st.cache_data(show_spinner="Reading the shot index…")

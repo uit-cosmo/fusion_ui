@@ -19,7 +19,15 @@ from dataclasses import dataclass
 import xarray as xr
 
 from fusion_ui import config
-from fusion_ui.core import catalog, loader, multipixel, registry, shared, store
+from fusion_ui.core import (
+    catalog,
+    loader,
+    multipixel,
+    params_ui,
+    registry,
+    shared,
+    store,
+)
 
 
 @dataclass
@@ -105,6 +113,34 @@ def default_params(spec, pixel=None):
     if pixel is not None:
         return multipixel.with_pixel(params, pixel[0], pixel[1])
     return params
+
+
+#: The file name :func:`command` puts after ``--params-json``; the page shows
+#: the parameter set to save under it.
+PARAMS_FILE = "params.json"
+
+
+def command(spec, target, params=None, *flags):
+    """The command line that fills ``spec`` for ``target`` with ``params``.
+
+    What a page shows in place of a compute it must not start, a batch-only
+    one. ``--shot`` names the shot; ``--machine`` is added when the target is
+    not on the configured machine, and ``--params-json`` (see
+    :data:`PARAMS_FILE`) when ``params`` are not the spec's defaults. ``flags``
+    are appended as given, e.g. ``"--retry-failed"`` or ``"--force"``.
+    """
+    parts = ["fusion-ui", "precompute", spec.key, "--shot", str(target.shot)]
+    if target.machine != config.MACHINE:
+        parts += ["--machine", target.machine]
+    if params is not None and not is_default(spec, params):
+        parts += ["--params-json", PARAMS_FILE]
+    return " ".join([*parts, *flags])
+
+
+def is_default(spec, params):
+    """Whether ``params`` hash the same as ``spec``'s default parameter set."""
+    digest, _ = params_ui.hash_params(spec.key, params)
+    return digest == params_ui.hash_params(spec.key, spec.params())[0]
 
 
 def _now_label():
@@ -278,7 +314,11 @@ def run(conn, spec, targets, params, force=False, retry_failed=False, log=None):
                     if loader.TIME_DIM in ds.dims
                     else ds
                 )
-                _, run_row = store.result(conn, spec, target, params, windowed)
+                # A batch job: the one caller allowed to compute batch-only
+                # specs, including a batch-only upstream of the plot asked for.
+                _, run_row = store.result(
+                    conn, spec, target, params, windowed, batch=True
+                )
         except Exception as error:  # noqa: BLE001 - recorded through the ledger
             # The file was removed since rescan, is unreadable, or is not a
             # dataset at all (a corrupt file raises ValueError out of
