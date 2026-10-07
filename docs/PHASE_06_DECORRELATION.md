@@ -19,11 +19,12 @@ group out of phase 06 (Decisions). J2a merged (e8d87f8): schema v4, `lookup`,
 J2b merged (342d57f): `precompute` takes several plots, `--workers`,
 `--run-day`, `--stale` and `--params-json`. J4 merged (99f11aa): the Fields page
 and its builders. J1 merged into fusion_scripts (7e0d38f): `decorrelation.pipeline`
-is bit-equal to J0's snapshot on the server, on all nine shots. J3 passed review
-(c9beec4) and is making G2's rename. G2 settled: the three keys as proposed,
-three scalars renamed to the store's existing names, and the paper's
-`reliable()` as a Fields-page toggle ([Products](#products-three-plotspecs-and-their-blob-schemas)).
-J10 and J4b (J4's integration round) are running from c9beec4; J5 waits for J3.
+is bit-equal to J0's snapshot on the server, on all nine shots. G2 settled: the
+three keys as proposed, three scalars renamed to the store's existing names,
+and the paper's `reliable()` as a Fields-page toggle
+([Products](#products-three-plotspecs-and-their-blob-schemas)). J3 merged
+(48a3e33): the three product specs, with G2's names. J10 and J4b (J4's
+integration round) are running from J3's first commit, and J5 from 48a3e33.
 Everything else is planned and not started.
 
 ## Decisions (the user, 2026-10-07)
@@ -956,6 +957,58 @@ plus:
 
 Then **stop for G2**: list the keys and the 32 names for the user before
 merging.
+
+**Landed 2026-10-07 (48a3e33, 638 tests).** What later jobs build on:
+
+- **Where the API comes in.** `plots/_pipeline.py` is the only module in
+  `fusion_ui` that imports `decorrelation`, and it imports `fusion_ui.config`
+  above it. A test fails if any other module imports the API, and another
+  checks, in a fresh interpreter, that the UI's data folder survives the import.
+  The module also holds the shared helpers:
+  - `record`, the record in metres;
+  - `bank_mask`;
+  - `average_at`;
+  - `live_scalars`.
+- **Preprocessed files only.** All three specs set `preprocessed=True`, so a
+  `--run-day` fill never selects a raw file.
+- **The record.** `record()` converts R and Z with the paper's own expression
+  (`fields.load`). It keeps R and Z in their on-disk dtype and loads the record
+  into memory. It refuses an R outside 10–700, which would not be centimetres.
+  `frames` is not widened, so J6's float32 files go in as float32, as in the
+  paper's loader. On the synthetic record, float32 frames gave products within
+  5e-7 relative of float64 ones.
+- **The derived products.** They take the bank's own `dead` and
+  `dead_mask_source` and never call `dead_mask` again. They use the API's
+  default pixel order.
+- **Parameters.** The classes are module-level:
+  - `PixelAveragesParams(averages)`;
+  - `MethodFieldsParams(averages, tracking, tde)`;
+  - `BlobParametersParams(averages, neighbour_step, blobs)`.
+
+  `upstream_params` deep-copies `averages`. Each class's module and name are
+  part of the hash, so they are as permanent as the keys.
+  `test_the_default_keys_are_stable` pins the three default hashes:
+  `302e4217…`, `d190bcb9…` and `42728c93…`.
+- **Scalars.** `SCALARS` is a dict from scalar name to blob variable, which
+  holds G2's three renames.
+- **Renders.**
+  - `pixel_averages` draws J4's lag strip at the reference with the most
+    events. A render has no state, so there is no slider; the Fields page has
+    the picker.
+  - `method_fields` draws J4's v_R panels at the default cuts.
+  - `blob_parameters` draws its own grid of 13 maps.
+- **Tests.** `tests/test_products.py` on `tests/product_fixtures.py`, a 3×3
+  synthetic record in centimetres with two masks. Its `direct_*` functions call
+  the API without the adapters, and J4b and J5 reuse them.
+  `fields_fixtures.World.install` now remembers only the first original.
+- **On the laptop, on 1160616027,** with J0's 68 frozen averages stacked as
+  the bank (no 2DCA was run):
+  - `method_fields` took 205 s and `blob_parameters` 43 s; the bank blob is
+    11.9 MB;
+  - all three are bit-equal to the paper's own path on the same machine;
+  - against J0's server snapshot they agree within 1e-12, except one pixel of
+    `vr_2dcc` at 2.2e-11 relative, which is the machines' floating point. J7's
+    exact check runs on the server.
 
 ### J4 — Fields page and builders · Sonnet 5.5 · fusion_ui
 
