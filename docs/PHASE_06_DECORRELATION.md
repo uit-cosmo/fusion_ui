@@ -1278,8 +1278,8 @@ without the variables.
   - A blob outside `CACHE_DIR` refuses the whole plan. The check resolves `..`
     and symlinked directories.
   - A connection with `foreign_keys` off is refused.
-- **For J7.** Dry-run first, with the service's `FUSION_UI_CACHE`. J10 expects
-  115 runs and 41,400 scalar rows.
+- **For J7.** Dry-run first, with the service's `FUSION_UI_CACHE`. Expect 134
+  runs (115 ok, 19 failed) and 41,400 scalar rows.
   - An `outside cache` line means the ledger's blob paths are not under that
     cache.
   - An `unwritable` line needs the user to fix permissions (sudo).
@@ -1290,8 +1290,8 @@ The orchestrator summarises what was merged and the test results, then asks to:
 
 - push `fusion_scripts` main and `fusion_ui` main to GitHub;
 - deploy to the server;
-- prune the old `velocity_field` results there (115 runs, 41,400 scalars),
-  which the user asked for on 2026-10-07.
+- prune the old `velocity_field` results there (134 runs, 115 of them ok,
+  and 41,400 scalars), which the user asked for on 2026-10-07.
 
 The user runs `sudo systemctl restart fusion-ui` and `deploy/verify.sh` (the
 websocket check must return `101`).
@@ -1302,21 +1302,29 @@ websocket check must return `101`).
    `git -C ~/fusion_ui pull --ff-only`.
 2. Run `~/fusion_ui/.venv/bin/pip install -e ~/fusion_ui --no-deps`, but only
    if `pyproject.toml` changed.
-3. Run `fusion-ui init-db` (v4), then `fusion-ui status`.
-4. Ask the user to restart the service (G3). Then run
-   `fusion-ui prune --plot velocity_field --yes` (J10).
-5. In a tmux session `phase06`, run batch 1: the 1160616 command under
+3. Ask the user to restart the service (G3) straight after the pull.
+   - Do not migrate before the restart. The deployed code's `init_db` raises
+     on a database newer than it knows, so a v4 file would fail every new
+     session of the old service.
+   - Until the restart, the old process can also read new page files beside
+     its old modules.
+4. Run `fusion-ui init-db` (v4), then `fusion-ui status`. The new service's
+   `open_db` also migrates on its first connection, which is harmless.
+5. Run `fusion-ui prune --plot velocity_field`, the dry run, then again with
+   `--yes` (J10). On 2026-10-07 the ledger held 134 runs of it (115 ok,
+   19 failed) and 41,400 scalar rows.
+6. In a tmux session `phase06`, run batch 1: the 1160616 command under
    [Recompute](#recompute). Watch the log.
-6. Run `regress_pipeline --fusion-ui` against J0's snapshot on all nine shots.
+7. Run `regress_pipeline --fusion-ui` against J0's snapshot on all nine shots.
    It must pass exactly.
    - If every variable of one shot is off, suspect the time window: fusion_ui
      slices to the discharge DB's current window, which may have been edited
      since the file was preprocessed.
    - **Any mismatch stops the phase** and goes to the user.
-7. Run batch 2 (`--run-day 1140827`) only after J6 has preprocessed those
+8. Run batch 2 (`--run-day 1140827`) only after J6 has preprocessed those
    files again with their own mask. The old files carry the 2016 mask, and
    `dead_mask` refuses them.
-8. Report per shot: status, seconds, failures with their errors, disk used, and
+9. Report per shot: status, seconds, failures with their errors, disk used, and
    the page URL for J8.
 
 ### J8 — the user checks the physics
