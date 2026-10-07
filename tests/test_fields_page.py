@@ -577,6 +577,11 @@ def test_the_view_cuts_are_view_state_and_move_pixels_without_a_new_parameter_se
     rerun(app)
     cut = kinds(figures(app)[0], "cut")
     assert cut and "events < 700" in cut[0]["text"][0]
+    # The minimum of events cuts the methods read off the conditional average, per method: not the
+    # 2DCC (read off the cross-correlation of the whole record) nor a TDE off the record.
+    cut_panels = {t["meta"]["panel"] for t in cut}
+    assert {"max", "com"} <= cut_panels
+    assert not cut_panels & {"2dcc", "tde3", "tde2"}
     widget(app, "number_input", "Minimum lags").set_value(30)
     widget(app, "checkbox", "Interior pixels only").check()
     rerun(app)

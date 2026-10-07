@@ -17,6 +17,12 @@ because they mean different things:
     product; moving the cut brings it back.
 ``DEAD``
     A pixel the mask marks dead. It was never computed.
+
+The view cuts apply per method, to what each estimate rests on. The minimum of lags applies to the
+three 2DCA tracks, which each fit a slope through the lags they tracked. The minimum of events
+applies to the methods read off the conditional average: the 2DCA maximum and centroid, and the
+TDEs applied to it. The 2DCC is read off the cross-correlation of the whole record and the other
+TDEs off the record, so no number of events cuts them. The interior-only cut applies to every panel.
 """
 
 import enum
@@ -65,15 +71,30 @@ class Method:
     nlags: Optional[str] = None  # the lags a track's slope rests on; None for a TDE
     track: Optional[str] = None  # a Track key, for the 2DCA methods
     colour: str = "events"  # what arrows are coloured by: "events" or "cc"
-    uses_events: bool = True  # whether the estimate rests on the 2DCA's events
+    #: Whether the estimate is read off the conditional average, and so rests on the events it was
+    #: averaged over: what the minimum-events cut applies to.
+    uses_events: bool = True
 
 
 #: "3TDE and 2TDE by velocity_estimation's CA method wait for L9", so the CA here is the TDE
 #: applied to the conditional average itself: the same field sliced the other way.
+#:
+#: The 2DCC track is read off ``cross_corr``, which ``imaging_methods`` computes from the whole
+#: record ("Spatiotemporal cross-correlation on full dataset", ``cond_av.py``) and not from the
+#: events, so it keeps its lags cut and has no events cut, like the TDEs off the record. Its arrows
+#: are still coloured by the pixel's events, the one per-pixel count the product has for it.
 METHODS = (
     Method("max", "2DCA max", "vr_max", "vz_max", "nlags_max", track="max"),
     Method("com", "2DCA centroid", "vr_com", "vz_com", "nlags_com", track="com"),
-    Method("2dcc", "2DCC", "vr_2dcc", "vz_2dcc", "nlags_2dcc", track="2dcc"),
+    Method(
+        "2dcc",
+        "2DCC",
+        "vr_2dcc",
+        "vz_2dcc",
+        "nlags_2dcc",
+        track="2dcc",
+        uses_events=False,
+    ),
     Method("tde3", "3TDE (CC)", "vr3_tde", "vz3_tde", colour="cc", uses_events=False),
     Method("tde2", "2TDE (CC)", "vr2_tde", "vz2_tde", colour="cc", uses_events=False),
     Method("catde3", "3TDE on the CA", "vr3_catde", "vz3_catde"),

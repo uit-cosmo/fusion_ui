@@ -255,7 +255,11 @@ def pick_cuts(container):
         max_value=100000,
         step=50,
         key="fields.min_events",
-        help="Fewest events a conditional average may rest on, for the methods built on it.",
+        help=(
+            "Fewest events the conditional average may rest on, for the methods read off it: the "
+            "2DCA maximum and centroid, and the TDEs on the average. The 2DCC and the TDEs off the "
+            "record do not depend on the events, and are not cut by this."
+        ),
     )
     interior = container.checkbox(
         "Interior pixels only",

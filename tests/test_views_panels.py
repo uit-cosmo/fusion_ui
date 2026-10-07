@@ -10,7 +10,7 @@ import numpy as np
 import plotly.graph_objects as go
 import pytest
 
-from fusion_ui.views import arrows, methods, panels
+from fusion_ui.views import arrows, methods, numbers, panels
 from fusion_ui.views.bundle import Bundle, Cuts
 from fusion_ui.views.methods import METHODS, Status
 from tests import fields_fixtures as ff
@@ -84,7 +84,15 @@ def test_the_view_cuts_apply_where_they_mean_something(products):
     assert (tde.status == Status.CUT).sum() == 0
 
     events = Cuts(min_events=10_000)
-    for key, cut in (("com", True), ("catde3", True), ("tde3", False)):
+    for key, cut in (
+        ("max", True),
+        ("com", True),
+        ("2dcc", False),
+        ("catde3", True),
+        ("catde2", True),
+        ("tde3", False),
+        ("tde2", False),
+    ):
         p = methods.panel(bundle_of(products, cuts=events), methods.METHOD_BY_KEY[key])
         assert bool((p.status == Status.CUT).any()) is cut, key
 
@@ -95,6 +103,47 @@ def test_the_view_cuts_apply_where_they_mean_something(products):
     cut_pixels = argwhere_xy(edge.status == Status.CUT)
     assert cut_pixels and all(x in (0, 8) or y in (0, 9) for x, y in cut_pixels)
     assert all("edge pixel" in edge.reason[y, x] for x, y in cut_pixels)
+
+
+def test_the_2dcc_is_not_cut_by_the_number_of_events_but_keeps_its_lags(products):
+    """The 2DCC track is read off ``cross_corr``, which ``imaging_methods`` computes from the whole
+    record ("Spatiotemporal cross-correlation on full dataset"), not from the events the conditional
+    average is made of. Its estimate does not rest on them, so no number of events cuts it; it is
+    still a slope fitted through lags, so the minimum of lags does."""
+    twodcc = methods.METHOD_BY_KEY["2dcc"]
+    assert twodcc.uses_events is False and twodcc.nlags == "nlags_2dcc"
+    plain = methods.panel(bundle_of(products), twodcc)
+    fitted = int(plain.ok.sum())
+    assert fitted == 90 - 22 - 2  # every live pixel with a fit
+
+    # More events than any pixel has: the 2DCA tracks lose every pixel to it, the 2DCC none.
+    many = bundle_of(products, cuts=Cuts(min_events=10_000))
+    for key in ("max", "com"):
+        assert not methods.panel(many, methods.METHOD_BY_KEY[key]).ok.any(), key
+    far = methods.panel(many, twodcc)
+    assert not (far.status == Status.CUT).any()
+    np.testing.assert_array_equal(
+        far.status, plain.status
+    )  # the events change nothing for it
+
+    # It keeps the cut on its lags: every fit in the fixture rests on 19.
+    short = methods.panel(bundle_of(products, cuts=Cuts(min_lags=20)), twodcc)
+    assert (short.status == Status.CUT).sum() == fitted
+    assert short.reason[4, 5] == "cut: 19 lags < 20"
+    # Both cuts at once: the reason names the lags alone, never the events.
+    both = methods.panel(
+        bundle_of(products, cuts=Cuts(min_lags=20, min_events=10_000)), twodcc
+    )
+    assert both.reason[4, 5] == "cut: 19 lags < 20"
+
+    # On the figure the centroid panel marks pixels cut by events and the 2DCC panel marks none.
+    figure = panels.velocity_panels(many)
+    assert traces(figure, "cut", "com") and not traces(figure, "cut", "2dcc")
+    assert len(pairs(traces(figure, "pixels", "2dcc")[0])) == fitted
+    # And its row of the numbers has no event count to show: none of it rests on one.
+    table = numbers.method_table(bundle_of(products, pixel=(5, 4)))
+    row = table.set_index("method").loc["2DCC"]
+    assert np.isnan(row["events"]) and row["lags"] == 19
 
 
 def test_a_missing_variable_is_all_failed_not_an_error(products):

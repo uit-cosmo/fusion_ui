@@ -22,12 +22,17 @@ class Cuts:
 
     Moving one never recomputes anything, so none of them is part of a product's cache key.
 
-    min_lags: fewest lags a 2DCA track's slope may rest on. A slope through two or three lags is a
-        secant, not a fit, and the wildest velocities in a field come from such pixels.
-    min_events: fewest events the conditional average at a pixel may rest on, for the methods built
-        on that average. A track or a TDE read off the record does not depend on it.
+    The cuts apply per method (``views.methods.METHODS``), to what each estimate rests on.
+
+    min_lags: fewest lags a 2DCA track's slope may rest on, for the three tracks (the 2DCC keeps it).
+        A slope through two or three lags is a secant, not a fit, and the wildest velocities in a
+        field come from such pixels.
+    min_events: fewest events the conditional average at a pixel may rest on, for the methods read
+        off that average: the 2DCA maximum and centroid, and the TDEs applied to it. The 2DCC is
+        read off the cross-correlation of the whole record, and a TDE off the record off the
+        record: neither depends on the events, and this never cuts them.
     interior_only: leave out the pixels on the array's border, where the 2DCA track leaves the view
-        within a few lags and a TDE loses half its neighbour pairs.
+        within a few lags and a TDE loses half its neighbour pairs. Every method.
     """
 
     min_lags: int = 8
