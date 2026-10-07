@@ -14,8 +14,9 @@ not repeat them.
 Status, 2026-10-07: JD done. The dead-pixel view is deployed and cached for all
 111 raw shots ([Dead pixels](#dead-pixels-done-2026-10-07)), and G1, the user's
 check of the masks, is open. J0 done at 828 files: the user left the `_ca`
-group out of phase 06 (Decisions). J1 and J2a are running. Everything else is
-planned and not started.
+group out of phase 06 (Decisions). J2a merged (e8d87f8): schema v4, `lookup`,
+`stale_runs`, `batch_only`, and `code_version` with all four repositories.
+J1, J2b and J4 are running. Everything else is planned and not started.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -758,6 +759,28 @@ regression locally.
 
 The full suite must stay green (`python -m pytest`, run from the worktree
 root).
+
+**Landed 2026-10-07 (e8d87f8, 412 tests).** What later jobs build on:
+
+- `store.result` and `store.compute_and_store` take `batch=False`. A batch-only
+  spec, or a missing batch-only upstream, raises `store.BatchOnlyError` unless
+  `batch=True`, and no row is written. `precompute` passes `batch=True`; so must
+  J2b's workers and any test that computes `pixel_averages` through the store.
+- `store.lookup` loads the blob on every call. A page that caches on (blob path,
+  mtime) takes the row from `store.find_run` and caches `store.load_result`.
+- `store.stale_runs(conn, plot=None)` lists runs of any status, each with a
+  `stale` reason (`input changed`, `upstream deleted`, `upstream recomputed`,
+  `upstream stale`). It judges only runs whose input is recorded and still
+  indexed, and reads the registry, so import `fusion_ui.plots` first.
+  `store.result` hands a stale cached row straight back: recompute one with
+  `compute_and_store` (in place), upstream before downstream.
+- Also new: `store.missing_batch_upstreams`, `store.input_mtime`,
+  `registry.chain`, and `precompute.command`, whose command names
+  `--params-json params.json` for non-default parameters (J2b adds the flag).
+- `code_version` reads `name=<7 hex>[-dirty]` for fusion_ui, imaging_methods,
+  fusion_scripts and velocity_estimation (`core/versions.py`), through git with
+  optional locks off or straight from `.git`. Compare commits with
+  `versions.commit`. `runs.created_at` now has microseconds.
 
 ### J2b — Parallel, multi-plot precompute · Opus 5.5 · fusion_ui
 
