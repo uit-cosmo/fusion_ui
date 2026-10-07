@@ -167,7 +167,17 @@ def blobs(cache, plot):
 def test_two_workers_fill_four_targets_then_skip_them_all_as_cached(
     tree, capfd, monkeypatch
 ):
+    contexts = []
+    real_context = precompute.multiprocessing.get_context
+
+    def spy(method=None):
+        contexts.append(method)
+        return real_context(method)
+
+    monkeypatch.setattr(precompute.multiprocessing, "get_context", spy)
     report, lines = fill(tree.conn, ["toy_mean"], workers=2)
+    # Spawned, not forked: no SQLite handle or thread is inherited.
+    assert contexts == ["spawn"]
     (stats,) = report.stats
     assert counts(stats) == (4, 0, 0, 0, 0)
 
