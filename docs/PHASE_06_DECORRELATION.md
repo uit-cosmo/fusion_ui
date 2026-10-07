@@ -23,9 +23,10 @@ is bit-equal to J0's snapshot on the server, on all nine shots. G2 settled: the
 three keys as proposed, three scalars renamed to the store's existing names,
 and the paper's `reliable()` as a Fields-page toggle
 ([Products](#products-three-plotspecs-and-their-blob-schemas)). J3 merged
-(48a3e33): the three product specs, with G2's names. J10 and J4b (J4's
-integration round) are running from J3's first commit, and J5 from 48a3e33.
-Everything else is planned and not started.
+(48a3e33): the three product specs, with G2's names. J10 merged (bdf4806):
+`velocity_field` is gone, and `fusion-ui prune` clears its runs in J7. J4b (J4's
+integration round) and J5 are running. Everything else is planned and not
+started.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -1187,6 +1188,39 @@ without the variables.
   asked for the removal on 2026-10-07, and G3 restates it.
 
 **Accept when** the suite passes, plus a hermetic test of `prune`.
+
+**Landed 2026-10-07 (bdf4806, 656 tests).** What later jobs build on:
+
+- **`velocity_field` is gone.** The module, its tests, its import and every
+  mention in the code are removed. CLAUDE.md's spec table loses its row and
+  gains a note on pruning. The stale physics statements, "twelve new scalar
+  names" and the R-edge caveat, are left for J9. Four of those twelve
+  (`vx_field`, `vy_field`, `number_events_field` and `nlags_field`) go with the
+  prune.
+- **`fusion-ui prune --plot KEY [--yes]`** is `store.plan_prune` plus
+  `store.prune`. It counts:
+  - runs, by status;
+  - scalar rows;
+  - blobs on disk, and blobs listed but already missing;
+  - param sets left unreferenced (a preset keeps its own);
+  - runs of other plots built on these: their link is nulled and they read as
+    stale;
+  - blobs in directories this user cannot write.
+
+  Without `--yes` it deletes nothing and exits 1. The key need not be
+  registered.
+- **Deletion order.** Blobs go first. Then one transaction deletes the rows of
+  the runs whose blob is gone.
+  - A blob that cannot be removed keeps its run and is listed, and the command
+    exits 1. Rerun it once the permissions are fixed.
+  - A blob outside `CACHE_DIR` refuses the whole plan. The check resolves `..`
+    and symlinked directories.
+  - A connection with `foreign_keys` off is refused.
+- **For J7.** Dry-run first, with the service's `FUSION_UI_CACHE`. J10 expects
+  115 runs and 41,400 scalar rows.
+  - An `outside cache` line means the ledger's blob paths are not under that
+    cache.
+  - An `unwritable` line needs the user to fix permissions (sudo).
 
 ### G3 — the user approves deployment
 
