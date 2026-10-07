@@ -9,7 +9,8 @@ makes the methods comparable by eye is that nothing is rescaled between panels:
   are compared against: a TDE inflates speeds, and a two-point TDE blows up wherever a component
   is small, so left to set the scale it would shrink every 2DCA arrow to a stub. Its longer arrows
   are the finding, and the ones that leave the view are cut off at its edge (the hover has the
-  numbers, and the gain makes every arrow longer or shorter).
+  numbers, and the gain makes every arrow longer or shorter). The other panels set the scale only
+  when no 2DCA track drew anything.
 - One diverging colour scale for the maps, symmetric about zero.
 - Every panel shows the same stretch of the array at the same size, at equal aspect, or the arrow
   directions lie.
@@ -285,10 +286,12 @@ def _key(traces, x_range, y_range, spacing, scale, key_speed):
 def velocity_panels(bundle, mode="arrows", arrow_gain=1.0):
     """The seven panels of ``bundle.fields`` as one figure; ``mode`` is ``"arrows"``, ``"vr"`` or ``"vz"``.
 
-    ``arrow_gain`` makes every arrow that many times longer: the scale is still one for all the
-    panels, only moved, for a field whose arrows come out short (a TDE sets the scale and the 2DCA
-    arrows are stubs) or tangled. ``fig.layout.meta`` records what the figure was drawn at:
-    ``arrow_scale`` (velocity per metre) and ``key_speed`` for arrows, ``colour_limit`` for maps.
+    The arrow scale is one for every panel, set by the speeds of the three 2DCA tracks; the other
+    panels set it only when no 2DCA track drew anything. A TDE's longer arrows are therefore the
+    finding, not something that shrinks the rest. ``arrow_gain`` makes every arrow that many times
+    longer: the scale is still one for all the panels, only moved, for a field whose arrows come
+    out short or tangled. ``fig.layout.meta`` records what the figure was drawn at: ``arrow_scale``
+    (velocity per metre) and ``key_speed`` for arrows, ``colour_limit`` for maps.
     """
     if bundle.fields is None:
         return message_figure("The velocity fields of this shot are not computed.")

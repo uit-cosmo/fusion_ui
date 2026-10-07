@@ -47,9 +47,11 @@ def _panel_controls(bundle):
             default=1.0,
             bounds=(0.25, 4.0, 0.25),
             help=(
-                "Arrows only. The scale comes from the speeds of all the panels together, so a method "
-                "with much larger speeds (a TDE) can leave the others' arrows short. This makes every "
-                "arrow in every panel that many times longer; the key moves with it."
+                "Arrows only. Every panel shares one scale, set by the speeds of the three 2DCA tracks, "
+                "so a method that reads faster (a TDE) draws longer arrows, and those that leave the "
+                "view are cut off at its edge. The other panels set the scale only if no 2DCA track "
+                "drew anything. This makes every arrow in every panel that many times longer or "
+                "shorter; the key moves with it."
             ),
         ),
     )

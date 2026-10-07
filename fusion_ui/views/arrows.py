@@ -2,8 +2,10 @@
 
 Plotly has no quiver. An arrow is a line segment from the pixel to ``pixel + v / scale`` and a head
 at its tip, rotated to point along the segment (``marker.angle``). ``scale`` is a velocity per unit
-length, taken from **all the panels together** so that two methods compare by eye: a per-panel scale
-makes every field look equally fast.
+length, one for the whole figure so that two methods compare by eye: a per-panel scale makes every
+field look equally fast. Which speeds set it is the caller's choice. The seven-panel figure uses the
+three 2DCA tracks' (the methods the others are compared against), and the other panels' only when
+no 2DCA track drew anything (see ``fusion_ui.views.panels.velocity_panels``).
 
 Ported from ``plotting_scripts.twodca_plots`` (``auto_quiver_scale``, ``nice_speed``), which are
 drawn per figure.
