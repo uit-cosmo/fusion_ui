@@ -29,12 +29,15 @@ The blob (``dims y, x, time``)::
     dead                                     (y, x)  bool: the mask the bank was computed with
     attrs   min_cc, averages, tracking, tde (the settings, stamped), dead_mask_source
 
-**Scalars** are written per *live* pixel as ``(x, y, name)``, twenty names (:data:`SCALARS`), each the name of
-the variable it is read from: ``vr_*`` and ``vz_*`` in m/s; ``nlags_*`` in lags (samples of the average's
-lag axis) and ``nevents`` in events; ``level_com`` as a fraction of the average's maximum; ``cc_tde`` a
-correlation coefficient. ``level_max`` and ``level_2dcc`` are not scalars: a maximum track has no level, so
-they are NaN everywhere. A dead pixel gets no row, since it was never computed; a NaN at a live pixel is
-written as NULL, "tried and failed".
+**Scalars** are written per *live* pixel as ``(x, y, name)``, twenty of them (:data:`SCALARS`, each name written
+next to the variable it is read from). Nineteen are named as their variables: ``vr_*`` and ``vz_*`` in m/s;
+``nlags_*`` in lags (samples of the average's lag axis); ``level_com`` as a fraction of the average's
+maximum; ``cc_tde`` a correlation coefficient. The twentieth, ``number_events``, is the blob's ``nevents``,
+the events behind the conditional average (a count): it takes the name ``two_dca`` and the seeded rows
+already use for that number, so that they line up on one axis, while the blob keeps the API's name.
+``level_max`` and ``level_2dcc`` are not scalars: a maximum track has no level, so they are NaN everywhere.
+A dead pixel gets no row, since it was never computed; a NaN at a live pixel is written as NULL, "tried and
+failed".
 
 **The settings and the cache key.** ``averages`` is the bank's: it is lifted into the upstream's parameters
 (:func:`~fusion_ui.plots.pixel_averages.lifted_from`), so moving the 2DCA threshold gives the bank and this
@@ -59,31 +62,34 @@ from fusion_ui.plots._pipeline import (
 from fusion_ui.views import panels
 from fusion_ui.views.bundle import Bundle, Cuts
 
-#: The twenty names this writes per live pixel, in the order the plan lists them. Explicit rather than
-#: read off the API: a name is permanent once a batch has written it, so a variable the API gains later
-#: must not turn into a scalar without someone choosing its name.
-SCALARS = (
-    "vr_max",
-    "vz_max",
-    "nlags_max",
-    "vr_com",
-    "vz_com",
-    "nlags_com",
-    "level_com",
-    "vr_2dcc",
-    "vz_2dcc",
-    "nlags_2dcc",
-    "nevents",
-    "vr3_tde",
-    "vz3_tde",
-    "vr2_tde",
-    "vz2_tde",
-    "cc_tde",
-    "vr3_catde",
-    "vz3_catde",
-    "vr2_catde",
-    "vz2_catde",
-)
+#: The twenty scalars this writes per live pixel, in the order the plan lists them: each name, as the store
+#: records it, next to the variable of the blob it is read from. Written out rather than read off the API: a
+#: name is permanent once a batch has written it, so a variable the API gains later must not turn into a
+#: scalar without someone choosing its name. Only ``number_events`` is not its variable's name: the blob
+#: keeps the API's ``nevents`` (the paper's code reads it by that), and the scalar takes the name ``two_dca``
+#: and the seeded rows use for the same count.
+SCALARS = {
+    "vr_max": "vr_max",
+    "vz_max": "vz_max",
+    "nlags_max": "nlags_max",
+    "vr_com": "vr_com",
+    "vz_com": "vz_com",
+    "nlags_com": "nlags_com",
+    "level_com": "level_com",
+    "vr_2dcc": "vr_2dcc",
+    "vz_2dcc": "vz_2dcc",
+    "nlags_2dcc": "nlags_2dcc",
+    "number_events": "nevents",
+    "vr3_tde": "vr3_tde",
+    "vz3_tde": "vz3_tde",
+    "vr2_tde": "vr2_tde",
+    "vz2_tde": "vz2_tde",
+    "cc_tde": "cc_tde",
+    "vr3_catde": "vr3_catde",
+    "vz3_catde": "vz3_catde",
+    "vr2_catde": "vr2_catde",
+    "vz2_catde": "vz2_catde",
+}
 
 
 @dataclass
@@ -124,7 +130,7 @@ def compute(ds, params, upstream):
 
 
 def scalars(result):
-    """The twenty :data:`SCALARS` at every live pixel."""
+    """The twenty :data:`SCALARS` at every live pixel, each read off its variable and written under its name."""
     return live_scalars(result, SCALARS)
 
 

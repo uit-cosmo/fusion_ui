@@ -42,15 +42,24 @@ PARAMS = {
     "blob_parameters": fx.blob_parameters_params,
 }
 
-#: The plan's scalar names (docs/PHASE_06_DECORRELATION.md, "Scalars"), written out here as the user
-#: confirms them at G2. The test is an independent statement of them.
+#: The scalar names (docs/PHASE_06_DECORRELATION.md, "Scalars") as G2 settled them, written out here as an
+#: independent statement of them. Three are not their blob variable's name, because the store already
+#: holds the same quantity under another one: ``number_events`` (``two_dca``, the seeded rows),
+#: ``taud_psd`` and ``lambda_psd`` (the ``taud_psd`` spec, the seeded rows). The blobs keep the API's names.
 METHOD_FIELDS_NAMES = (
-    "vr_max vz_max nlags_max vr_com vz_com nlags_com level_com vr_2dcc vz_2dcc nlags_2dcc nevents"
+    "vr_max vz_max nlags_max vr_com vz_com nlags_com level_com vr_2dcc vz_2dcc nlags_2dcc number_events"
     " vr3_tde vz3_tde vr2_tde vz2_tde cc_tde vr3_catde vz3_catde vr2_catde vz2_catde"
 ).split()
 BLOB_PARAMETERS_NAMES = (
-    "level area lx_c ly_c theta_c lr lz lx_f ly_f theta_f taud lam".split()
+    "level area lx_c ly_c theta_c lr lz lx_f ly_f theta_f taud_psd lambda_psd".split()
 )
+#: Scalar name -> the blob variable it is read from, for the scalars whose names differ.
+RENAMED = {"number_events": "nevents", "taud_psd": "taud", "lambda_psd": "lam"}
+
+
+def variable_of(name):
+    """The blob variable the scalar ``name`` is read from."""
+    return RENAMED.get(name, name)
 
 
 def target(shot=fx.SHOT, preprocessed=True):
@@ -866,7 +875,7 @@ def stored_rows(conn, run):
     }
 
 
-def test_there_are_twenty_and_twelve_names_as_the_plan_lists_them():
+def test_there_are_twenty_and_twelve_names_as_g2_settled_them():
     assert (
         list(method_fields.SCALARS) == METHOD_FIELDS_NAMES
         and len(METHOD_FIELDS_NAMES) == 20
@@ -875,11 +884,45 @@ def test_there_are_twenty_and_twelve_names_as_the_plan_lists_them():
         list(blob_parameters.SCALARS) == BLOB_PARAMETERS_NAMES
         and len(BLOB_PARAMETERS_NAMES) == 12
     )
-    assert "nevents" not in blob_parameters.SCALARS  # method_fields writes it
     assert not set(method_fields.SCALARS) & set(blob_parameters.SCALARS)
-    # Every name is a variable the API makes; level_max and level_2dcc are all NaN and not names.
-    assert set(METHOD_FIELDS_NAMES) <= set(fx.FIELD_VARIABLES)
-    assert set(BLOB_PARAMETERS_NAMES) | {"nevents"} == set(fx.BLOB_VARIABLES)
+
+    # Each name is written next to the variable it is read from, and only three differ from it.
+    for spec in (method_fields, blob_parameters):
+        assert spec.SCALARS == {name: variable_of(name) for name in spec.SCALARS}
+    differing = {
+        name: variable
+        for spec in (method_fields, blob_parameters)
+        for name, variable in spec.SCALARS.items()
+        if name != variable
+    }
+    assert differing == RENAMED
+
+    # Every scalar is read off a variable the API makes. level_max and level_2dcc are all NaN, and not
+    # scalars; ``nevents`` is the bank's count, which blob_parameters leaves to method_fields.
+    assert set(method_fields.SCALARS.values()) <= set(fx.FIELD_VARIABLES)
+    assert "nevents" not in blob_parameters.SCALARS.values()
+    assert set(blob_parameters.SCALARS.values()) | {"nevents"} == set(fx.BLOB_VARIABLES)
+    # The API's names for the three are not scalar names.
+    taken = set(method_fields.SCALARS) | set(blob_parameters.SCALARS)
+    assert not taken & {"nevents", "taud", "lam"}
+
+
+def test_the_three_renamed_scalars_are_the_names_the_store_already_has():
+    """The point of renaming them: a number that two plots write under one name lines up on one axis. The
+    names are those ``two_dca`` and the ``taud_psd`` spec write, and the seeded ``density_scan`` rows carry.
+    """
+    from fusion_ui.plots import spectra, two_dca
+
+    stand_in = xr.Dataset(
+        {"refx": 1, "refy": 2, "number_events": 7, "taud": 1e-5, "lam": 0.5}
+    )
+    written = {name for _, _, name in two_dca.scalars(stand_in)}
+    written |= {name for _, _, name in spectra.scalars(stand_in)}
+    assert written == set(RENAMED)
+
+    discharge = pytest.importorskip("density_scan.discharge")
+    seeded = set(discharge.BlobParameters().to_dict())
+    assert set(RENAMED) <= seeded
 
 
 def test_method_fields_writes_twenty_names_at_every_live_pixel_and_nothing_at_a_dead_one(
@@ -896,7 +939,7 @@ def test_method_fields_writes_twenty_names_at_every_live_pixel_and_nothing_at_a_
         k for k in mapping if k[:2] == (0, 1)
     ], "a dead pixel was never computed"
     for (x, y, name), value in mapping.items():
-        expected = float(result[name].values[y, x])
+        expected = float(result[variable_of(name)].values[y, x])
         assert (np.isnan(value) and np.isnan(expected)) or value == expected
 
 
@@ -908,7 +951,7 @@ def test_the_scalar_rows_in_the_ledger_are_the_mapping_with_failures_as_null(ful
     assert not [k for k in rows if k[:2] == (0, 1)]
     nulls = 0
     for (x, y, name), value in rows.items():
-        expected = float(result[name].values[y, x])
+        expected = float(result[variable_of(name)].values[y, x])
         if np.isnan(expected):
             assert value is None, (x, y, name)
             nulls += 1
@@ -919,26 +962,84 @@ def test_the_scalar_rows_in_the_ledger_are_the_mapping_with_failures_as_null(ful
     ), "some estimates fail on a record this small, and are NULL, not missing"
     # Tried and failed is not never tried: the live pixel without events has its rows.
     flat = {n: v for (x, y, n), v in rows.items() if (x, y) == fx.FLAT}
-    assert len(flat) == 20 and flat["nevents"] == 0.0 and flat["vr_com"] is None
+    assert len(flat) == 20 and flat["number_events"] == 0.0 and flat["vr_com"] is None
 
 
-def test_blob_parameters_writes_twelve_names_and_never_nevents(sparse):
+def test_blob_parameters_writes_twelve_names_and_not_the_event_count(sparse):
     result = sparse.loaded["blob_parameters"]
     mapping = blob_parameters.scalars(result)
     live = live_pixels("sparse")
     assert len(mapping) == len(live) * 12 == 36
     assert {name for _, _, name in mapping} == set(BLOB_PARAMETERS_NAMES)
     assert {(x, y) for x, y, _ in mapping} == set(live)
+    assert "number_events" not in {name for _, _, name in mapping}
 
     rows = stored_rows(sparse.conn, sparse.runs["blob_parameters"])
     assert len(rows) == 36
     assert {n for _, _, n in rows} == set(BLOB_PARAMETERS_NAMES)
     for (x, y, name), value in rows.items():
-        expected = float(result[name].values[y, x])
+        expected = float(result[variable_of(name)].values[y, x])
         assert (value is None and np.isnan(expected)) or value == expected
     flat_x, flat_y = fx.FLAT
     assert rows[(flat_x, flat_y, "lx_f")] is None  # no average to fit: tried and failed
     assert rows[(1, 1, "lx_f")] is not None
+
+
+def test_the_renamed_scalars_equal_the_blobs_variables_at_every_live_pixel(
+    full, sparse
+):
+    """``number_events`` is the blob's ``nevents``, ``taud_psd`` its ``taud`` and ``lambda_psd`` its ``lam``:
+    the same numbers under the store's names, at every live pixel, in the mapping and in the ledger.
+    """
+    cases = (
+        (full, "method_fields", method_fields, ("number_events",)),
+        (sparse, "blob_parameters", blob_parameters, ("taud_psd", "lambda_psd")),
+    )
+    api_names = set(RENAMED.values())
+    for stored, key, spec, names in cases:
+        result = stored.loaded[key]
+        mapping = spec.scalars(result)
+        rows = stored_rows(stored.conn, stored.runs[key])
+        for name in names:
+            variable = RENAMED[name]
+            for x, y in live_pixels(stored.case):
+                expected = float(result[variable].values[y, x])
+                got = mapping[(x, y, name)]
+                assert (np.isnan(got) and np.isnan(expected)) or got == expected, (
+                    name,
+                    x,
+                    y,
+                )
+                row = rows[(x, y, name)]
+                assert (row is None and np.isnan(expected)) or row == expected, (
+                    name,
+                    x,
+                    y,
+                )
+        # Nothing is written under the API's names.
+        assert not {n for _, _, n in rows} & api_names
+        assert not {n for _, _, n in mapping} & api_names
+
+
+def test_the_blobs_keep_the_apis_variable_names_whatever_the_scalars_are_called(
+    full, sparse
+):
+    """Only the scalar names changed at G2. The blobs are the API's Dataset as it made it, by the paper's
+    names: J7's regression and the paper's own code read them by name."""
+    scalar_names = set(RENAMED)
+    for which in ("fresh", "loaded"):
+        fields = getattr(full, which)["method_fields"]
+        blobs = getattr(sparse, which)["blob_parameters"]
+        assert "nevents" in fields.data_vars
+        assert {"nevents", "taud", "lam"} <= set(blobs.data_vars)
+        assert not scalar_names & (set(fields.variables) | set(blobs.variables))
+    # Variable for variable, and bit for bit, what the API gives when it is called directly.
+    fx.assert_bit_equal(
+        full.loaded["method_fields"], fx.direct_fields("full"), "method_fields"
+    )
+    fx.assert_bit_equal(
+        sparse.loaded["blob_parameters"], fx.direct_blobs("sparse"), "blob_parameters"
+    )
 
 
 def test_pixel_averages_writes_no_scalars(full):
