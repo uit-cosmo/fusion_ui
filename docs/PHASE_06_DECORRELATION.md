@@ -24,9 +24,10 @@ three keys as proposed, three scalars renamed to the store's existing names,
 and the paper's `reliable()` as a Fields-page toggle
 ([Products](#products-three-plotspecs-and-their-blob-schemas)). J3 merged
 (48a3e33): the three product specs, with G2's names. J10 merged (bdf4806):
-`velocity_field` is gone, and `fusion-ui prune` clears its runs in J7. J4b (J4's
-integration round) and J5 are running. Everything else is planned and not
-started.
+`velocity_field` is gone, and `fusion-ui prune` clears its runs in J7. J4b
+merged (02bb826): the paper's `reliable()` as a Fields-page checkbox, and the
+page tested on the real specs. J5 is in review. Everything else is planned and
+not started.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -1066,6 +1067,36 @@ CPU).** What later jobs build on:
   callable.
 - **For J8:** the 2DCC arrows are coloured by events, while the paper's
   `fig_2dcc` colours them by lags.
+
+**J4b, the integration round, landed 2026-10-07 (02bb826, 683 tests).**
+
+- **The paper's cut.** A sidebar checkbox, "The paper's cut, reliable()", is
+  off by default and is view state (`Cuts.paper`).
+  - When it is on, every panel shows only the pixels `views.reliable.rule`
+    keeps, at the page's minimum lags and events.
+  - The rule is `reliable()`'s: the centroid track on enough lags and events,
+    the centroid's velocity and both off-record TDE velocities (`vr*`, `vz*`)
+    finite, and no border pixels, whatever "interior only" says.
+  - A pixel the rule leaves out is marked as cut where its panel's method gave
+    a number, and as failed where it gave none.
+  - The figure says which cut is on: a line across the top, the legend, and
+    `layout.meta["cut"]`.
+  - `decorrelation.apd_check.figures` does not import in the app venv (it needs
+    `figure_provenance`). So the test reads `reliable()`'s source out of
+    `figures.py` with `ast` and runs it: a change to the paper's rule fails the
+    test.
+- **The real specs.** The page and its builders are tested on blobs that J3's
+  real specs computed through the store (`tests/real_fixtures.py`,
+  `tests/test_fields_real_specs.py`).
+  - These assumptions held: one `time` axis in the bank and the fields;
+    `fit_*` bool; `level_max` and `level_2dcc` NaN; `pos_*` NaN where nothing
+    was tracked.
+  - One did not: `pipeline.track` fills a lost lag by interpolation before the
+    fit. So a lag in `fit_*`, counted in `nlags_*`, can have no stored position.
+    The tracks caption says so now. For J8, `nlags_*` counts those lags.
+- **A limit.** The page finds `blob_parameters` only under the `blobs` defaults,
+  since `related_params` carries over only `averages` and the neighbour step.
+  The batch uses those defaults.
 
 ### J5 — Multi-shot jump and labels · Sonnet 5.5 · fusion_ui
 
