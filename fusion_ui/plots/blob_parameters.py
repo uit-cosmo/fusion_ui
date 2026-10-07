@@ -2,7 +2,7 @@
 
 Thirteen numbers per live reference pixel, the ones ``cmod_scan`` has always reported, from the stored
 conditional average and the pixel's own series (what each is, and its unit, is
-``fusion_ui.views.numbers.BLOB_PARAMETERS``):
+``fusion_ui.views.numbers.BLOB_PARAMETERS``; they are named here as the blob's variables):
 
 - ``nevents``: the events the conditional average rests on;
 - ``level``: the contour level read off the average, as a fraction of its maximum;
@@ -23,8 +23,11 @@ the velocity fields, and moving the ``cond_av`` mask must not mint a new key for
 is the same knob as ``method_fields``'s ``tracking.neighbour_step`` but a separate parameter, so a change to
 one leaves the other's key alone. ``blobs`` holds the ellipse fit's and the duration time's own settings.
 
-**Scalars** are twelve names, written per *live* pixel as ``(x, y, name)``: every variable except
-``nevents``, which ``method_fields`` already writes (:data:`SCALARS`). A dead pixel gets no row, since it
+**Scalars** are twelve, written per *live* pixel as ``(x, y, name)`` (:data:`SCALARS`, each name written next
+to the variable it is read from): every variable except ``nevents``, which ``method_fields`` writes as
+``number_events``. Ten are named as their variables. ``taud`` and ``lam`` are written as ``taud_psd`` and
+``lambda_psd``, the names the ``taud_psd`` spec and the seeded rows already use for the same fit, so that
+they line up on one axis; the blob keeps the API's ``taud`` and ``lam``. A dead pixel gets no row, since it
 was never computed; a NaN at a live pixel is written as NULL, "tried and failed".
 """
 
@@ -59,22 +62,26 @@ from fusion_ui.views.geometry import grid_axes, pitch
 from fusion_ui.views.numbers import BLOB_PARAMETERS as TABLE
 from fusion_ui.views.overlays import Legend
 
-#: The twelve names this writes per live pixel: every blob parameter but ``nevents``. Explicit rather than
-#: read off the API, for the reason ``method_fields.SCALARS`` gives.
-SCALARS = (
-    "level",
-    "area",
-    "lx_c",
-    "ly_c",
-    "theta_c",
-    "lr",
-    "lz",
-    "lx_f",
-    "ly_f",
-    "theta_f",
-    "taud",
-    "lam",
-)
+#: The twelve scalars this writes per live pixel: each name, as the store records it, next to the variable of
+#: the blob it is read from. Every blob parameter but ``nevents``, which ``method_fields`` writes. Written
+#: out rather than read off the API, for the reason ``method_fields.SCALARS`` gives. ``taud_psd`` and
+#: ``lambda_psd`` are not their variables' names: the blob keeps the API's ``taud`` and ``lam`` (the paper's
+#: code reads it by those), and the scalars take the names the ``taud_psd`` spec and the seeded rows use for
+#: the same fit.
+SCALARS = {
+    "level": "level",
+    "area": "area",
+    "lx_c": "lx_c",
+    "ly_c": "ly_c",
+    "theta_c": "theta_c",
+    "lr": "lr",
+    "lz": "lz",
+    "lx_f": "lx_f",
+    "ly_f": "ly_f",
+    "theta_f": "theta_f",
+    "taud_psd": "taud",
+    "lambda_psd": "lam",
+}
 
 #: The neighbour step of the deck's contour level, from the API's own defaults rather than restated.
 _NEIGHBOUR_STEP = Tracking().neighbour_step
@@ -117,7 +124,7 @@ def compute(ds, params, upstream):
 
 
 def scalars(result):
-    """The twelve :data:`SCALARS` at every live pixel."""
+    """The twelve :data:`SCALARS` at every live pixel, each read off its variable and written under its name."""
     return live_scalars(result, SCALARS)
 
 

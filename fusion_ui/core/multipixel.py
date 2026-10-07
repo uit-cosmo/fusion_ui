@@ -77,8 +77,8 @@ def supported(spec) -> bool:
     and for a live spec that brings its own ``overlay`` (today just the frame
     viewer: nothing to stamp and nothing to cache, each trace comes off the
     already-open dataset). Correctly excludes ``probe_trace`` (live, no
-    overlay) and ``velocity_field`` (deliberately no ``refx``/``refy`` -- it
-    sweeps every pixel internally, so there is nothing to stamp).
+    overlay) and ``dead_pixels`` (deliberately no ``refx``/``refy`` -- it
+    draws every pixel itself, so there is nothing to stamp).
 
     Never true for a spec with a batch-only link in its chain: N pixel runs
     could each have to start that batch compute, which a page must never do.
@@ -417,8 +417,8 @@ def run_all(conn, spec, target, params, ds, pixels) -> list:
     """``store.result`` once per pixel, driving a progress bar.
 
     A pixel whose run comes back ``failed`` is collected and reported at the
-    end, never fatal -- the ``velocity_field`` philosophy ("one NaN pixel
-    among many") applied at the run level. Each pixel commits as it finishes,
+    end, never fatal -- as one NaN pixel does not spoil a field, one failed
+    run does not spoil the selection. Each pixel commits as it finishes,
     so a browser refresh mid-run loses only the pixel in flight. Returns
     ``[((x, y), result, run), …]`` in selection order.
     """

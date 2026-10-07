@@ -19,8 +19,14 @@ group out of phase 06 (Decisions). J2a merged (e8d87f8): schema v4, `lookup`,
 J2b merged (342d57f): `precompute` takes several plots, `--workers`,
 `--run-day`, `--stale` and `--params-json`. J4 merged (99f11aa): the Fields page
 and its builders. J1 merged into fusion_scripts (7e0d38f): `decorrelation.pipeline`
-is bit-equal to J0's snapshot on the server, on all nine shots. J3 is running.
-Everything else is planned and not started.
+is bit-equal to J0's snapshot on the server, on all nine shots. G2 settled: the
+three keys as proposed, three scalars renamed to the store's existing names,
+and the paper's `reliable()` as a Fields-page toggle
+([Products](#products-three-plotspecs-and-their-blob-schemas)). J3 merged
+(48a3e33): the three product specs, with G2's names. J10 merged (bdf4806):
+`velocity_field` is gone, and `fusion-ui prune` clears its runs in J7. J4b (J4's
+integration round) and J5 are running. Everything else is planned and not
+started.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -343,8 +349,8 @@ Invariants:
 
 ### Products: three PlotSpecs and their blob schemas
 
-The keys below are proposed. **They become permanent**, since they are part of
-the cache key, once the first batch writes them, so gate G2 confirms them.
+The keys below were confirmed at G2. **They become permanent**, since they are
+part of the cache key, once the first batch writes them.
 `time` is the lag in seconds; R and Z are 2-D coordinates in metres. Each blob
 also carries the store's own `fusion_ui_*` attrs.
 
@@ -392,16 +398,40 @@ attrs min_cc, settings stamp, dead_mask_source
 **Scalars** are written per live pixel as `(x, y, name)`:
 
 - `method_fields`, 20 names: `vr_max vz_max nlags_max vr_com vz_com nlags_com
-  level_com vr_2dcc vz_2dcc nlags_2dcc nevents vr3_tde vz3_tde vr2_tde vz2_tde
-  cc_tde vr3_catde vz3_catde vr2_catde vz2_catde`;
-- `blob_parameters`, 12 names: its variables except `nevents`, which
+  level_com vr_2dcc vz_2dcc nlags_2dcc number_events vr3_tde vz3_tde vr2_tde
+  vz2_tde cc_tde vr3_catde vz3_catde vr2_catde vz2_catde`;
+- `blob_parameters`, 12 names: `level area lx_c ly_c theta_c lr lz lx_f ly_f
+  theta_f taud_psd lambda_psd`, its variables except `nevents`, which
   `method_fields` already writes.
 
 Dead pixels get no rows, since they were never computed. A NaN at a live pixel
 is written as NULL, meaning "tried and failed", as `velocity_field` does. That
-makes about 1360 + 820 rows per shot. None of these names exist in the store
-yet. `PLAN.md`'s phase-03 rule applies: the user confirms new scalar names
-before they go on an axis (gate G2).
+makes 1360 + 816 rows per shot on a 68-pixel mask. `PLAN.md`'s phase-03 rule
+applies: the user confirms new scalar names before they go on an axis.
+
+**G2 (the user, 2026-10-07)** confirmed the three keys and these names. Each
+scalar is named after its blob variable except three. Those take the name the
+store already gives the same quantity, so that the seed (`density_scan_import`),
+`two_dca` and the `taud_psd` spec show up as other sources on the same
+multi-shot axis:
+
+- `number_events` is read from `nevents`;
+- `taud_psd` from `taud`;
+- `lambda_psd` from `lam`.
+
+The blobs keep the API's variable names, which the regression and the paper's
+code read.
+
+- `lr lz lx_f ly_f theta_f` already exist, from the seed, `fwhm_sizes` and
+  `gaussian_sizes`. They are the same estimators, in the same units.
+- `vr_com vz_com area` read a contour at a level set per pixel, where
+  `velocity_contour`'s `vx_c vy_c area_c` read one at a fixed fraction of the
+  maximum.
+- `vr3_tde` and `vr3_catde` use other settings than `vx_tde` and `vx_2dca_tde`.
+
+  So these keep names of their own.
+- `level` and `level_com` agree while the two products' neighbour steps do,
+  which they do at the defaults. Both stay, since each product sets its own.
 
 ### The Fields page
 
@@ -929,6 +959,58 @@ plus:
 Then **stop for G2**: list the keys and the 32 names for the user before
 merging.
 
+**Landed 2026-10-07 (48a3e33, 638 tests).** What later jobs build on:
+
+- **Where the API comes in.** `plots/_pipeline.py` is the only module in
+  `fusion_ui` that imports `decorrelation`, and it imports `fusion_ui.config`
+  above it. A test fails if any other module imports the API, and another
+  checks, in a fresh interpreter, that the UI's data folder survives the import.
+  The module also holds the shared helpers:
+  - `record`, the record in metres;
+  - `bank_mask`;
+  - `average_at`;
+  - `live_scalars`.
+- **Preprocessed files only.** All three specs set `preprocessed=True`, so a
+  `--run-day` fill never selects a raw file.
+- **The record.** `record()` converts R and Z with the paper's own expression
+  (`fields.load`). It keeps R and Z in their on-disk dtype and loads the record
+  into memory. It refuses an R outside 10–700, which would not be centimetres.
+  `frames` is not widened, so J6's float32 files go in as float32, as in the
+  paper's loader. On the synthetic record, float32 frames gave products within
+  5e-7 relative of float64 ones.
+- **The derived products.** They take the bank's own `dead` and
+  `dead_mask_source` and never call `dead_mask` again. They use the API's
+  default pixel order.
+- **Parameters.** The classes are module-level:
+  - `PixelAveragesParams(averages)`;
+  - `MethodFieldsParams(averages, tracking, tde)`;
+  - `BlobParametersParams(averages, neighbour_step, blobs)`.
+
+  `upstream_params` deep-copies `averages`. Each class's module and name are
+  part of the hash, so they are as permanent as the keys.
+  `test_the_default_keys_are_stable` pins the three default hashes:
+  `302e4217…`, `d190bcb9…` and `42728c93…`.
+- **Scalars.** `SCALARS` is a dict from scalar name to blob variable, which
+  holds G2's three renames.
+- **Renders.**
+  - `pixel_averages` draws J4's lag strip at the reference with the most
+    events. A render has no state, so there is no slider; the Fields page has
+    the picker.
+  - `method_fields` draws J4's v_R panels at the default cuts.
+  - `blob_parameters` draws its own grid of 13 maps.
+- **Tests.** `tests/test_products.py` on `tests/product_fixtures.py`, a 3×3
+  synthetic record in centimetres with two masks. Its `direct_*` functions call
+  the API without the adapters, and J4b and J5 reuse them.
+  `fields_fixtures.World.install` now remembers only the first original.
+- **On the laptop, on 1160616027,** with J0's 68 frozen averages stacked as
+  the bank (no 2DCA was run):
+  - `method_fields` took 205 s and `blob_parameters` 43 s; the bank blob is
+    11.9 MB;
+  - all three are bit-equal to the paper's own path on the same machine;
+  - against J0's server snapshot they agree within 1e-12, except one pixel of
+    `vr_2dcc` at 2.2e-11 relative, which is the machines' floating point. J7's
+    exact check runs on the server.
+
 ### J4 — Fields page and builders · Sonnet 5.5 · fusion_ui
 
 Build what [The Fields page](#the-fields-page) describes. The schema is frozen,
@@ -969,8 +1051,10 @@ CPU).** What later jobs build on:
     TDEs on the CA, not to the 2DCC or the TDEs off the record.
   - Interior-only applies to every panel.
   
-  The paper's `reliable()` cuts per pixel, across all methods instead. That
-  choice goes to the user at G2.
+  The paper's `reliable()` cuts per pixel, across all methods instead. At G2
+  the user kept the per-method cuts as the default and asked for a checkbox
+  that applies `reliable()`'s pixel set to every panel, at the page's lags and
+  events thresholds (J4b).
 - **Stale products get one command for the shot:** `precompute pixel_averages
   method_fields blob_parameters --stale --shot N`.
 - **J3 must keep three field names.** `views/products.related_params` derives
@@ -1104,6 +1188,39 @@ without the variables.
   asked for the removal on 2026-10-07, and G3 restates it.
 
 **Accept when** the suite passes, plus a hermetic test of `prune`.
+
+**Landed 2026-10-07 (bdf4806, 656 tests).** What later jobs build on:
+
+- **`velocity_field` is gone.** The module, its tests, its import and every
+  mention in the code are removed. CLAUDE.md's spec table loses its row and
+  gains a note on pruning. The stale physics statements, "twelve new scalar
+  names" and the R-edge caveat, are left for J9. Four of those twelve
+  (`vx_field`, `vy_field`, `number_events_field` and `nlags_field`) go with the
+  prune.
+- **`fusion-ui prune --plot KEY [--yes]`** is `store.plan_prune` plus
+  `store.prune`. It counts:
+  - runs, by status;
+  - scalar rows;
+  - blobs on disk, and blobs listed but already missing;
+  - param sets left unreferenced (a preset keeps its own);
+  - runs of other plots built on these: their link is nulled and they read as
+    stale;
+  - blobs in directories this user cannot write.
+
+  Without `--yes` it deletes nothing and exits 1. The key need not be
+  registered.
+- **Deletion order.** Blobs go first. Then one transaction deletes the rows of
+  the runs whose blob is gone.
+  - A blob that cannot be removed keeps its run and is listed, and the command
+    exits 1. Rerun it once the permissions are fixed.
+  - A blob outside `CACHE_DIR` refuses the whole plan. The check resolves `..`
+    and symlinked directories.
+  - A connection with `foreign_keys` off is refused.
+- **For J7.** Dry-run first, with the service's `FUSION_UI_CACHE`. J10 expects
+  115 runs and 41,400 scalar rows.
+  - An `outside cache` line means the ledger's blob paths are not under that
+    cache.
+  - An `unwritable` line needs the user to fix permissions (sudo).
 
 ### G3 — the user approves deployment
 
@@ -1273,11 +1390,13 @@ is reached.
 | L7 | **An adaptive 2DCA window.** Read the window off each shot (e.g. a multiple of its median duration time) instead of fixing 60 samples, the way the contour level is read off each average. Only if per-shot parameter sets prove too manual | Opus 5.5 |
 | L8 | **W7-X and phantom data** through the same products. The API is kept machine-agnostic for this (invariant 9) | Opus 5.5 for the first, Sonnet 5.5 after |
 | L6 | **One cache.** `figures.py`/`cmod_scan` read fusion_ui's blobs instead of their own cache | Opus 5.5 |
+| L10 | **Record the discharge window on each run.** The products are computed over the discharge DB's `t_start..t_end`, which no run records: if the window is edited after a bank is computed, the products on it, or a bank computed afterwards, disagree silently, and `stale_runs` cannot see it (J3) | Opus 5.5 |
 | L9 | **The CA TDE** (velocity_estimation's `TDEMethod.CA`, the paper's `_ca` group) as its own product, once the user chooses its event selector: fc5e59a's in-package `cond_av`, which the paper used, or PlasmaPy's `ConditionalEvents` in b3b6945. On 1160616027 they differ by a median of 0.2–0.7%, at most 12% in v_R, and about 2% in events (2026-10-07). The paper's nine files are kept in `~/Data/reference/tde_ca_fc5e59a_laptop/` | Opus 5.5 |
 
 ## Open questions for the user
 
-1. Plot keys and scalar names (G2). The proposals are above.
+1. ~~Plot keys and scalar names (G2).~~ Settled on 2026-10-07: see
+   [Products](#products-three-plotspecs-and-their-blob-schemas).
 2. Whether the masks look right in the UI, above all for 2009–2011, which have
    no reference (G1).
 3. When J6 has run, can the superseded 1140827 files in

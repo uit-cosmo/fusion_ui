@@ -31,7 +31,8 @@ def test_supported_matches_the_per_pixel_specs_and_the_live_trace():
     # eligible through its overlay, which reads each trace off the open file.
     assert multipixel.supported(registry.get("raw_frames"))
     assert not multipixel.supported(registry.get("probe_trace"))
-    assert not multipixel.supported(registry.get("velocity_field"))
+    # A cached spec that sweeps every pixel itself has no refx/refy to stamp.
+    assert not multipixel.supported(registry.get("dead_pixels"))
 
 
 def test_nothing_built_on_a_batch_only_spec_runs_on_many_pixels(monkeypatch):
