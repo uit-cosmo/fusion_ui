@@ -7,6 +7,9 @@ shot's single-shot view with the parameters that produced it, so an outlier is
 one click from being explained. A point from ``method_fields`` or
 ``blob_parameters`` opens the Fields page instead (:mod:`fusion_ui.jump`): on
 that shot and settings, and on the pixel when the aggregate is a fixed pixel.
+A ``blob_parameters`` point that no ``method_fields`` settings go with still
+opens the single-shot page on its exact run, since the Fields page would show
+other blob numbers than the one clicked.
 
 The page owns no analysis of its own: the scalar names come from whatever the
 store already holds -- the ``density_scan`` seed, or results computed through
@@ -68,22 +71,33 @@ def jump_to_single_shot(conn, machine, shot, source):
     st.switch_page("pages/2_single_shot.py")
 
 
-def jump_to_fields(conn, machine, shot, source, how, pixel):
-    """Open the Fields page on the shot, the settings and, for a fixed pixel, the pixel.
+def fields_settings(conn, machine, shot, source):
+    """The ``method_fields`` settings the Fields page opens on for a point, or ``None``.
 
-    The selection is set as for any jump, so that the other pages follow, and
-    the Fields page reads ``fields.open`` once (its ``apply_request``). Its
-    settings are ``method_fields`` parameter sets, so a ``blob_parameters``
-    point is matched to the ones that go with it
-    (:func:`fusion_ui.jump.settings_for`). The ledger is read here for that,
-    and nothing is written.
+    The Fields page's settings are ``method_fields`` parameter sets: a point
+    from ``method_fields`` names its own, and one from ``blob_parameters`` is
+    matched to the sets that go with it (:func:`fusion_ui.jump.settings_for`).
+    ``None`` is a point the Fields page has nothing to open for: another
+    source, a deployment without ``method_fields``, or a ``blob_parameters``
+    run that no settings go with. The ledger is read here and nothing is
+    written.
     """
     plot, params_hash, _, _ = source
-    st.session_state["selection"] = jump.selection(machine, shot, source)
+    if not jump.opens_fields(plot) or "method_fields" not in registry.REGISTRY:
+        return None
     found, _ = prod.specs(registry)
     options = prod.settings(conn, found["method_fields"], machine)
     good = {o.hash for o in options if shot in prod.good_shots(conn, machine, o.hash)}
-    settings = jump.settings_for(plot, params_hash, found, options, good)
+    return jump.settings_for(plot, params_hash, found, options, good)
+
+
+def jump_to_fields(machine, shot, source, settings, how, pixel):
+    """Open the Fields page on the shot, the settings and, for a fixed pixel, the pixel.
+
+    The selection is set as for any jump, so that the other pages follow, and
+    the Fields page reads ``fields.open`` once (its ``apply_request``).
+    """
+    st.session_state["selection"] = jump.selection(machine, shot, source)
     st.session_state["fields.open"] = jump.fields_request(shot, settings, how, pixel)
     st.switch_page("pages/5_fields.py")
 
@@ -91,14 +105,18 @@ def jump_to_fields(conn, machine, shot, source, how, pixel):
 def jump_to_point(conn, machine, shot, source, how, pixel):
     """Open what a clicked point came from.
 
-    The Fields page for the two phase-06 products, the single-shot page for
-    every other source. A deployment without ``method_fields`` has no Fields
-    page to open, so those points go to the single-shot page too.
+    The Fields page when it has settings to open on (the two phase-06
+    products), the single-shot page otherwise: every other source, and a
+    ``blob_parameters`` run that no ``method_fields`` settings go with. The
+    Fields page shows the blob parameters of the settings it is on, not of an
+    arbitrary run, so for that run only the single-shot page can show the
+    numbers that were clicked, from the parameters that made them.
     """
-    if jump.opens_fields(source[0]) and "method_fields" in registry.REGISTRY:
-        jump_to_fields(conn, machine, shot, source, how, pixel)
-    else:
+    settings = fields_settings(conn, machine, shot, source)
+    if settings is None:
         jump_to_single_shot(conn, machine, shot, source)
+    else:
+        jump_to_fields(machine, shot, source, settings, how, pixel)
 
 
 def main():

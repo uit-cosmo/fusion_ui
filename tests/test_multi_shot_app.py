@@ -8,7 +8,7 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 import fusion_ui.plots  # noqa: F401
-from fusion_ui.core import catalog, db, registry, scalar_labels, store
+from fusion_ui.core import catalog, db, params_ui, registry, scalar_labels, store
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MULTI_SHOT = str(REPO_ROOT / "fusion_ui" / "pages" / "3_multi_shot.py")
@@ -225,6 +225,10 @@ class Products:
                             blob.blobs.gauss_fit, size_penalty=3.0
                         ),
                     ),
+                ),
+                # A 2DCA window that the velocity fields were never run with.
+                "lonely": dataclasses.replace(
+                    blob, averages=dataclasses.replace(blob.averages, window=30)
                 ),
             },
         }
@@ -525,28 +529,61 @@ def test_a_blob_point_that_several_settings_go_with_opens_on_the_one_with_fields
     assert sidebar(app, "Settings").value == products.hash["method_fields", "default"]
 
 
-def test_a_blob_point_with_settings_no_velocity_run_has_still_opens_the_shot_and_the_pixel(
-    deployment, products, monkeypatch
+#: The one leaf of the form each blob run that no velocity settings go with moves off the default.
+NO_SETTINGS = {
+    "fit": "params.blob_parameters.blobs.gauss_fit.size_penalty",
+    "lonely": "params.blob_parameters.averages.window",
+}
+
+
+def form_of(params):
+    """The single-shot page's widget state for ``blob_parameters`` parameters: what the jump seeds."""
+    state = {}
+    params_ui.seed_session_state(state, "params.blob_parameters", params)
+    return state
+
+
+@pytest.mark.parametrize("key", sorted(NO_SETTINGS))
+def test_a_blob_point_no_settings_go_with_opens_the_single_shot_page_on_its_exact_run(
+    deployment, products, monkeypatch, key
 ):
-    """The ellipse fit's own settings are in no method_fields parameter set: nothing goes with it, so the
-    page is opened on the shot and the pixel, and keeps the settings it had."""
+    """``fit`` has the ellipse fit's own settings, which are in no method_fields parameter set; ``lonely``
+    a 2DCA window that nobody ran the velocity fields with. The Fields page shows the blob parameters of
+    the settings it is on, which for either are other numbers than the one clicked. So the click goes where
+    every other source goes, to the single-shot page, with the run's own parameters in its form and the
+    run marked ready to show from the cache."""
+    wanted = form_of(products.params["blob_parameters"][key])
+    default = form_of(registry.get("blob_parameters").params())
+    assert {k for k in wanted if wanted[k] != default[k]} == {NO_SETTINGS[key]}
+
     click(monkeypatch)
     app = open_multi_shot(
+        # Whatever the Fields page was left on does not matter: it is not opened.
         fields__settings=products.hash["method_fields", "short"],
-        **fixed_pixel(products.source("blob_parameters", "fit"), "lr"),
+        **fixed_pixel(products.source("blob_parameters", key), "lr"),
     )
-    assert titles(app) == ["Fields"]
-    assert sidebar(app, "Shot").value == SHOT
-    assert app.session_state["fields.pixel"] == (6, 4)
-    assert sidebar(app, "Settings").value == products.hash["method_fields", "short"]
+    assert titles(app) == ["Single shot"]
+    assert "fields.open" not in app.session_state
     assert app.session_state["selection"] == SELECTION
-    # Nothing remembered: the default, as for any first visit.
-    app = open_multi_shot(
-        **fixed_pixel(products.source("blob_parameters", "fit"), "lr")
-    )
+    assert app.session_state["spec.apd"].key == "blob_parameters"
+    # The run's own parameters, every leaf of them: the one it moved and the defaults it kept.
+    assert {k: app.session_state[k] for k in wanted} == wanted
+    assert app.session_state[f"ready.blob_parameters.cmod_{SHOT}_apd_p"] is True
+
+
+@pytest.mark.parametrize("key", ["default", "short"])
+def test_a_blob_point_with_settings_still_opens_the_fields_page(
+    deployment, products, monkeypatch, key
+):
+    """The other branch: when ``method_fields`` settings go with the blob run, nothing changes. The
+    single-shot page is not the destination, and the form of ``blob_parameters`` is not seeded.
+    """
+    click(monkeypatch)
+    app = open_multi_shot(**fixed_pixel(products.source("blob_parameters", key), "lr"))
     assert titles(app) == ["Fields"]
-    assert sidebar(app, "Settings").value == products.hash["method_fields", "default"]
-    assert app.session_state["fields.pixel"] == (6, 4)
+    assert sidebar(app, "Settings").value == products.hash["method_fields", key]
+    assert "spec.apd" not in app.session_state
+    assert not [k for k in app.session_state.filtered_state if k.startswith("params.")]
 
 
 def test_the_jump_reads_the_ledger_and_writes_nothing(
@@ -554,13 +591,14 @@ def test_the_jump_reads_the_ledger_and_writes_nothing(
 ):
     before = ledger_counts(deployment)
     click(monkeypatch)
-    for plot, key, name in (
-        ("method_fields", "short", "vr_com"),
-        ("blob_parameters", "short", "lr"),
-        ("blob_parameters", "fit", "lr"),
+    for plot, key, name, destination in (
+        ("method_fields", "short", "vr_com", "Fields"),
+        ("blob_parameters", "short", "lr", "Fields"),
+        ("blob_parameters", "fit", "lr", "Single shot"),
+        ("blob_parameters", "lonely", "lr", "Single shot"),
     ):
         app = open_multi_shot(**fixed_pixel(products.source(plot, key), name))
-        assert titles(app) == ["Fields"], (plot, key)
+        assert titles(app) == [destination], (plot, key)
     assert ledger_counts(deployment) == before
 
 
