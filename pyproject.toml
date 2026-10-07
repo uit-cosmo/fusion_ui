@@ -15,7 +15,10 @@ requires-python = ">=3.10"
 # imaging_methods, experimental_database and fusion_scripts are not on PyPI:
 # install each editable from its local checkout (see README).
 dependencies = [
-    "streamlit>=1.40",
+    # The Fields page passes a callable to st.download_button(data=...), so the file is built when
+    # the button is clicked and not on every rerun. The installed package does not say which
+    # release added that, so the floor is the release the laptop and the server run.
+    "streamlit>=1.63",
     "plotly>=5.24",
     "xarray>=2025.01.2",
     "netcdf4>=1.7.2",
