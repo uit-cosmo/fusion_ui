@@ -2,8 +2,9 @@
 
 ``rescan`` is the one that goes on cron; ``status`` is the one to run after
 deploying; ``import-results`` is run once, to seed the scalar store from
-``density_scan``; ``precompute`` (phase 04) warms the cache overnight.
-``prune`` arrives with phase 05.
+``density_scan``; ``precompute`` (phase 04) warms the cache overnight, for
+several plots and on several workers since phase 06. ``prune`` arrives with
+phase 05.
 """
 
 import argparse
@@ -66,57 +67,152 @@ def cmd_import_results(args):
     return 0
 
 
-def cmd_precompute(args):
-    """Run one plot's compute over every matching shot, warming the cache.
+def _print_flushed(message):
+    # Flush every line: a fill can run for days, and a buffered "computing…"
+    # line is no use to someone tailing the log overnight. A closed pipe (tee
+    # killed by the same Ctrl-C) must not turn into a traceback.
+    try:
+        print(message, flush=True)
+    except (OSError, ValueError):
+        pass
 
-    ``fusion_ui.plots`` is imported here, not at module top, so the plain
-    maintenance commands stay importable on a machine without the analysis
-    packages installed.
+
+def _selection_flags(args):
+    """The flags that chose these targets, to repeat in a suggested command."""
+    flags = [f" --shot {shot}" for shot in args.shot]
+    flags += [f" --run-day {day}" for day in args.run_day]
+    if args.machine != config.MACHINE:
+        flags.append(f" --machine {args.machine}")
+    if args.workers > 1:
+        flags.append(f" --workers {args.workers}")
+    return "".join(flags)
+
+
+def cmd_precompute(args):
+    """Run the plots' compute over every matching shot, warming the cache.
+
+    Several plots run in dependency order within each shot; ``--workers``
+    spreads the shots over a pool of processes. ``fusion_ui.plots`` is
+    imported here, not at module top, so the plain maintenance commands stay
+    importable on a machine without the analysis packages installed.
     """
     import fusion_ui.plots  # noqa: F401 - importing the package registers specs
 
     from fusion_ui.core import precompute, registry
 
-    if args.plot not in registry.REGISTRY:
-        known = ", ".join(sorted(registry.REGISTRY))
-        print(f"Unknown plot {args.plot!r}. Registered: {known}", file=sys.stderr)
-        return 1
-    spec = registry.get(args.plot)
-    if not spec.cached:
-        print(
-            f"{args.plot!r} is a live view; it has nothing to precompute.",
-            file=sys.stderr,
-        )
-        return 1
-
-    shots = set(args.shot) if args.shot else None
-    params = precompute.default_params(spec, args.pixel)
-    conn = db.open_db(args.database)
-    try:
-        targets = precompute.targets_for(conn, spec, args.machine, shots=shots)
-        if not targets:
+    keys = list(dict.fromkeys(args.plots))
+    for key in keys:
+        if key not in registry.REGISTRY:
+            known = ", ".join(sorted(registry.REGISTRY))
+            print(f"Unknown plot {key!r}. Registered: {known}", file=sys.stderr)
+            return 1
+        if not registry.get(key).cached:
             print(
-                f"No indexed shots match plot {args.plot!r} for machine "
-                f"{args.machine!r}. Run `fusion-ui rescan` first.",
+                f"{key!r} is a live view; it has nothing to precompute.",
                 file=sys.stderr,
             )
             return 1
-
-        stats = precompute.run(
-            conn,
-            spec,
-            targets,
-            params,
-            force=args.force,
-            retry_failed=getattr(args, "retry_failed", False),
-            # Flush every line: this loop can run for days, and a buffered
-            # "computing…" line is no use to someone tailing the log overnight.
-            log=lambda message: print(message, flush=True),
+    if args.stale and (args.force or args.retry_failed):
+        print(
+            "--stale recomputes exactly the stale results, whatever their status;"
+            " it does not combine with --force or --retry-failed.",
+            file=sys.stderr,
         )
-        print(stats.summary())
-        return 0
+        return 1
+    specs = precompute.in_dependency_order([registry.get(key) for key in keys])
+
+    # Every parameter set is settled before the database is opened: a file
+    # that does not fit must stop the command before anything is computed.
+    try:
+        if args.params_json:
+            params = precompute.params_from_file(args.params_json, specs, args.pixel)
+        else:
+            params = {
+                spec.key: precompute.default_params(spec, args.pixel) for spec in specs
+            }
+    except precompute.ParamsError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+
+    if args.nice is not None:
+        nice = args.nice
+    else:
+        nice = precompute.DEFAULT_NICE if args.workers > 1 else None
+    conn = db.open_db(args.database)
+    try:
+        try:
+            plan = _precompute_plan(args, conn, keys, specs, params)
+        except KeyboardInterrupt:
+            print("interrupted before anything was computed", file=sys.stderr)
+            return 130
+        if isinstance(plan, int):  # nothing to do: the exit status
+            return plan
+        report = precompute.execute(
+            conn, plan, log=_print_flushed, workers=args.workers, nice=nice
+        )
+        for line in report.summary_lines():
+            _print_flushed(line)
+        if plan.unnamed_upstreams:
+            plots = precompute.in_dependency_order(
+                [registry.get(key) for key in (*plan.unnamed_upstreams, *keys)]
+            )
+            _print_flushed(
+                "Some results were left stale because an upstream of theirs is"
+                " stale too and was not named. To recompute them as well, run"
+                f" `fusion-ui precompute {' '.join(spec.key for spec in plots)}"
+                f" --stale{_selection_flags(args)}`"
+            )
+        if report.broken:
+            return 1
+        return 130 if report.interrupted else 0
     finally:
         conn.close()
+
+
+def _precompute_plan(args, conn, keys, specs, params):
+    """The plan for ``precompute``, or the exit status when there is nothing to do.
+
+    Reads the ledger and the index, and records the parameter sets; opens no
+    data file.
+    """
+    from fusion_ui.core import precompute
+
+    shots = set(args.shot) or None
+    run_days = set(args.run_day) or None
+    if args.stale:
+        # --params-json or --pixel picks one parameter set per plot; without
+        # them every stale set is recomputed, each with its own parameters.
+        chosen = params if (args.params_json or args.pixel) else None
+        plan = precompute.plan_stale(
+            conn, specs, args.machine, shots, run_days, only=chosen
+        )
+        if not plan.jobs:
+            print(
+                f"Nothing is stale for {', '.join(keys)} on the shots selected"
+                f" ({args.machine})."
+            )
+            return 0
+        return plan
+    targets = precompute.select_targets(conn, specs, args.machine, shots, run_days)
+    if not targets:
+        named = (
+            f"plot {keys[0]!r}"
+            if len(keys) == 1
+            else "plots " + ", ".join(repr(key) for key in keys)
+        )
+        print(
+            f"No indexed shots match {named} for machine "
+            f"{args.machine!r}. Run `fusion-ui rescan` first.",
+            file=sys.stderr,
+        )
+        return 1
+    return precompute.plan_fill(
+        conn,
+        [(spec, params[spec.key]) for spec in specs],
+        targets,
+        force=args.force,
+        retry_failed=args.retry_failed,
+    )
 
 
 def cmd_backfill_dt(args):
@@ -193,6 +289,41 @@ def cmd_status(args):
     return 0
 
 
+def _run_day(text):
+    """A run day: the first seven digits of a C-Mod shot number ``1YYMMDDnnn``."""
+    if len(text) != 7 or not text.isdigit():
+        raise argparse.ArgumentTypeError(
+            f"{text!r} is not a run day: give its 7 digits, e.g. 1160616 for"
+            " shots 1160616001 to 1160616999"
+        )
+    return int(text)
+
+
+def _positive(text):
+    try:
+        value = int(text)
+    except ValueError:
+        value = 0
+    if value < 1:
+        raise argparse.ArgumentTypeError(
+            f"expected a whole number of at least 1, got {text!r}"
+        )
+    return value
+
+
+def _niceness(text):
+    try:
+        value = int(text)
+    except ValueError:
+        value = -1
+    if not 0 <= value <= 19:
+        raise argparse.ArgumentTypeError(
+            f"expected a niceness from 0 to 19, got {text!r} (lowering it needs"
+            " root, and this never asks for that)"
+        )
+    return value
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="fusion-ui", description="Shot Explorer maintenance commands."
@@ -224,9 +355,15 @@ def build_parser():
 
     precompute = subparsers.add_parser(
         "precompute",
-        help="run a plot's compute over every matching shot to warm the cache",
+        help="run plots' compute over every matching shot to warm the cache",
     )
-    precompute.add_argument("plot", help="plot key, e.g. velocity_contour")
+    precompute.add_argument(
+        "plots",
+        nargs="+",
+        metavar="PLOT",
+        help="plot key, e.g. velocity_contour; several run in dependency order"
+        " within each shot, so an upstream named with them is computed once",
+    )
     precompute.add_argument(
         "--machine",
         default=None,
@@ -238,7 +375,17 @@ def build_parser():
         type=int,
         default=[],
         metavar="N",
-        help="restrict to this shot number (repeatable; default: every shot)",
+        help="restrict to this shot number (repeatable, and adds to --run-day;"
+        " default: every shot)",
+    )
+    precompute.add_argument(
+        "--run-day",
+        action="append",
+        type=_run_day,
+        default=[],
+        metavar="D",
+        help="restrict to the shots of this run day, the first 7 digits of a"
+        " shot number, e.g. 1160616 (repeatable, and adds to --shot)",
     )
     precompute.add_argument(
         "--pixel",
@@ -246,6 +393,15 @@ def build_parser():
         type=int,
         metavar=("X", "Y"),
         help="set the reference pixel (refx/refy) instead of the spec default",
+    )
+    precompute.add_argument(
+        "--params-json",
+        default=None,
+        metavar="PATH",
+        help="parameters instead of the defaults: one plot's complete set as"
+        " param_sets.params_json stores it (what the single-shot page shows),"
+        ' or only the fields to change, e.g. {"averages": {"window": 30}},'
+        " applied to every plot named",
     )
     precompute.add_argument(
         "--force",
@@ -257,6 +413,29 @@ def build_parser():
         action="store_true",
         help="recompute rows previously recorded as failed (e.g. after fixing"
         " a full disk); without it, failed rows are skipped without reopening",
+    )
+    precompute.add_argument(
+        "--stale",
+        action="store_true",
+        help="recompute in place only the results whose input file or upstream"
+        " changed since, each with its own parameters; one built on a stale"
+        " upstream that is not named is left, with the command that fixes it",
+    )
+    precompute.add_argument(
+        "--workers",
+        type=_positive,
+        default=1,
+        metavar="N",
+        help="processes computing at once, largest file first (default: 1, in"
+        " this process)",
+    )
+    precompute.add_argument(
+        "--nice",
+        type=_niceness,
+        default=None,
+        metavar="N",
+        help="run the computes at this niceness, set rather than added to what"
+        " they inherit (default: 10 with --workers above 1, else unchanged)",
     )
     precompute.set_defaults(func=cmd_precompute)
 
