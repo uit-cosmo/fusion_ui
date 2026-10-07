@@ -35,12 +35,13 @@ import os
 import tempfile
 import time
 from datetime import datetime, timezone
+from functools import lru_cache
 
 import pandas as pd
 import xarray as xr
 
 from fusion_ui import config
-from fusion_ui.core import params_ui, shared
+from fusion_ui.core import params_ui, shared, versions
 
 #: Sentinel for a scalar that belongs to the shot rather than to one pixel.
 #: Not NULL: SQLite permits NULLs in a non-INTEGER primary key, which would
@@ -53,17 +54,17 @@ def _now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+@lru_cache(maxsize=None)
 def _code_version():
-    """``git describe`` for this app and imaging_methods, or ``None``.
+    """Each repository's commit as one string, or ``None``.
 
-    Imported lazily and defensively: this module is used from the CLI as well
-    as from a page, and a missing git checkout must not stop a result being
-    stored.
+    Read once per process: the code a process runs is the code it imported,
+    and a long batch must not run git again for every target. Defensive,
+    because a missing checkout must not stop a result being stored. See
+    :mod:`fusion_ui.core.versions`.
     """
     try:
-        from fusion_ui import ui
-
-        return " ".join(f"{k}={v}" for k, v in sorted(ui.code_version().items()))
+        return versions.as_text(versions.code_version())
     except Exception:  # noqa: BLE001 - provenance is nice to have, not required
         return None
 
