@@ -135,21 +135,54 @@ def test_all_panels_share_one_arrow_scale(products):
         # Every arrow of every panel is its speed over the one scale.
         np.testing.assert_allclose(length * scale, speed, rtol=1e-9)
 
-    # And that scale is the figure's: the 90th-percentile speed over every panel at once.
-    pooled = np.concatenate(
-        [
-            methods.panel(bundle_of(products), m).speed[
-                methods.panel(bundle_of(products), m).ok
-            ]
-            for m in METHODS
-        ]
-    )
-    R, _ = bundle_of(products).grid
-    expected = arrows.arrow_scale(pooled, R.max() - R.min())
-    assert scale == pytest.approx(expected)
+    # And that scale is the figure's: the 90th-percentile speed of the three 2DCA tracks together, drawn
+    # as a fraction of the array's width (worked out here from the products, not from the builder).
+    fields = products.fields
+    live = ~products.geometry.dead
+    speeds = []
+    for key in ("max", "com", "2dcc"):
+        vr, vz, lags = (fields[f"{n}_{key}"].values for n in ("vr", "vz", "nlags"))
+        ok = (
+            live
+            & np.isfinite(vr)
+            & np.isfinite(vz)
+            & (lags >= 8)
+            & (fields["nevents"].values >= 200)
+        )
+        speeds.append(np.hypot(vr, vz)[ok])
+    width = bundle_of(products).grid[0].max() - bundle_of(products).grid[0].min()
     assert scale == pytest.approx(
-        np.percentile(pooled, 90) / (0.18 * (R.max() - R.min()))
+        np.percentile(np.concatenate(speeds), 90) / (0.18 * width)
     )
+
+
+def test_a_tde_that_blows_up_does_not_set_the_scale(products):
+    """Two-point TDE speeds run to several km/s where a component is small. If they set the scale the
+    2DCA arrows, which the others are compared against, would shrink to stubs."""
+    plain = panels.velocity_panels(bundle_of(products))
+    blown = products.fields.copy(deep=True)
+    for name in ("vr2_tde", "vz2_tde", "vr3_tde", "vz3_tde", "vr2_catde", "vz2_catde"):
+        blown[name][:] = blown[name] * 10
+    figure = panels.velocity_panels(Bundle(fields=blown, bank=products.bank))
+    assert figure.layout.meta["arrow_scale"] == plain.layout.meta["arrow_scale"]
+    assert figure.layout.meta["key_speed"] == plain.layout.meta["key_speed"]
+
+    def lengths(fig, panel):
+        shafts = traces(fig, "shafts", panel)[0]
+        x, y = np.asarray(shafts.x).reshape(-1, 3), np.asarray(shafts.y).reshape(-1, 3)
+        return np.hypot(x[:, 1] - x[:, 0], y[:, 1] - y[:, 0])
+
+    np.testing.assert_allclose(lengths(figure, "com"), lengths(plain, "com"))
+    np.testing.assert_allclose(
+        lengths(figure, "tde2"), 10 * lengths(plain, "tde2")
+    )  # the finding
+    # With no 2DCA arrow to draw, the others set it rather than nothing being drawn.
+    no_tracks = products.fields.copy(deep=True)
+    for key in ("max", "com", "2dcc"):
+        no_tracks[f"vr_{key}"][:] = np.nan
+    assert panels.velocity_panels(
+        Bundle(fields=no_tracks, bank=products.bank)
+    ).layout.meta["arrow_scale"]
 
 
 def test_there_is_one_key_and_it_is_drawn_at_the_scale(products):

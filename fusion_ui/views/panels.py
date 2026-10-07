@@ -4,8 +4,12 @@ Seven panels, one per method (2DCA max, 2DCA centroid, 2DCC, 3TDE and 2TDE off t
 2TDE on the conditional average), drawn either as **arrows** or as **maps** of v_R or v_Z. What
 makes the methods comparable by eye is that nothing is rescaled between panels:
 
-- One arrow scale for the whole figure, taken from the speeds of all panels together, and one key
-  that states it. A per-panel scale would make every field look equally fast.
+- One arrow scale for the whole figure, and one key that states it. A per-panel scale would make
+  every field look equally fast. The scale is set by the three 2DCA tracks, the methods the others
+  are compared against: a TDE inflates speeds, and a two-point TDE blows up wherever a component
+  is small, so left to set the scale it would shrink every 2DCA arrow to a stub. Its longer arrows
+  are the finding, and the ones that leave the view are cut off at its edge (the hover has the
+  numbers, and the gain makes every arrow longer or shorter).
 - One diverging colour scale for the maps, symmetric about zero.
 - Every panel shows the same stretch of the array at the same size, at equal aspect, or the arrow
   directions lie.
@@ -321,7 +325,11 @@ def velocity_panels(bundle, mode="arrows", arrow_gain=1.0):
     ]
 
     if mode == "arrows":
-        speeds = np.concatenate([p.speed[p.ok] for p in panels])
+        # The 2DCA tracks set the scale; with none drawn (every fit failed) the others do.
+        reference = [p for p in panels if p.method.track is not None]
+        speeds = np.concatenate([p.speed[p.ok] for p in reference])
+        if not speeds.size:
+            speeds = np.concatenate([p.speed[p.ok] for p in panels])
         scale = arrows.arrow_scale(speeds, float(np.nanmax(R) - np.nanmin(R)))
         if scale is not None:
             scale /= arrow_gain
