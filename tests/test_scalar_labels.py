@@ -221,6 +221,17 @@ def test_a_name_without_a_label_keeps_its_raw_name():
         assert scalar_labels.axis_title(name) == name
 
 
+def test_the_picker_shows_a_labelled_name_with_its_label_and_any_other_as_it_is():
+    for name, entry in scalar_labels.LABELS.items():
+        shown = scalar_labels.option(name)
+        assert shown == f"{name} — {entry}"
+        # The name first, so that the picker can be searched by it, and the label as the axis shows it.
+        assert shown.startswith(name) and shown.endswith(scalar_labels.label(name))
+    assert scalar_labels.option("vr_com") == "vr_com — v_R, 2DCA centroid [m/s]"
+    for name in ("vx_c", "area_c", "number_events_field", "dead", "not_a_scalar"):
+        assert scalar_labels.option(name) == name
+
+
 def test_the_axis_title_is_the_label_then_how_the_pixels_were_collapsed():
     for text in multishot.AGGREGATES.values():
         assert (

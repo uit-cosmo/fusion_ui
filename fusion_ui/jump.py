@@ -3,9 +3,9 @@
 A point on the scatter is one shot's number from one *source*, ``(plot, params_hash, diagnostic,
 preprocessed)``. Most sources open the single-shot page, on the plot that made the number with the
 parameters that made it. The two products the Fields page draws, ``method_fields`` and
-``blob_parameters``, open that page instead, on the shot, the settings and (for a fixed-pixel scatter)
-the pixel the point is about. It reads the request once from ``st.session_state["fields.open"]``
-(``pages/5_fields.py``)::
+``blob_parameters``, open that page instead when it has settings to open on: on the shot, the
+settings and (for a fixed-pixel scatter) the pixel the point is about. It reads the request once from
+``st.session_state["fields.open"]`` (``pages/5_fields.py``)::
 
     {"shot": 1160616027, "settings": <a method_fields params hash>, "pixel": (x, y)}
 
@@ -15,6 +15,11 @@ the contour's neighbour step carry over, everything else is the blob product's o
 ``blob_parameters`` point therefore has no settings of its own, and :func:`settings_for` finds the
 ``method_fields`` ones it belongs to by asking that mapping forwards, because the mapping is the one
 place that knows what goes with what.
+
+**A blob run that no settings go with opens the single-shot page**, like every other source, on its
+exact run. The Fields page shows the blob parameters of the settings it is on, and for such a run
+those are other numbers than the one clicked (its fit settings are in no ``method_fields`` set); the
+single-shot page restores the run's own parameters and draws it from the cache.
 
 Pure: nothing here touches Streamlit, the database or the filesystem. The page reads the ledger
 (:func:`fusion_ui.views.products.settings` and ``good_shots``) and hands over what it found.
@@ -81,8 +86,9 @@ def settings_for(plot, params_hash, found, options, good=()):
       parameters are the ones shown.
     - ``None`` when nothing goes with it, which is a ``blob_parameters`` run whose own settings no
       ``method_fields`` set maps to (the ellipse fit or the duration time fit were changed, or its 2DCA
-      settings were never run with the velocity fields), and any other plot. The page is then opened on
-      the shot, and on the pixel, and keeps the settings it had.
+      settings were never run with the velocity fields), and any other plot. The click then goes to the
+      single-shot page, which shows that exact run: the Fields page would show the blob parameters of
+      whatever settings it is on, which are not the ones that were clicked.
 
     ``options`` are the settings picker's, in its order: objects with ``hash`` and ``params_json``.
     """
@@ -104,13 +110,12 @@ def settings_for(plot, params_hash, found, options, good=()):
 def fields_request(shot, settings, how, pixel):
     """What ``st.session_state["fields.open"]`` is set to, for the Fields page to read once.
 
-    ``settings`` is left out when there are none to name. The pixel goes only when the scatter's
-    aggregate is a fixed pixel: any other aggregate has no pixel to open. ``how`` is a key of
+    ``settings`` is the ``method_fields`` hash :func:`settings_for` found: a point it finds none for
+    does not open the Fields page, so there is no request without one. The pixel goes only when the
+    scatter's aggregate is a fixed pixel: any other aggregate has no pixel to open. ``how`` is a key of
     ``multishot.AGGREGATES``.
     """
-    request = {"shot": int(shot)}
-    if settings:
-        request["settings"] = settings
+    request = {"shot": int(shot), "settings": settings}
     if how == "pixel" and pixel is not None:
         request["pixel"] = (int(pixel[0]), int(pixel[1]))
     return request

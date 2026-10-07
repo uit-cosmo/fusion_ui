@@ -235,7 +235,7 @@ def test_with_fields_nowhere_the_first_match_is_still_chosen(found, several):
     )
 
 
-# -- none goes with it -----------------------------------------------------------------------------------
+# -- none goes with it: the click goes to the single-shot page, on that exact run ----------------------------
 
 
 def test_a_blob_point_nobody_has_velocity_fields_for_has_no_settings(found):
@@ -247,7 +247,9 @@ def test_a_blob_point_nobody_has_velocity_fields_for_has_no_settings(found):
 
 def test_a_blob_point_with_its_own_fit_settings_has_no_settings(found):
     """The ellipse fit and the duration time fit are the blob product's own: no velocity setting
-    carries them, so none can be said to go with a run that changed them."""
+    carries them, so none can be said to go with a run that changed them. The Fields page would show
+    other blob numbers than the one clicked, so the page sends that click to the single-shot page.
+    """
     options = [
         setting(method_params(found), default=True),
         setting(method_params(found, averages__window=40)),
@@ -330,12 +332,6 @@ def test_the_pixel_goes_only_with_a_fixed_pixel_aggregate():
         assert ("pixel" in request) == (how == "pixel"), how
     # A fixed pixel with none chosen has nothing to send.
     assert "pixel" not in jump.fields_request(1, "d" * 40, "pixel", None)
-
-
-def test_with_no_settings_the_request_still_names_the_shot_and_the_pixel():
-    request = jump.fields_request(1160616027, None, "pixel", (6, 2))
-    assert request == {"shot": 1160616027, "pixel": (6, 2)}
-    assert "settings" not in request
 
 
 def test_the_request_is_plain_python():

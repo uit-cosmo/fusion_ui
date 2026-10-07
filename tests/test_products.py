@@ -1140,11 +1140,19 @@ def test_method_fields_draws_one_v_r_map_per_method_on_one_scale(full):
     maps = [t for t in figure.data if isinstance(t, go.Heatmap)]
     assert len(maps) == 7
     from fusion_ui.views.bundle import Cuts
+    from fusion_ui.views.methods import describe_cut
 
+    # The title says what the figure is and where the rest is. Which cuts it was drawn at is the line
+    # across the top of the figure, which says them per method; the title does not repeat it, and
+    # "fewer than 8 lags or 200 events" was wrong for the methods that events do not cut.
     title = figure.layout.title.text
-    assert "Fields page" in title
-    # It says which cuts it drew at, whatever the page's defaults are.
-    assert f"{Cuts().min_lags} lags or {Cuts().min_events} events" in title
+    assert title.startswith("v_R of every method, on one scale")
+    assert "Fields page sets the cuts and draws the arrows" in title
+    cuts = Cuts()
+    assert f"{cuts.min_lags} lags" not in title
+    assert f"{cuts.min_events} events" not in title
+    assert "circled" not in title
+    assert describe_cut(cuts) in [a.text for a in figure.layout.annotations]
 
 
 def test_blob_parameters_draws_one_map_per_parameter_marking_dead_and_failed(sparse):
@@ -1451,3 +1459,77 @@ def test_the_single_shot_page_shows_the_bank_from_cache_and_computes_the_rest_of
         )
     assert len(stored_rows(tree.conn, after[(shot, "method_fields")])) == 3 * 20
     assert len(stored_rows(tree.conn, after[(shot, "blob_parameters")])) == 3 * 12
+
+
+MULTI_SHOT_APP = str(REPO / "fusion_ui" / "app.py")
+
+
+@pytest.mark.slow
+def test_a_multi_shot_click_on_blob_parameters_that_no_settings_go_with_shows_that_exact_run(
+    tree, monkeypatch
+):
+    """The fixture's blob parameters carry the ellipse fit's and the duration time fit's own settings
+    (``fx.BLOBS``), which are in no ``method_fields`` parameter set: ``method_fields`` computed beside
+    them, at the same 2DCA settings, still maps to the default fit. The Fields page would show the blob
+    parameters of the settings it is on, which are other numbers than the point's. So the click opens
+    the single-shot page, which restores the run's parameters and finds the result in the cache: the
+    form holds the fit settings the batch used, and nothing is computed."""
+    import streamlit as st
+    from streamlit.testing.v1 import AppTest
+
+    from fusion_ui import jump
+    from fusion_ui.core import decimate
+
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    shot = tree.shots[0]
+    fill(tree.conn, KEYS, shots={shot})  # what the batch leaves behind
+    before = runs_of(tree.conn)
+    assert set(before) == {(shot, plot) for plot in KEYS}
+    blob, fields = before[(shot, "blob_parameters")], before[(shot, "method_fields")]
+
+    # Nothing goes with the blob run, though the velocity fields were computed at the same 2DCA settings.
+    found, _ = products.specs(registry)
+    options = products.settings(tree.conn, found["method_fields"], "cmod")
+    assert fields["params_hash"] in {o.hash for o in options}
+    assert (
+        jump.settings_for(
+            "blob_parameters",
+            blob["params_hash"],
+            found,
+            options,
+            {fields["params_hash"]},
+        )
+        is None
+    )
+
+    monkeypatch.setattr(
+        decimate,
+        "selection_points",
+        lambda event: [{"customdata": ["cmod", shot, 0.7, 1.4, 0.5]}],
+    )
+    app = AppTest.from_file(MULTI_SHOT_APP, default_timeout=120)
+    app.run()
+    assert not app.exception, app.exception
+    app.session_state["ms.scalar"] = "lr"
+    app.session_state["ms.source"] = ("blob_parameters", blob["params_hash"], "apd", 1)
+    app.switch_page("pages/3_multi_shot.py")
+    app.run()
+    assert not app.exception, [e.value for e in app.exception]
+    assert not app.error, [e.value for e in app.error]
+
+    assert [t.value for t in app.title] == ["Single shot"]
+    assert "fields.open" not in app.session_state
+    # The run's own settings are in the form, down to the fit's...
+    assert (
+        widget(app, "number_input", "aspect penalty").value
+        == fx.BLOBS.gauss_fit.aspect_penalty
+    )
+    assert widget(app, "number_input", "window").value == fx.AVERAGES.window
+    # ... and the page found its result under them: it is drawn, with the provenance line of a stored
+    # result, and not the "press Compute" a form that found nothing says. The jump marks the run ready,
+    # so a miss would have been computed on the spot: the ledger says it was not.
+    assert len(charts(app)) == 1
+    assert not app.info, [i.value for i in app.info]
+    assert "Recompute" in [b.label for b in app.button]
+    assert runs_of(tree.conn) == before, "the page computed or recorded something"
