@@ -236,6 +236,7 @@ def pick_cuts(container):
         ("fields.min_lags", 8),
         ("fields.min_events", 200),
         ("fields.interior", False),
+        ("fields.paper", False),
     ):
         st.session_state.setdefault(key, default)
     min_lags = container.number_input(
@@ -246,7 +247,8 @@ def pick_cuts(container):
         key="fields.min_lags",
         help=(
             "Fewest lags a 2DCA track's slope may rest on to be drawn. A slope through two or three "
-            "lags is a secant, not a fit, and the wildest velocities come from those pixels."
+            "lags is a secant, not a fit, and the wildest velocities come from those pixels. Under the "
+            "paper's cut it is the centroid track's, for every panel."
         ),
     )
     min_events = container.number_input(
@@ -258,7 +260,8 @@ def pick_cuts(container):
         help=(
             "Fewest events the conditional average may rest on, for the methods read off it: the "
             "2DCA maximum and centroid, and the TDEs on the average. The 2DCC and the TDEs off the "
-            "record do not depend on the events, and are not cut by this."
+            "record do not depend on the events, and are not cut by this. Under the paper's cut it "
+            "is every panel's."
         ),
     )
     interior = container.checkbox(
@@ -266,9 +269,25 @@ def pick_cuts(container):
         key="fields.interior",
         help="Leave out the pixels on the array's border, where the 2DCA track leaves the view in a few lags.",
     )
-    for key in ("fields.min_lags", "fields.min_events", "fields.interior"):
+    paper = container.checkbox(
+        "The paper's cut, reliable()",
+        key="fields.paper",
+        help=(
+            "Instead of the cuts per method: every panel shows the same pixels, the ones the paper's "
+            "reliable() keeps (apd_check/figures.py). The 2DCA centroid rests on at least the minimum "
+            "of lags and of events above, the centroid and both TDEs returned a number, and the pixel "
+            "is not on the array's border, whatever the checkbox above says. A method that found no "
+            "number at a pixel still shows its failure there."
+        ),
+    )
+    for key in (
+        "fields.min_lags",
+        "fields.min_events",
+        "fields.interior",
+        "fields.paper",
+    ):
         remember(key)
-    return Cuts(int(min_lags), int(min_events), bool(interior))
+    return Cuts(int(min_lags), int(min_events), bool(interior), bool(paper))
 
 
 # ---------------------------------------------------------------------------
