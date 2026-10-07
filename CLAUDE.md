@@ -38,7 +38,9 @@ twelve names and four behaviours decide what people will see there.
 `core/multishot.py` and `core/precompute.py` are in,
 `pages/2_single_shot.py` is a thin dispatcher over the registry,
 `pages/3_multi_shot.py` draws the scalar scatter (its pure logic lives in
-`core/multishot.py`), and `fusion_ui/plots/` holds thirteen specs:
+`core/multishot.py`), and `fusion_ui/plots/` holds fifteen specs: the twelve
+below and the three phase-06 products (`pixel_averages`, `method_fields`,
+`blob_parameters`; see `docs/PHASE_06_DECORRELATION.md`):
 
 | module | spec | |
 |---|---|---|
@@ -54,13 +56,17 @@ twelve names and four behaviours decide what people will see there.
 | `trajectories.py` | `trajectories` | cached, `requires="two_dca"`: both trackers on one figure |
 | `two_sided_exp.py` | `two_sided_exp` | cached, `requires="two_dca"`: exponential fits to the two cuts |
 | `velocity_tde.py` | `velocity_tde` | cached, unchained: TDE off the raw record |
-| `velocity_field.py` | `velocity_field` | cached, unchained: 2DCA at **every** pixel, ~30 min/shot |
 
 **Copy `velocity_contour.py` for a new derived analysis.** Almost every blob
 quantity the group reports is derived from the conditional average, not from
 the raw frames, and 2DCA costs ~21 s on a real shot — so a derived spec
 declares `requires="two_dca"` rather than running its own. Copying `spectra.py`
 instead is right only for something computed straight off the raw frames.
+
+The old `velocity_field` spec, a different estimator from the paper's, is gone
+(phase 06). Runs stored under its key stay in the ledger, unregistered, until
+`fusion-ui prune --plot velocity_field --yes`, which works on a plot key that is
+no longer registered and counts what it would delete before it deletes.
 
 The `density_scan/results.json` seed is imported with `fusion-ui
 import-results`: 50 shots, 3880 pixels, 58 200 scalars under the plot key

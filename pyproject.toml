@@ -61,5 +61,5 @@ fusion_ui = ["data/*.md"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "slow: exercises a full O(pixels^2) analysis (e.g. the whole velocity_field loop); skip with -m 'not slow' for a quick run.",
+    "slow: runs a real analysis end to end (every cached spec's round trip through the cache, a pool of workers); skip with -m 'not slow' for a quick run.",
 ]
