@@ -17,8 +17,10 @@ check of the masks, is open. J0 done at 828 files: the user left the `_ca`
 group out of phase 06 (Decisions). J2a merged (e8d87f8): schema v4, `lookup`,
 `stale_runs`, `batch_only`, and `code_version` with all four repositories.
 J2b merged (342d57f): `precompute` takes several plots, `--workers`,
-`--run-day`, `--stale` and `--params-json`. J4 is done and back with its agent
-for review fixes. J1 is running. Everything else is planned and not started.
+`--run-day`, `--stale` and `--params-json`. J4 merged (99f11aa): the Fields page
+and its builders. J1 merged into fusion_scripts (7e0d38f): `decorrelation.pipeline`
+is bit-equal to J0's snapshot on the server, on all nine shots. J3 is running.
+Everything else is planned and not started.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -174,9 +176,21 @@ not say otherwise):
   differs: velocity-estimation fc5e59a in site-packages, fppanalysis 0.2.0 from
   PyPI, xarray 2025.1.2, netCDF4 1.7.2, h5py 3.15.1. It belongs to the user,
   and no job changes it.
-- fusion_scripts' tests on main: all 29 pass in the paper venv. In the app venv,
-  20 pass, and three modules need `figure_provenance` or `seaborn`, which the app
-  venv lacks (1 failure, 2 collection errors). That is the baseline to keep.
+- fusion_scripts' tests on main after J1 (7e0d38f), run as `python -m pytest
+  --continue-on-collection-errors` from the root:
+  - paper venv: 136 pass and 8 skip (the fusion_ui checks);
+  - app venv: 134 pass and 1 skips. Three modules need `figure_provenance` or
+    `seaborn`, which the app venv lacks (1 failure, 2 collection errors).
+  
+  That is the baseline to keep.
+- **Floating point differs between the machines.** The server's Xeon W-2125 has
+  AVX-512 and the laptop's i7-8565U only AVX2. With the same packages, numpy's
+  BLAS rounds differently: a 300×300 matrix product already differs in the last
+  bit. Fields and blobs computed on the laptop differ from the server's in the
+  last bits, and by more at a few ill-conditioned pixels: max-track velocities
+  that are numerically zero, and edge-pixel ellipse fits by up to 4e-3.
+  - **Exact regressions run on the server.**
+  - On the laptop, compare against a laptop-made reference.
 - The two machines' 1160616 preprocessed files are byte-identical, and so are
   their discharge DBs.
 
@@ -722,6 +736,41 @@ regression locally.
 - **Never relax the tolerance to pass.** A mismatch is a finding: stop and
   report it. Escalate to Fable 5.1 if it cannot be explained.
 
+**Landed 2026-10-07 (fusion_scripts 7e0d38f).** What later jobs build on:
+
+- **Acceptance.** On the server, `regress_pipeline` against J0's snapshot passes
+  9/9 shots, every variable bit-equal and the recomputed average (5, 4)
+  bit-equal. It ran from a scratch clone in `~/phase06_j1`; the log is
+  `~/phase06_j1/regress.log`.
+  - On the laptop, the same run differs from the snapshot in the last bits on
+    all nine shots, from the CPU (Environments).
+  - There J1 is bit-equal to the pre-refactor code on all nine.
+  - The user accepted J1 on that evidence, with the server check run
+    alongside.
+- **The API differs from the sketch in these places:**
+  - `stack(averages_by_pixel, ds, averages, dead)`;
+  - `fields(…, pixels=None)`;
+  - `dead_mask` returns its source in `attrs["dead_mask_source"]`;
+  - more is public: `references`, `track`, `tde_fields`, `ca_tde`,
+    `pixel_blob`, `nevents`, `TRACKS` and `BLOB_PARAMETERS`;
+  - the hand-made 1160616 mask is the one-entry table `HAND_MADE_MASKS`.
+    Invariant 6 was followed over invariant 9.
+- **The pixel order is part of the TDE's result**, because it caches delays by
+  pixel pair. Use the default order.
+- **Positions and fits.** `pos_*` is NaN where the tracker found nothing, yet
+  `fit_*` can include such a lag, where the slope used `smooth_da`'s
+  interpolated value. 1160616027's centroid track has 18 such lags, at 4
+  pixels.
+- **Import order.** Importing the API imports fusion_scripts' `config`, which
+  fills unset `FUSION_*` variables from its own `.env`. fusion_ui's `config`
+  does the same, so whichever is imported first wins. In fusion_ui, its own
+  must come first.
+- **`regress_pipeline` flags:** `-j`, `--average X Y`, `--no-average`, `-v`,
+  `--db`, `--machine` and `--hash PLOT=HASH`.
+  - `--fusion-ui` refuses a database whose schema is not current.
+  - Run standalone on the server, it needs
+    `FUSION_DATA_FOLDER=/hdd1/fusion_data/` (The server).
+
 ### J2a — Store: batch-only specs, lookup, staleness · Opus 5.5 · fusion_ui
 
 **Read first:** `CLAUDE.md`, `docs/PLAN.md` (schema, store), `core/store.py`,
@@ -898,6 +947,41 @@ so start against synthetic blobs from a fixture factory
     `st.session_state["fields.pixel"]` the pixel sections draw too;
 - building the pixel level from a loaded bank takes well under a second
   (measure and report it).
+
+**Landed 2026-10-07 (99f11aa, 585 tests; the pixel level takes 117 ms of
+CPU).** What later jobs build on:
+
+- **Reading.** The page reads through `store.find_run` and a `st.cache_data` on
+  (path, mtime), and never computes. A test replaces every store writer with
+  one that raises.
+- **`fields.open` is J5's way in.** Set it to `{"shot", "settings": <a
+  method_fields params hash>, "pixel": (x, y)}`, then call
+  `st.switch_page("pages/5_fields.py")`. The page reads it once and removes it.
+- **The single-shot page opens the raw file** when `selection["preprocessed"]
+  is False` names this shot. The mask link and multi-shot points from raw-file
+  specs depend on that.
+- **The arrow scale is shared by all seven panels.** The three 2DCA tracks set
+  it, and an "Arrow length ×" slider moves it. The other panels set it only
+  when no 2DCA track drew anything.
+- **Cuts apply per method.**
+  - The minimum of lags applies to the three tracks.
+  - The minimum of events applies to the 2DCA max and centroid and to the
+    TDEs on the CA, not to the 2DCC or the TDEs off the record.
+  - Interior-only applies to every panel.
+  
+  The paper's `reliable()` cuts per pixel, across all methods instead. That
+  choice goes to the user at G2.
+- **Stale products get one command for the shot:** `precompute pixel_averages
+  method_fields blob_parameters --stale --shot N`.
+- **J3 must keep three field names.** `views/products.related_params` derives
+  the `blob_parameters` params from the `method_fields` settings through
+  `averages`, `tracking.neighbour_step` and the top-level `neighbour_step`.
+- **Contours** use skimage's `find_contours` with imaging_methods' primitives,
+  equal to `get_contour_evolution` to 1e-12. skimage is not listed, since
+  imaging_methods pins it. `streamlit>=1.63`, for `download_button` with a
+  callable.
+- **For J8:** the 2DCC arrows are coloured by events, while the paper's
+  `fig_2dcc` colours them by lags.
 
 ### J5 — Multi-shot jump and labels · Sonnet 5.5 · fusion_ui
 
