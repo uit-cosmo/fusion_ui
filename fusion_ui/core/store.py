@@ -679,13 +679,20 @@ def _chained(plot):
     return upstream is not None and upstream.cached
 
 
+def _judged(run):
+    """Whether staleness can be told for ``run`` at all.
+
+    Only when it recorded its input (``input_mtime``) and that input is still
+    in the index. A run written before schema v4, or for a target the index did
+    not hold, says nothing of what it was computed from; a run whose input has
+    left the index could not be recomputed.
+    """
+    return run["input_mtime"] is not None and run["index_mtime"] is not None
+
+
 def _own_staleness(run, rows):
-    """Why ``run`` itself is stale, ``None`` if it is not or nobody can tell."""
-    if run["input_mtime"] is None:
-        # Written before schema v4 (or for a target the index does not hold):
-        # nothing says what it was computed from, so it is unknown, not stale.
-        return None
-    if run["index_mtime"] is not None and run["index_mtime"] != run["input_mtime"]:
+    """Why a judged ``run`` itself is stale, or ``None`` (see :func:`_judged`)."""
+    if run["index_mtime"] != run["input_mtime"]:
         return STALE_INPUT
     upstream_id = run["upstream_run_id"]
     if upstream_id is None:
@@ -720,12 +727,20 @@ def stale_runs(conn, plot=None):
       stale itself, by any rule -- so a stale 2DCA average marks every result
       built on it, however far down the chain.
 
-    A run with no ``input_mtime`` -- written before schema v4, or for a target
-    the index does not hold -- is unknown and never listed, so legacy results
-    are not recomputed wholesale. Nor is a run whose input file has left the
-    index, which nothing could recompute. Whether a plot is chained is read
-    from the registry, so import :mod:`fusion_ui.plots` first, as every entry
-    point does; a plot that is not registered is judged by the other rules.
+    Only a run whose input is recorded and indexed is judged. Every other run
+    is never listed, by any rule: one with no ``input_mtime`` -- written before
+    schema v4, or for a target the index did not hold -- is unknown, so legacy
+    results are not recomputed wholesale; one whose input file has left the
+    index could not be recomputed. Neither is stale itself, so neither passes
+    staleness on: a judged run built on one is judged by its own link alone
+    (deleted, or recomputed in place). A run and its upstream share a target,
+    and so a shots row, so a link never joins a judged run to one whose input
+    has left the index; it can join one to an unknown upstream, such as a run
+    written before v4.
+
+    Whether a plot is chained is read from the registry, so import
+    :mod:`fusion_ui.plots` first, as every entry point does; a plot that is
+    not registered is judged by the other rules.
     """
     rows = {row["id"]: dict(row) for row in conn.execute(_STALE_QUERY)}
     reasons = {}
@@ -734,11 +749,13 @@ def stale_runs(conn, plot=None):
         if run_id in reasons:
             return reasons[run_id]
         run = rows[run_id]
-        found = _own_staleness(run, rows)
-        upstream_id = run["upstream_run_id"]
-        if found is None and upstream_id in rows and upstream_id not in visiting:
-            if reason(upstream_id, visiting | {run_id}) is not None:
-                found = STALE_UPSTREAM_STALE
+        found = None
+        if _judged(run):
+            found = _own_staleness(run, rows)
+            upstream_id = run["upstream_run_id"]
+            if found is None and upstream_id in rows and upstream_id not in visiting:
+                if reason(upstream_id, visiting | {run_id}) is not None:
+                    found = STALE_UPSTREAM_STALE
         reasons[run_id] = found
         return found
 

@@ -775,6 +775,56 @@ def test_a_target_outside_the_index_records_no_input_and_is_unknown(
     assert store.stale_runs(conn) == []
 
 
+def test_a_run_whose_input_left_the_index_is_never_listed(
+    conn, cache, indexed, chain, target, tmp_path
+):
+    """Nothing could recompute it, so `precompute --stale` must not aim at it."""
+    from fusion_ui.core import catalog
+
+    store.result(conn, chain, target, DerivedParams(), ds=None)
+    store.delete_run(conn, runs_by_plot(conn)["synthetic"])
+    assert stale(conn) == {"derived": store.STALE_UPSTREAM_DELETED}
+    mtime = index_mtime(conn)
+
+    # The file leaves the data tree and a rescan drops its shots row.
+    away = tmp_path / "away.nc"
+    os.rename(indexed, away)
+    catalog.rescan(conn, str(indexed.parent.parent), "cmod", None)
+    assert conn.execute("SELECT COUNT(*) FROM shots").fetchone()[0] == 0
+    assert store.stale_runs(conn) == []
+
+    # Back with the same mtime (a rename keeps it): judged again.
+    os.rename(away, indexed)
+    catalog.rescan(conn, str(indexed.parent.parent), "cmod", None)
+    assert index_mtime(conn) == mtime
+    assert stale(conn) == {"derived": store.STALE_UPSTREAM_DELETED}
+
+
+def test_an_unknown_run_is_not_listed_through_its_upstream_either(
+    conn, cache, indexed, chain, spec, target, registered
+):
+    """A run with no input_mtime but a link -- written before its target was
+    indexed -- stays unknown even when the run beneath it goes stale."""
+    top = registered(
+        registry.PlotSpec(
+            key="top",
+            label="Top",
+            diagnostics=("apd",),
+            params=TopParams,
+            render=lambda result, params, target: None,
+            compute=lambda ds, params, upstream: upstream + params.offset,
+            requires="derived",
+            upstream_params=lambda params: params.derived,
+        )
+    )
+    store.result(conn, top, target, TopParams(), ds=None)
+    with conn:
+        conn.execute("UPDATE runs SET input_mtime = NULL WHERE plot = 'top'")
+
+    store.compute_and_store(conn, spec, target, Params(), ds=None)
+    assert stale(conn) == {"derived": store.STALE_UPSTREAM_RECOMPUTED}
+
+
 def test_record_run_never_keeps_the_previous_provenance(conn, cache, target):
     """An update in place that is not given the columns clears them, rather
     than keeping the last attempt's on a row that no longer has them."""
