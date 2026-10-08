@@ -145,13 +145,17 @@ def discharge_for_shot(shot):
 
 
 def open_target(machine, shot, diagnostic, preprocessed):
-    """``(Target, dataset)`` -- the file, already restricted to its window.
+    """``(Target, dataset)`` -- the file as opened (lazy, nothing read), and the
+    window it is to be cut to.
 
-    Imaging files are sliced to the discharge DB's ``t_start..t_end`` before
-    anything downstream sees them: they are ~500 MB over 583k samples, and no
-    view has a reason to touch the whole record. Probe files have no shared time
-    axis to slice on -- every quantity x position carries its own -- so they are
-    handed over whole and the probe adapter does the indexing.
+    The window is the discharge DB's ``t_start..t_end``, or a centred 0.2 s one
+    when the shot has no entry. :func:`input_for` cuts the file to it once the
+    plot is picked: imaging files are ~500 MB over 583k samples, and no view has
+    a reason to touch the whole record -- but for one spec that finds something
+    against the start of the record, which declares it (``whole_record``). Probe
+    files have no shared time axis to cut -- every quantity x position carries
+    its own -- so they are handed over whole and the probe adapter does the
+    indexing.
     """
     path = loader.dataset_path(machine, shot, diagnostic, preprocessed)
     if not os.path.exists(path):
@@ -165,11 +169,9 @@ def open_target(machine, shot, diagnostic, preprocessed):
 
     if loader.TIME_DIM in ds.dims:
         t_start, t_end, source = loader.time_window(ds, discharge_for_shot(shot))
-        windowed = loader.sliced(ds, t_start, t_end)
     else:
         t_start = t_end = float("nan")
         source = "none"
-        windowed = ds
 
     target = registry.Target(
         machine=machine,
@@ -181,11 +183,38 @@ def open_target(machine, shot, diagnostic, preprocessed):
         t_end=t_end,
         window_source=source,
     )
-    return target, windowed
+    return target, ds
 
 
-def window_caption(target):
+def input_for(spec, target, ds):
+    """What ``spec`` draws from and computes on: the opened file cut to the
+    target's window, or all of it with that window attached when the spec
+    declares ``whole_record``. The same call ``fusion-ui precompute`` makes, so
+    the two cannot disagree on what a result was computed from."""
+    return loader.input_for(ds, target.t_start, target.t_end, spec.whole_record)
+
+
+def window_caption(target, ds):
+    """The window the plot is drawn over.
+
+    A preprocessed file is cropped to its analysis window (the discharge window
+    cut to the gas puff) and stores it as ``analysis_window``: that is the
+    window of its data, and the caption gives it, with the discharge DB's beside
+    it. Every other file is cut to the discharge window.
+    """
     if target.window_source == "none":
+        return
+    stored = loader.stored_window(ds)
+    if stored is not None:
+        beside = (
+            f" (the discharge DB's window is {target.t_start:.4f}–{target.t_end:.4f} s)"
+            if target.window_source == "metadata"
+            else ""
+        )
+        st.caption(
+            f"Window {stored[0]:.4f}–{stored[1]:.4f} s — the analysis window this "
+            f"file is cropped to{beside}."
+        )
         return
     st.caption(
         f"Window {target.t_start:.4f}–{target.t_end:.4f} s — "
@@ -368,15 +397,16 @@ def main():
     if picked is None:
         return
 
-    target, ds = open_target(*picked)
+    target, opened = open_target(*picked)
     if target is None:
         return
 
     spec = pick_spec(target.diagnostic, target.preprocessed)
     if spec is None:
         return
+    ds = input_for(spec, target, opened)
 
-    window_caption(target)
+    window_caption(target, opened)
 
     if multipixel.supported(spec) and st.sidebar.radio(
         "Pixels", ["One", "Many"], horizontal=True, key=f"mode.{spec.key}"

@@ -33,6 +33,11 @@ def test_explain_puts_the_plain_summary_above_the_technical_method():
     method = [m.value for m in expander.markdown]
     assert method and "Red spectrum" in method[0]
     assert "**150**" in method[0] and "**0.1**" in method[0]  # the thresholds in force, filled in
+    # Both views show this text, so it must be true of both: the window the spectra are judged over, and what each
+    # view draws of the mask (J6d's note: it used to say "This view shows the single shot").
+    assert "Welch PSD of each pixel over the analysis window" in method[0]
+    assert "single shot" not in method[0]
+    assert "the mask the file was made with, which is the day's" in method[0]
 
 
 def test_explain_quotes_the_thresholds_it_is_given():

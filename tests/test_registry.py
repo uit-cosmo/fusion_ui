@@ -140,6 +140,47 @@ def test_a_spec_may_be_built_on_a_batch_only_one():
     ]
 
 
+# ---------------------------------------------------------------------------
+# The whole record. Every other spec computes on the file cut to the discharge
+# window; one that finds something against the start of the record says so, and
+# `loader.input_for` honours it for the page and for precompute alike.
+# ---------------------------------------------------------------------------
+
+
+def test_a_spec_computes_on_the_cut_record_unless_it_says_otherwise():
+    assert spec("heavy", compute=lambda ds, p: ds).whole_record is False
+    whole = spec("puff", compute=lambda ds, p: ds, whole_record=True)
+    assert whole.whole_record is True
+
+
+def test_a_live_spec_cannot_need_the_whole_record():
+    """A live spec has no compute to hand it to: its view is its dataset."""
+    with pytest.raises(ValueError, match="whole record but is a live spec"):
+        registry.register(spec("puff", whole_record=True))
+    registry.register(spec("puff", compute=lambda ds, p: ds, whole_record=True))
+    assert registry.get("puff").whole_record
+
+
+def test_a_chain_agrees_on_the_whole_record():
+    """The store hands one dataset down the chain: a link given the whole record
+    would silently compute on a time axis it was never written for, and one given
+    the cut would look for the start of a record that is not there."""
+    same = lambda p: p  # noqa: E731
+    registry.register(spec("base", compute=lambda ds, p: ds, whole_record=True))
+    with pytest.raises(ValueError, match="disagree on whole_record"):
+        registry.register(derived("cut", requires="base", upstream_params=same))
+    registry.register(
+        derived("whole", requires="base", upstream_params=same, whole_record=True)
+    )
+
+    registry.register(spec("plain", compute=lambda ds, p: ds))
+    with pytest.raises(ValueError, match="disagree on whole_record"):
+        registry.register(
+            derived("wrong", requires="plain", upstream_params=same, whole_record=True)
+        )
+    registry.register(derived("right", requires="plain", upstream_params=same))
+
+
 def target(**kwargs):
     defaults = dict(
         machine="cmod",

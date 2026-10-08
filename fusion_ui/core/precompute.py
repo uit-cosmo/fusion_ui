@@ -17,7 +17,8 @@ How a fill is organised:
 - **With ``workers > 1`` a pool of spawned processes** takes the targets left
   to compute, largest file first, so the last shots do not start alone. Each
   worker opens its own database connection, loads the windowed record into
-  memory once per target, and prints its own timestamped lines. One worker
+  memory once per target (the whole record, for a spec that declares
+  ``whole_record``), and prints its own timestamped lines. One worker
   (the default) runs in this process, exactly as a fill always has.
 - **``--stale`` recomputes stale results in place** (:func:`plan_stale`), each
   with the parameters it was computed with, upstream before downstream. A
@@ -972,39 +973,46 @@ def _interruptible_registry(interrupts):
 
 class _Record:
     """The target's input, opened at the first step that computes and shared
-    by the rest; loaded into memory when ``load`` is set (pool workers)."""
+    by the rest; loaded into memory when ``load`` is set (pool workers).
+
+    A step gets the file cut to the discharge window, or, when its spec
+    declares ``whole_record``, the whole record with that window attached:
+    ``loader.input_for`` decides, as it does for the single-shot page. A job
+    whose steps want both keeps one of each, each read once.
+    """
 
     def __init__(self, job, load, interrupts):
         self._job = job
         self._load = load
         self._interrupts = interrupts
         self._stack = contextlib.ExitStack()
-        self._data = None
+        self._opened = None
+        self._data = {}  # whole record or not -> the input
         self._error = None
 
-    def get(self):
+    def get(self, whole=False):
         if self._error is not None:
             raise self._error
-        if self._data is None:
+        if whole not in self._data:
             try:
                 with self._interrupts.interruptible():
-                    ds = self._stack.enter_context(
-                        xr.open_dataset(self._job.target.path)
+                    if self._opened is None:
+                        self._opened = self._stack.enter_context(
+                            xr.open_dataset(self._job.target.path)
+                        )
+                    t_start, t_end, _ = loader.time_window(
+                        self._opened, self._job.window
                     )
-                    t_start, t_end, _ = loader.time_window(ds, self._job.window)
-                    windowed = (
-                        loader.sliced(ds, t_start, t_end)
-                        if loader.TIME_DIM in ds.dims
-                        else ds
-                    )
-                    self._data = windowed.load() if self._load else windowed
+                    data = loader.input_for(self._opened, t_start, t_end, whole)
+                    self._data[whole] = data.load() if self._load else data
             except Exception as error:  # noqa: BLE001 - the steps record it
                 self._error = error
                 raise
-        return self._data
+        return self._data[whole]
 
     def close(self):
-        self._data = None
+        self._data = {}
+        self._opened = None
         self._stack.close()
 
 
@@ -1130,7 +1138,7 @@ def _run_step(conn, job, step, options, emit, record, tag):
     )
     started = time.perf_counter()
     try:
-        data = record.get()
+        data = record.get(whole=spec.whole_record)
         # A batch job: the one caller allowed to compute batch-only specs,
         # including a batch-only upstream of the plot asked for.
         if step.stale:

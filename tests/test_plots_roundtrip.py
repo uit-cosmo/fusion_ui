@@ -19,7 +19,7 @@ import pytest
 import xarray as xr
 
 import fusion_ui.plots  # noqa: F401 - registers every spec
-from fusion_ui.core import registry, store
+from fusion_ui.core import loader, registry, store
 
 CENTRE = 4  # the reference pixel on the 9x9 blob fixture
 
@@ -102,10 +102,19 @@ def test_a_stored_result_survives_the_cache_and_still_renders(
     if not spec.accepts(target.preprocessed):
         target = dataclasses.replace(target, preprocessed=not target.preprocessed)
 
-    first, run = store.result(conn, spec, target, params, blobs)
+    # What the page and precompute hand a spec that declares it needs the whole
+    # record (``loader.input_for``): the record as it is, with the discharge window
+    # it would have been cut to. The fixture is the record, all of it.
+    record = (
+        loader.whole_record(blobs, target.t_start, target.t_end)
+        if spec.whole_record
+        else blobs
+    )
+
+    first, run = store.result(conn, spec, target, params, record)
     assert run["status"] == "ok", f"{spec.key}: {run['error']}"
 
-    second, reloaded_run = store.result(conn, spec, target, params, blobs)
+    second, reloaded_run = store.result(conn, spec, target, params, record)
     assert reloaded_run["id"] == run["id"], "expected a cache hit, not a recompute"
     assert second is not first, "the second call must come off disk"
 

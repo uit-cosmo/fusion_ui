@@ -45,7 +45,7 @@ below and the three phase-06 products (`pixel_averages`, `method_fields`,
 | module | spec | |
 |---|---|---|
 | `raw.py` | `raw_frames` | live: frames, click-a-pixel trace, mp4 export |
-| `dead_pixels.py` | `dead_pixels` | cached, raw files only: the dead-pixel mask preprocessing uses, with every pixel's PDF and spectrum to check it by eye. **The dead-pixel words**, which both dead-pixel views show through `explain()`: a plain summary, hand-written Markdown in `fusion_ui/data/dead_pixels_in_plain_words.md` beside `run_days.md` and read at every rerun, and `METHOD`, the technical text, in this module's expander |
+| `dead_pixels.py` | `dead_pixels` | cached, raw files only, **`whole_record`**: the dead-pixel mask preprocessing uses, judged over the analysis window (the discharge window cut to the gas puff, `density_scan.puff`, found on the whole record), with every pixel's PDF and spectrum to check it by eye and, above them, the array mean with both windows, the baseline, threshold and level marked, so the cut can be checked too. A result stored before the puff window (111 of them, until `precompute dead_pixels --force`) has none of it and says so. **The dead-pixel words**, which both dead-pixel views show through `explain()`: a plain summary, hand-written Markdown in `fusion_ui/data/dead_pixels_in_plain_words.md` beside `run_days.md` and read at every rerun, and `METHOD`, the technical text, in this module's expander |
 | `stored_mask.py` | `stored_mask` | live, preprocessed files only: the mask the file was made with (`dead`, `dead_shot`, `dead_evidence`, `dead_psd_ratio`), where the run day's mask overrides the shot's own verdict, its source, and the window preprocessing cropped to |
 | `probe.py` | `probe_trace` | live: the ragged ASP/FSP trace |
 | `spectra.py` | `taud_psd` | cached: the PSD duration-time fit |
@@ -219,6 +219,7 @@ class PlotSpec:
     upstream_params: Callable | None = None   # (params) -> the upstream's params
     description: str = ""
     preprocessed: bool | None = None      # False raw only, True preprocessed only
+    whole_record: bool = False            # compute gets the whole record, not the discharge window's cut
 ```
 
 - **`compute is None` means live.** The time-sliced dataset *is* the result:
@@ -253,6 +254,24 @@ class PlotSpec:
   version. `dead_pixels` is raw-only, because preprocessing interpolates dead
   pixels away; `stored_mask` is preprocessed-only, because the mask it draws is
   stored in that file.
+- **`whole_record` hands `compute` the whole record**, not the file cut to the
+  discharge window — **the one exception to "Never load a full time axis"**
+  (see Analysis conventions). It is for a spec that finds something against the
+  *start* of the record: `dead_pixels` finds the gas puff against the dark level
+  there, and a discharge window that begins after the puff has risen would read
+  "already on" and give another window than preprocessing's. The default,
+  `False`, is unchanged for every other spec. The rules:
+  - the spec gets the whole record with the window it would have been cut to in
+    the dataset's attributes, and cuts the record itself:
+    `loader.discharge_window(ds)` reads it, and **raises on a record without it**
+    rather than take the record's own span for the discharge window;
+  - **`loader.input_for(ds, t_start, t_end, whole=spec.whole_record)` is the one
+    place that decides** which of the two a spec computes on. Every place that
+    cuts a dataset before `compute` calls it — the single-shot page and
+    `precompute` today — and a new one must too. A spec's `render` and
+    `scalars` never see the record, only its result;
+  - cached specs only, and a chain agrees on it, because the store hands every
+    link the same dataset; `register()` enforces both.
 - **Diagnostics are strings** — `"apd"`, `"asp"` — matching `catalog.DIAGNOSTICS`,
   `shots.diagnostic` and `loader.dataset_path`. `experimental_database`'s
   `Diagnostic` enum stays an implementation detail inside `core/loader.py`.
@@ -357,7 +376,11 @@ probe moves during its plunge — the page says both under the figure.
 
 - **Never load a full time axis.** APD files are ~500 MB and 583k samples;
   always slice to the discharge DB's `t_start..t_end` (or a centred 0.2 s window
-  when there is no metadata).
+  when there is no metadata). **One exception, declared and not assumed:** a
+  spec with `PlotSpec.whole_record` is handed the whole record
+  (`loader.input_for`; see the contract above). The raw records are at most
+  1.64M samples, about 600 MB as float32, and `dead_pixels` is the only spec
+  that does it. A new view that reads a file does not: it gets the cut.
 - **Decimate before handing a 1D trace to Plotly.** Use the shared min/max
   envelope helper in `core/decimate.py` — striding drops spikes. And a
   decimated trace must resample on zoom: zooming the axes alone never shows
