@@ -124,6 +124,16 @@ question was whether C-Mod sees the "narrow feature" in the inner-wall heat flux
 profile that other machines reported, which ITER's inner-wall tile shaping
 depends on.
 
+## 1140605
+
+**MP744 — SOL heat-flux widths in I-mode plasmas**
+
+The afternoon half of a split day (J. Terry, shots 17–30; the morning was
+LHCD core-rotation experiments under MP739). I-mode at 5.4 T with an ICRF
+power ramp to 3.8 MW, the inner strike point raised into the IR camera's view
+to measure the divertor heat-flux width, at plasma currents from 1.0 MA down to
+0.7–0.8 MA. Helium was puffed for GPI during the I-mode phase.
+
 ## 1140612
 
 **MP741 — SOL heat and particle transport studies of inner-wall limited discharges**
