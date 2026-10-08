@@ -8,11 +8,17 @@ each track's slope rests on.
 A pixel can have nothing to show, and that is not an error: it can be dead (the mask), or live with
 no events (the average is empty). :func:`problem` says which, in a sentence the page puts where the
 figure would have been.
+
+A track is read two ways. :func:`track_positions` is where it put the structure at *one* lag, which
+every panel of the lag strip marks. :func:`track_paths` is where it put it at *every* lag of the bank,
+the trajectory in the R-Z plane that the strip's zero-lag panel draws.
 """
+
+from dataclasses import dataclass
 
 import numpy as np
 
-from fusion_ui.views.methods import TRACK_BY_KEY
+from fusion_ui.views.methods import TRACK_BY_KEY, Track
 from fusion_ui.views.overlays import neighbour_level
 
 #: The fields of the average, and the tracks that are read off each.
@@ -105,6 +111,115 @@ def track_positions(bundle, keys, index):
                     ),
                 )
             )
+    return out
+
+
+def velocity_line(lag, position, fitted, slope):
+    """A stored velocity as a straight line through the mean of the fitted points: ``(lag, line)`` or ``None``.
+
+    ``lag`` and ``position`` are on one lag axis, ``fitted`` marks the lags the slope rests on that
+    have a position, and ``slope`` is position per lag unit, in whatever units the caller draws. The
+    line runs over the fitted lags and goes through the mean of the points there: the least-squares
+    line itself when the estimator is ``lsq`` (the deck's), and the mean slope the velocity stands for
+    otherwise. ``None`` when the fit gave no slope or nothing was fitted.
+
+    One definition for both planes: the Tracks view draws R(tau) and Z(tau) with it, and the lag
+    strip draws the same two lines as one path in the R-Z plane (:meth:`TrackPath.straight`), so the
+    dashed path there is the same fit seen in the other plane.
+    """
+    if not (np.isfinite(slope) and np.any(fitted)):
+        return None
+    t = lag[fitted]
+    return t, slope * (t - t.mean()) + position[fitted].mean()
+
+
+@dataclass(frozen=True, eq=False)
+class TrackPath:
+    """One track's trajectory at the pixel in view: where it put the structure at every lag of the bank.
+
+    ``method_fields`` stores a track's positions as R and Z at each lag, NaN where the track followed
+    nothing (the tracker finds the two together, so they are NaN at the same lags), the lags its slope
+    rests on, and the velocity that slope is. All in SI units, on the bank's lag axis.
+    """
+
+    track: Track
+    lag: np.ndarray  # seconds
+    r: np.ndarray  # metres; NaN at a lag the track followed nothing
+    z: np.ndarray
+    fit: np.ndarray  # bool: the lags the slope rests on
+    vr: float  # m/s, the stored velocity; NaN when the fit failed
+    vz: float
+
+    @property
+    def tracked(self):
+        """The lags that have a position."""
+        return np.isfinite(self.r) & np.isfinite(self.z)
+
+    @property
+    def fitted(self):
+        """The lags the slope rests on that have a position: the ones highlighted.
+
+        The tracker fills a lag it lost by interpolation before it fits, so a lag in ``fit`` can have
+        no position; there are then fewer of these than lags counted in ``nlags_*``.
+        """
+        return self.tracked & self.fit
+
+    def straight(self):
+        """``(lag, r, z)``: the stored velocity as a straight path in the R-Z plane, or ``None``.
+
+        The line of :func:`velocity_line` in R and the line of it in Z, at the same lags: a path along
+        ``(v_R, v_Z)`` through the mean of the fitted points, over the span of the fitted lags.
+        """
+        in_r = velocity_line(self.lag, self.r, self.fitted, self.vr)
+        in_z = velocity_line(self.lag, self.z, self.fitted, self.vz)
+        if in_r is None or in_z is None:
+            return None
+        return in_r[0], in_r[1], in_z[1]
+
+
+def track_paths(bundle, keys):
+    """``[TrackPath, …]``: each track's trajectory at the pixel in view, in the order of ``keys``.
+
+    Empty without ``method_fields``. A track the product holds no positions of is left out, as
+    :func:`track_positions` leaves it out, and so is one that followed nothing at this pixel (a
+    trajectory with no point has nothing to draw) or whose lags are not the bank's. A missing
+    ``fit_*`` is no lag fitted, and a missing velocity is NaN.
+    """
+    if bundle.fields is None:
+        return []
+    fields = bundle.fields
+    x, y = bundle.pixel
+    lag = lags(bundle)
+
+    def stored(name):
+        return float(fields[name].values[y, x]) if name in fields else float("nan")
+
+    out = []
+    for key in keys:
+        names = (f"pos_r_{key}", f"pos_z_{key}")
+        if not all(name in fields for name in names):
+            continue
+        r, z = (np.asarray(fields[name].values, dtype=float)[y, x] for name in names)
+        if r.shape != lag.shape or z.shape != lag.shape:
+            continue
+        if not (np.isfinite(r) & np.isfinite(z)).any():
+            continue
+        fit = (
+            np.asarray(fields[f"fit_{key}"].values)[y, x].astype(bool)
+            if f"fit_{key}" in fields
+            else np.zeros(lag.shape, dtype=bool)
+        )
+        out.append(
+            TrackPath(
+                track=TRACK_BY_KEY[key],
+                lag=lag,
+                r=r,
+                z=z,
+                fit=fit,
+                vr=stored(f"vr_{key}"),
+                vz=stored(f"vz_{key}"),
+            )
+        )
     return out
 
 

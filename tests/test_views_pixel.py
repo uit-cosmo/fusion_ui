@@ -13,6 +13,7 @@ import xarray as xr
 
 from fusion_ui.views import PIXEL_VIEWS, frame, lag_strip, numbers, pixel, tracks
 from fusion_ui.views.bundle import Bundle
+from fusion_ui.views.figures import TRACK_COLOURS, TRACK_SYMBOLS
 from fusion_ui.views.methods import METHODS
 from fusion_ui.views.overlays import contours, neighbour_level
 from tests import fields_fixtures as ff
@@ -363,6 +364,330 @@ def test_a_failed_pixel_still_draws_its_average(products):
     figure = lag_strip.lag_strip(bundle_of(products, pixel=(7, 4)))
     assert len(heatmaps(figure)) == 10
     assert figure.layout.meta["source"] == "deck"
+
+
+# -- the trajectories on the zero-lag panel -------------------------------------------------------
+
+
+LABEL = {"max": "2DCA max", "com": "2DCA centroid", "2dcc": "2DCC"}
+
+
+def row_of(key):
+    """The strip's row of a track: the row of the field it is read off (``pixel.FIELD_TRACKS``)."""
+    rows = [name for name, keys in pixel.FIELD_TRACKS.items() if keys]
+    return next(
+        rows.index(name) for name, keys in pixel.FIELD_TRACKS.items() if key in keys
+    )
+
+
+def trajectory(figure, key):
+    """``(every lag, lags of the fit, stored velocity)``: one track's trajectory; a layer not drawn is ``None``."""
+    found = []
+    for suffix in ("", ": lags of the fit", ": stored velocity"):
+        traces = [
+            t for t in figure.data if t.name == f"{LABEL[key]} trajectory{suffix}"
+        ]
+        assert len(traces) <= 1, "a trajectory is drawn once, on one panel"
+        found.append(traces[0] if traces else None)
+    return tuple(found)
+
+
+def trajectory_traces(figure):
+    return [t for t in figure.data if t.name and "trajectory" in t.name]
+
+
+def panel_of(figure, row, column):
+    """``(x axis, y axis)`` of the strip's panel in this row and column, as its heatmap names them."""
+    columns = len(figure.layout.meta["lags"])
+    cell = heatmaps(figure)[row * columns + column]
+    return cell.xaxis, cell.yaxis
+
+
+def test_each_trajectory_is_on_the_zero_lag_panel_of_its_own_fields_row_and_nowhere_else(
+    products,
+):
+    bundle = bundle_of(products)
+    figure = lag_strip.lag_strip(bundle, n=5)
+    assert [round(t * US, 3) for t in figure.layout.meta["lags"]] == [-6, -3, 0, 3, 6]
+    zero = 2  # the middle of five
+    where = {}
+    for trace in trajectory_traces(figure):
+        where.setdefault((trace.xaxis, trace.yaxis), []).append(trace.name)
+    # Two rows, and on each only the panel at tau = 0: the maximum and the centroid on the conditional
+    # average, the 2DCC on the cross-correlation, three layers each.
+    assert set(where) == {panel_of(figure, 0, zero), panel_of(figure, 1, zero)}
+    assert len(where[panel_of(figure, 0, zero)]) == 6
+    assert len(where[panel_of(figure, 1, zero)]) == 3
+    assert {key: row_of(key) for key in LABEL} == {"max": 0, "com": 0, "2dcc": 1}
+    for key in LABEL:
+        layers = [t for t in trajectory(figure, key) if t is not None]
+        assert len(layers) == 3
+        for trace in layers:
+            assert (trace.xaxis, trace.yaxis) == panel_of(figure, row_of(key), zero)
+    # And that panel is the frame of the track's own field at lag 0.
+    index = int(np.flatnonzero(products.bank["time"].values == 0)[0])
+    for name, row in (("cond_av", 0), ("cross_corr", 1)):
+        field = pixel.reference_field(bundle, name).values
+        np.testing.assert_allclose(
+            heatmaps(figure)[row * 5 + zero].z, field[:, :, index]
+        )
+    figure.to_json()
+
+
+@pytest.mark.parametrize(
+    "typed, column",
+    [
+        ("-6 -3 3 6", 1),  # 0 is left out and -3 and +3 are equally near: the earlier
+        ("-6 -1 3 6", 1),  # -1 is the nearest to 0
+        ("2 4 6", 0),  # every lag after 0: the first
+        ("-6 -4 -2", 2),  # every lag before 0: the last
+        ("-6 0 6", 1),  # 0 itself
+    ],
+)
+def test_when_the_lags_shown_leave_zero_out_the_panel_nearest_it_carries_the_trajectories(
+    products, typed, column
+):
+    figure = lag_strip.lag_strip(bundle_of(products), lags=typed)
+    assert len(figure.layout.meta["lags"]) == len(typed.split())
+    assert {(t.xaxis, t.yaxis) for t in trajectory_traces(figure)} == {
+        panel_of(figure, 0, column),
+        panel_of(figure, 1, column),
+    }
+
+
+def test_the_zero_lag_column_breaks_a_tie_to_the_earlier_lag_whatever_the_float_noise():
+    assert lag_strip.zero_lag_column([-6e-6, -3e-6, 0.0, 3e-6, 6e-6]) == 2
+    assert lag_strip.zero_lag_column([-6e-6, -3e-6, 3e-6, 6e-6]) == 1
+    # A lag axis that is symmetric to the eye but not to the last bit gives the same answer.
+    assert lag_strip.zero_lag_column([-6e-6, -3e-6, 3.0000000000000004e-6, 6e-6]) == 1
+    assert lag_strip.zero_lag_column([-6e-6, -3.0000000000000004e-6, 3e-6, 6e-6]) == 1
+    # Not a tie: the nearer one, and a single lag is the one.
+    assert lag_strip.zero_lag_column([-2e-6, 1e-6, 5e-6]) == 1
+    assert lag_strip.zero_lag_column([4e-6]) == 0
+
+
+def test_a_trajectory_is_every_stored_position_of_the_track_at_every_lag_of_the_bank(
+    products,
+):
+    figure = lag_strip.lag_strip(bundle_of(products), n=5)
+    time = products.bank["time"].values
+    for key in LABEL:
+        every, _, _ = trajectory(figure, key)
+        r, z = (products.fields[f"pos_{c}_{key}"].values[4, 5] for c in "rz")
+        # All 61 lags of the bank, not the five the strip shows. The fixture follows +-12 us of the
+        # bank's +-15, so six lags at each end have no position and are NaN: a gap, not a bridge.
+        assert len(every.x) == len(every.y) == time.size == 61
+        np.testing.assert_array_equal(every.x, r)
+        np.testing.assert_array_equal(every.y, z)
+        assert np.isnan(every.x).sum() == np.isnan(every.y).sum() == 12
+        assert every.connectgaps is False
+        # Hovering a point says which lag it is.
+        np.testing.assert_allclose(every.customdata, time * US)
+
+
+def test_the_lags_the_slope_rests_on_are_highlighted_as_in_the_tracks_view(products):
+    bundle = bundle_of(products)
+    figure = lag_strip.lag_strip(bundle, n=5)
+    seen = tracks.tracks_figure(bundle)
+    fields, lag = products.fields, products.bank["time"].values * US
+    for key in LABEL:
+        every, fit, line = trajectory(figure, key)
+        r, z = (fields[f"pos_{c}_{key}"].values[4, 5] for c in "rz")
+        fitted = fields[f"fit_{key}"].values[4, 5] & np.isfinite(r)
+        # (5, 4) is fitted on +-4 us, at half a microsecond a lag.
+        assert fitted.sum() == 17
+        np.testing.assert_array_equal(fit.x, np.where(fitted, r, np.nan))
+        np.testing.assert_array_equal(fit.y, np.where(fitted, z, np.nan))
+        # The lags highlighted are the ones the Tracks view highlights.
+        (highlight,) = named(seen, f"{LABEL[key]}: lags of the fit", "y")
+        np.testing.assert_allclose(fit.customdata[fitted], highlight.x)
+        np.testing.assert_allclose(lag[fitted], highlight.x)
+        # Over the rest, heavier and with larger markers, in the track's own colour and symbol.
+        assert fit.line.width > every.line.width and fit.marker.size > every.marker.size
+        assert every.opacity < 1 and fit.opacity is None
+        for trace in (every, fit, line):
+            assert trace.line.color == TRACK_COLOURS[key]
+        assert fit.marker.color == every.marker.color == TRACK_COLOURS[key]
+        assert fit.marker.symbol == every.marker.symbol == TRACK_SYMBOLS[key]
+        # And in the track's legend group, with no legend entry of their own: the entry the track's
+        # markers carry hides the trajectory with them.
+        for trace in (every, fit, line):
+            assert trace.legendgroup == key and trace.showlegend is False
+        (entry,) = [t for t in figure.data if t.name == LABEL[key] and t.showlegend]
+        assert entry.legendgroup == key
+        assert entry.marker.symbol == TRACK_SYMBOLS[key]
+
+
+def test_the_dashed_path_runs_along_the_stored_velocity_over_the_fitted_lags(products):
+    figure = lag_strip.lag_strip(bundle_of(products), n=5)
+    fields, time = products.fields, products.bank["time"].values
+    for key in LABEL:
+        _, _, line = trajectory(figure, key)
+        vr, vz = (float(fields[f"v{c}_{key}"].values[4, 5]) for c in "rz")
+        r, z = (fields[f"pos_{c}_{key}"].values[4, 5] for c in "rz")
+        fitted = fields[f"fit_{key}"].values[4, 5] & np.isfinite(r)
+        assert line.line.dash == "dash"
+        # One point per fitted lag, and from the first to the last: the velocity times the time it took.
+        assert len(line.x) == len(line.y) == fitted.sum()
+        span = time[fitted].max() - time[fitted].min()
+        dx, dy = line.x[-1] - line.x[0], line.y[-1] - line.y[0]
+        assert dx == pytest.approx(vr * span, rel=1e-9)
+        assert dy == pytest.approx(vz * span, rel=1e-9)
+        # Every point is on that straight line, which goes through the mean of the fitted points.
+        cross = (line.x - line.x[0]) * dy - (line.y - line.y[0]) * dx
+        assert np.abs(cross).max() < 1e-9 * (dx**2 + dy**2)
+        assert np.mean(line.x) == pytest.approx(r[fitted].mean(), abs=1e-12)
+        assert np.mean(line.y) == pytest.approx(z[fitted].mean(), abs=1e-12)
+        # Hovering says which velocity it is.
+        assert f"v_R = {vr:.0f} m/s" in line.hovertemplate
+
+
+def test_the_dashed_path_is_the_tracks_views_line_seen_in_the_other_plane(products):
+    bundle = bundle_of(products)
+    strip, seen = lag_strip.lag_strip(bundle, n=5), tracks.tracks_figure(bundle)
+    R, Z = bundle.grid
+
+    def dashed(axis, key):
+        return next(
+            t
+            for t in seen.data
+            if t.mode == "lines"
+            and t.line.dash == "dash"
+            and t.yaxis == axis
+            and t.legendgroup == key
+        )
+
+    for key in LABEL:
+        _, _, line = trajectory(strip, key)
+        in_r, in_z = dashed("y", key), dashed("y2", key)
+        # The same lags; and R(tau) and Z(tau), displacements from the reference in millimetres, are this
+        # path's R and Z. Nothing was fitted again.
+        np.testing.assert_allclose(line.customdata, in_r.x)
+        np.testing.assert_allclose(in_r.x, in_z.x)
+        np.testing.assert_allclose(line.x, R[4, 5] + in_r.y / 1e3, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(line.y, Z[4, 5] + in_z.y / 1e3, rtol=0, atol=1e-12)
+
+
+def test_a_lag_the_track_lost_leaves_a_gap_and_the_fit_still_counts_it(products):
+    lost = 33  # a lag of the fit, at +1.5 us, that the tracker interpolated and stored no position for
+    fields = products.fields.copy(deep=True)
+    for c in "rz":
+        name = f"pos_{c}_com"
+        values = fields[name].values.copy()
+        values[4, 5, lost] = np.nan
+        fields[name] = fields[name].copy(data=values)
+    bundle = Bundle(bank=products.bank, fields=fields, pixel=(5, 4))
+    figure = lag_strip.lag_strip(bundle)
+    every, fit, line = trajectory(figure, "com")
+    assert fields["fit_com"].values[4, 5, lost]
+    for layer in (every, fit):
+        assert np.isnan(layer.x[lost]) and np.isnan(layer.y[lost])
+        assert np.isfinite(layer.x[[lost - 1, lost + 1]]).all()
+    # The dashed path rests on the lags that are fitted and have a position, as in the Tracks view.
+    assert len(line.x) == int(fields["fit_com"].values[4, 5].sum()) - 1
+    (in_r,) = [
+        t
+        for t in tracks.tracks_figure(bundle).data
+        if t.mode == "lines"
+        and t.line.dash == "dash"
+        and t.yaxis == "y"
+        and t.legendgroup == "com"
+    ]
+    np.testing.assert_allclose(line.customdata, in_r.x)
+
+
+def test_a_pixel_whose_fit_failed_has_its_trajectory_and_no_stored_velocity_path(
+    products,
+):
+    figure = lag_strip.lag_strip(bundle_of(products, pixel=(7, 4)))
+    for key in LABEL:
+        every, fit, line = trajectory(figure, key)
+        assert np.isfinite(every.x).sum() == 49
+        assert np.isfinite(fit.x).sum() == 1  # the one lag the failed fit rested on
+        assert line is None  # no slope, so no path
+    figure.to_json()
+
+
+def test_a_track_that_followed_nothing_at_the_pixel_has_no_trajectory(products):
+    fields = products.fields.copy(deep=True)
+    for c in "rz":
+        name = f"pos_{c}_max"
+        values = fields[name].values.copy()
+        values[4, 5] = np.nan
+        fields[name] = fields[name].copy(data=values)
+    figure = lag_strip.lag_strip(
+        Bundle(bank=products.bank, fields=fields, pixel=(5, 4))
+    )
+    assert trajectory(figure, "max") == (None, None, None)
+    assert all(layer is not None for layer in trajectory(figure, "com")[:2])
+    assert all(layer is not None for layer in trajectory(figure, "2dcc")[:2])
+
+
+def test_without_method_fields_the_strip_is_drawn_without_trajectories(products):
+    def only_frames_contours_and_the_reference(figure):
+        """No track is marked and no trajectory drawn: nothing but what a bank alone gives."""
+        assert len(heatmaps(figure)) == 10
+        others = {t.name for t in figure.data if not isinstance(t, go.Heatmap)}
+        assert "reference pixel" in others
+        assert all(
+            name == "reference pixel"
+            or name.startswith(("cond_av contour", "cross_corr contour"))
+            for name in others
+        )
+
+    bank_only = lag_strip.lag_strip(Bundle(bank=products.bank, pixel=(5, 4)), n=5)
+    assert not trajectory_traces(bank_only)
+    only_frames_contours_and_the_reference(bank_only)
+    # A product that holds no positions (older than the tracks' own) is the same, and fails nowhere.
+    stripped = products.fields.drop_vars(
+        [n for n in products.fields.data_vars if n.startswith(("pos_", "fit_"))]
+    )
+    bare = lag_strip.lag_strip(
+        Bundle(bank=products.bank, fields=stripped, pixel=(5, 4)), n=5
+    )
+    assert not trajectory_traces(bare)
+    only_frames_contours_and_the_reference(bare)
+    # With method_fields they are there: three tracks, three layers each.
+    assert len(trajectory_traces(lag_strip.lag_strip(bundle_of(products), n=5))) == 9
+
+
+def test_the_strips_rows_are_the_fields_that_have_tracks():
+    assert dict(lag_strip.ROWS) == {
+        name: keys for name, keys in pixel.FIELD_TRACKS.items() if keys
+    }
+
+
+def test_the_caption_says_what_the_zero_lag_panel_shows():
+    caption = {view.key: view.caption for view in PIXEL_VIEWS}["lag_strip"]
+    assert "τ = 0" in caption and "trajectory" in caption
+    assert "method_fields" in caption and "gap" in caption
+
+
+def test_the_velocity_line_is_the_slope_through_the_mean_of_the_fitted_points():
+    lag = np.arange(6.0)
+    position = np.array([9.0, 1.0, 2.0, 3.0, 4.0, 9.0])
+    fitted = np.array([False, True, True, True, True, False])
+    t, line = pixel.velocity_line(lag, position, fitted, 2.0)
+    np.testing.assert_allclose(t, [1, 2, 3, 4])
+    # Mean position 2.5 at the mean lag 2.5, and a slope of 2 through it.
+    np.testing.assert_allclose(line, [-0.5, 1.5, 3.5, 5.5])
+    assert pixel.velocity_line(lag, position, fitted, np.nan) is None
+    assert pixel.velocity_line(lag, position, np.zeros(6, dtype=bool), 2.0) is None
+
+
+def test_track_paths_are_read_off_method_fields_in_the_order_asked(products):
+    paths = pixel.track_paths(bundle_of(products), ("com", "max"))
+    assert [p.track.key for p in paths] == ["com", "max"]
+    path = paths[0]
+    np.testing.assert_array_equal(path.lag, products.bank["time"].values)
+    np.testing.assert_array_equal(path.r, products.fields["pos_r_com"].values[4, 5])
+    assert path.vr == products.fields["vr_com"].values[4, 5]
+    assert path.fitted.sum() == 17 and path.tracked.sum() == 49
+    lag, r, z = path.straight()
+    assert len(lag) == len(r) == len(z) == 17
+    # Nothing without the product, and nothing for a track it has no positions of.
+    assert pixel.track_paths(Bundle(bank=products.bank, pixel=(5, 4)), ("com",)) == []
+    assert pixel.track_paths(bundle_of(products), ("nonesuch",)) == []
 
 
 # -- the large frame ------------------------------------------------------------------------------

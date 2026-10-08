@@ -794,6 +794,9 @@ def test_a_chosen_pixel_opens_the_pixel_level_below_the_grid(deployment):
     strip = drawn[1]
     assert len([t for t in strip["data"] if t["type"] == "heatmap"]) == 10
     assert strip["layout"]["meta"]["source"] == "fit"
+    # With method_fields, each of the three tracks' trajectories (every lag, the fit, the stored velocity).
+    assert len([t for t in strip["data"] if "trajectory" in (t.get("name") or "")]) == 9
+    assert any("trajectory in R and Z" in c.value for c in app.caption)
     # The numbers are the stored ones.
     methods_table, blobs_table = (d.value for d in app.dataframe)
     assert len(methods_table) == 7 and len(blobs_table) == 13
@@ -941,6 +944,9 @@ def test_products_missing_for_part_of_the_page_are_named_where_they_are_needed(
     assert not [
         t for t in drawn[0]["data"] if t.get("name") in ("2DCA max", "2DCC")
     ]  # no tracks to mark
+    assert not [
+        t for t in drawn[0]["data"] if "trajectory" in (t.get("name") or "")
+    ]  # and no trajectories: they come from method_fields
 
 
 # -- when there is nothing to show ---------------------------------------------------------------

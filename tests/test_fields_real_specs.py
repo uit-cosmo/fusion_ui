@@ -532,6 +532,61 @@ def test_a_fitted_lag_without_a_position_is_counted_and_not_drawn(products):
     assert row["lags"] == float(fit[y, x].sum())
 
 
+def test_the_strips_trajectories_are_what_the_real_tracker_stored(products):
+    """On what ``pipeline.track`` writes: every stored position (NaN where the track followed nothing), the
+    lags its slope rests on, and a dashed path along the velocity it stored, which is the Tracks view's line
+    in the other plane.
+    """
+    from fusion_ui.views import lag_strip, tracks
+
+    bank, fields = products["pixel_averages"], products["method_fields"]
+    x, y = 1, 1
+    bundle = Bundle(shot=SHOT, bank=bank, fields=fields, pixel=(x, y))
+    figure = lag_strip.lag_strip(bundle)
+    seen = tracks.tracks_figure(bundle)
+    R, Z = bundle.grid
+    time = np.asarray(bank["time"].values)
+    drawn_a_path = 0
+    for track in TRACKS:
+        layers = {
+            t.name: t
+            for t in figure.data
+            if t.name and t.name.startswith(f"{track.label} trajectory")
+        }
+        r, z = (np.asarray(fields[f"pos_{c}_{track.key}"].values)[y, x] for c in "rz")
+        every = layers[f"{track.label} trajectory"]
+        np.testing.assert_array_equal(every.x, r)
+        np.testing.assert_array_equal(every.y, z)
+        fitted = np.asarray(fields[f"fit_{track.key}"].values)[y, x] & np.isfinite(r)
+        fit = layers[f"{track.label} trajectory: lags of the fit"]
+        np.testing.assert_array_equal(np.isfinite(fit.x), fitted)
+        vr, vz = (float(fields[f"v{c}_{track.key}"].values[y, x]) for c in "rz")
+        line = layers.get(f"{track.label} trajectory: stored velocity")
+        if not (np.isfinite(vr) and np.isfinite(vz) and fitted.any()):
+            assert line is None, track.key  # no slope, no path
+            continue
+        drawn_a_path += 1
+        span = time[fitted].max() - time[fitted].min()
+        assert line.x[-1] - line.x[0] == pytest.approx(vr * span, rel=1e-9), track.key
+        assert line.y[-1] - line.y[0] == pytest.approx(vz * span, rel=1e-9), track.key
+        # The Tracks view's dashed lines of the same track, R(tau) and Z(tau), are this path's R and Z.
+        in_r, in_z = (
+            next(
+                t
+                for t in seen.data
+                if t.mode == "lines"
+                and t.line.dash == "dash"
+                and t.yaxis == axis
+                and t.legendgroup == track.key
+            )
+            for axis in ("y", "y2")
+        )
+        np.testing.assert_allclose(line.customdata, in_r.x)
+        np.testing.assert_allclose(line.x, R[y, x] + in_r.y / 1e3, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(line.y, Z[y, x] + in_z.y / 1e3, rtol=0, atol=1e-12)
+    assert drawn_a_path, "at least the centroid fitted at the interior pixel"
+
+
 # -- the specs' own renders, built from the views --------------------------------------------------------
 
 
