@@ -36,8 +36,9 @@ passed, with two requests: a plain account of the dead-pixel logic, and the
 time before the gas puff cut out at preprocessing. J6d merged (d622f1d): the
 stored-mask view and the plain summary. J8a merged (c3ac9b1): each track's
 trajectory in R and Z on the lag strip. J6 merged into fusion_scripts
-(9e14f01) and deployed: the production preprocessing runs in tmux `prep06`,
-followed by `rescan` and batch 2. J6e (003ecf2), J11 (77b73db) and J5c
+(9e14f01) and deployed. Its production run finished at 18:20: all 115 APD
+shots have a preprocessed file, and the index shows them. Batch 2 (1140827)
+runs in tmux `j7batch2`. J6e (003ecf2), J11 (77b73db) and J5c
 (ed59e75) merged and deployed at 5b5926e (restart 2026-10-08 16:26): the
 dead-pixel view on the puff window, the Documentation page, and the seed's
 `lx_f`, `ly_f`, `theta_f` pruned (none on the server, which never imported the
@@ -1389,6 +1390,25 @@ into `/hdd1/fusion_data`, which the live service reads.
   - 1120814026's frames are bit-equal to a fresh `preprocess_dataset` over
     its analysis window (641,180 samples).
 - **Scratch:** `~/phase06_j6` (about 1.6 GB) is for the user to delete.
+
+**The production run, 2026-10-08 14:03–18:20** (`~/phase06_prep.sh`, log
+`~/phase06_prep.log`):
+
+- **The eight 1140827 files** were made again with `--force`, with 0 failed,
+  and the old ones are in `superseded/`. **The raw-only shots:** 94 written,
+  17 skipped, 0 failed. The nine 1160616 files kept their mtimes.
+- **115 files, not 111.** During the run, another session fetched four shots
+  (1140605024 and 1140613006–008) and preprocessed them at 15:51 with the same
+  code. The script stopped at its 111-file check, as it should. The
+  orchestrator then checked by hand that every raw shot has its file, and ran
+  `rescan`, which shows 115.
+- **The files record 9e14f01 or 9417aa9.** 9417aa9 is another session's
+  commit, pulled on the server at 14:32, and it touches only
+  `tools/get_discharge_raw_data.py`. The preprocessing code is the same.
+- **1140613's mask** came from five shots in the other session's files and
+  from two in ours. Both are the same 18 pixels.
+- **The windows:** 106 files carry the puff window and its rule, and 38 of them
+  are cut. The nine 1160616 files predate it.
 
 ### J6d — Stored-mask view · Sonnet 5.5 · fusion_ui
 
