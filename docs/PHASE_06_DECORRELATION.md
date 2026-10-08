@@ -1748,6 +1748,22 @@ After J11 is merged.
 - **Then the orchestrator** runs the dry run on the server, and the deletion
   when the counts are as expected.
 
+**J5c landed 2026-10-08 (ed59e75, 997 tests with the slow ones).**
+
+- `store.plan_prune_scalars` and `prune_scalars`; `fusion-ui prune --plot KEY
+  --scalar NAME [--yes]` counts per name, what stays, and the same names
+  under other plots, then deletes exactly the counted rows in one
+  transaction. It needs no result cache.
+- `seed.NOT_IMPORTED = ("lx_f", "ly_f", "theta_f")`, with the reason. A fresh
+  import of the real `results.json` writes 46,560 scalars, twelve names.
+- `SHARED` now lists only names the seed writes as well as a product. A new
+  test keeps `lx_f`, `ly_f`, `theta_f` labelled as the Gaussian fit that
+  `gaussian_sizes` and `blob_parameters` write.
+- CLAUDE.md, README, the Documentation page and two docstrings say the same.
+- **Rehearsed** on a scratch import of the real seed: the dry run counts 3,880
+  rows of each name in 50 runs, 11,640 in all, and `--yes` deletes those
+  only.
+
 ### J9 — Docs · Haiku 4.5 · both repos
 
 - `README.md`: the Fields page, the Documentation page, the new `precompute`
