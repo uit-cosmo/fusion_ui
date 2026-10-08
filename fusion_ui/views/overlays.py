@@ -1,5 +1,9 @@
 """What is drawn over a frame of a conditional average: the contour, the reference, the tracks.
 
+A track is drawn two ways: its marker at the frame's lag, and, on a frame the figure chooses, its
+whole trajectory in R and Z (:func:`path_traces`), which is what the lag strip puts on its zero-lag
+panel.
+
 The contour of ``plotting_scripts.plot_frames_with_contour``, with its semantics kept:
 
 - **One absolute level for every lag**: ``level`` times the maximum of the field over *all* lags and
@@ -134,15 +138,96 @@ def frame_trace(z, x_axis, y_axis, axes, coloraxis, name):
     )
 
 
+def path_traces(axes, path):
+    """One track's trajectory over a frame: every lag, the lags its slope rests on, the stored velocity.
+
+    ``path`` is a :class:`fusion_ui.views.pixel.TrackPath`. The three layers are the Tracks view's, in
+    the R-Z plane instead of against the lag, and in the track's own colour, symbol and legend group
+    (so the legend entry the track's markers carry hides its trajectory too):
+
+    - **every lag of the bank**, a faint line with small markers; a lag with no position leaves a gap
+      in it rather than a bridge;
+    - **the lags the slope rests on** that have a position, over it, thicker and with larger markers;
+    - **the stored velocity**, dashed: a straight path along ``(v_R, v_Z)`` through the mean of the
+      fitted points, over the span of the fitted lags. Not drawn when the fit failed.
+
+    None of them has a legend entry of its own. ``name`` says which layer a trace is.
+    """
+    track = path.track
+    colour, symbol = TRACK_COLOURS[track.key], TRACK_SYMBOLS[track.key]
+    common = dict(
+        legendgroup=track.key,
+        showlegend=False,
+        connectgaps=False,
+        xaxis=axes[0],
+        yaxis=axes[1],
+    )
+    lag_us = path.lag * 1e6
+    where = "τ %{customdata:+.1f} µs<br>R %{x:.4f} m, Z %{y:.4f} m<extra></extra>"
+    fitted = path.fitted
+    traces = [
+        go.Scatter(
+            x=path.r,
+            y=path.z,
+            mode="lines+markers",
+            line=dict(color=colour, width=1),
+            marker=dict(color=colour, symbol=symbol, size=3),
+            opacity=0.55,
+            customdata=lag_us,
+            name=f"{track.label} trajectory",
+            hovertemplate=f"{track.label}<br>{where}",
+            **common,
+        ),
+        go.Scatter(
+            x=np.where(fitted, path.r, np.nan),
+            y=np.where(fitted, path.z, np.nan),
+            mode="lines+markers",
+            line=dict(color=colour, width=2),
+            marker=dict(color=colour, symbol=symbol, size=5),
+            customdata=lag_us,
+            name=f"{track.label} trajectory: lags of the fit",
+            hovertemplate=f"{track.label}, in the fit<br>{where}",
+            **common,
+        ),
+    ]
+    straight = path.straight()
+    if straight is not None:
+        lag, r, z = straight
+        traces.append(
+            go.Scatter(
+                x=r,
+                y=z,
+                mode="lines",
+                line=dict(color=colour, width=1.5, dash="dash"),
+                customdata=lag * 1e6,
+                name=f"{track.label} trajectory: stored velocity",
+                hovertemplate=(
+                    f"{track.label}: stored velocity<br>"
+                    f"v_R = {path.vr:.0f} m/s, v_Z = {path.vz:.0f} m/s<br>{where}"
+                ),
+                **common,
+            )
+        )
+    return traces
+
+
 def overlay_traces(
-    axes, legend, reference=None, contour=None, tracks=(), contour_name="contour"
+    axes,
+    legend,
+    reference=None,
+    contour=None,
+    tracks=(),
+    contour_name="contour",
+    paths=(),
 ):
     """The contour, the reference pixel and the tracks' positions, over one frame.
 
     ``reference`` is ``(r, z)``; ``contour`` is ``(r, z)`` arrays or ``None``; ``tracks`` is
     ``[(Track, (r, z)), …]`` with NaN where a track is untracked at this lag, which draws nothing.
     ``contour_name`` is what the contour is called in the legend, so a figure with two rows
-    contoured at different levels can say so.
+    contoured at different levels can say so. ``paths`` is ``[TrackPath, …]``, the trajectories to
+    draw over this frame (:func:`path_traces`); drawn over the contour and under the markers, so a
+    track's marker at this lag sits on its own trajectory and the reference stays on top of all.
     """
     traces = []
     if contour is not None:
@@ -160,6 +245,8 @@ def overlay_traces(
                 yaxis=axes[1],
             )
         )
+    for path in paths:
+        traces += path_traces(axes, path)
     for track, (r, z) in tracks:
         if not (np.isfinite(r) and np.isfinite(z)):
             continue

@@ -12,6 +12,12 @@ offered stop at the bank's window: a shot that needs a longer one has its own pa
 
 Each row keeps **one colour scale across its lags**, because a per-frame rescale makes a decaying
 average look as if it never decays.
+
+**The zero-lag panel carries the trajectories.** Each track's whole path in R and Z, over every lag
+of the bank (``overlays.path_traces``), goes on the panel at tau = 0, or on the one nearest it when
+the lags shown leave 0 out (the earlier of two equally near), and on its own field's row: the maximum
+and the centroid on the conditional average, the 2DCC on the cross-correlation. They are read off
+``method_fields``, and a strip without it is drawn without them.
 """
 
 import re
@@ -140,6 +146,18 @@ def choose_lags(bundle, n=DEFAULT_PANELS, span_us=None, typed=""):
     return LagChoice(_spread(time, span_us, n), source, span_us, dropped, error)
 
 
+def zero_lag_column(time):
+    """Index of the lag nearest zero among ``time`` (the strip's lags, ascending); the earlier of two equally near.
+
+    "Equally near" is to a part in 10^9, so that rounding in a lag axis that is symmetric to the eye
+    (-3 us and +3 us a hair apart) does not decide which panel carries the trajectories.
+    """
+    distance = np.abs(np.asarray(time, dtype=float))
+    return int(
+        np.flatnonzero(np.isclose(distance, distance.min(), rtol=1e-9, atol=0))[0]
+    )
+
+
 def _height(columns):
     """Figure height in pixels for ``columns`` panels per row, so that they fill a page-wide figure.
 
@@ -168,6 +186,8 @@ def lag_strip(bundle, n=DEFAULT_PANELS, span_us=None, lags=""):
     x_range, y_range = padded_range(R, 0.6 * spacing), padded_range(Z, 0.6 * spacing)
     x_label, y_label = bundle.labels
     columns = len(indices)
+    # The column the trajectories go on: the lag nearest zero.
+    at_zero = zero_lag_column(time[indices])
     cells = grid_cells(
         len(ROWS), columns, right=0.9, gap_x=0.04, title=0.09, bottom=0.08, gap_y=0.16
     )
@@ -198,6 +218,7 @@ def lag_strip(bundle, n=DEFAULT_PANELS, span_us=None, lags=""):
             f"{name} contour ({level:.2f} × max)" if np.isfinite(level) else "contour"
         )
         values = np.asarray(field.values, dtype=float)
+        paths = pixel.track_paths(bundle, track_keys)
         for column, index in enumerate(indices):
             cell = row * columns + column + 1
             axes = (axis_name(cell, "x"), axis_name(cell, "y"))
@@ -221,6 +242,7 @@ def lag_strip(bundle, n=DEFAULT_PANELS, span_us=None, lags=""):
                 reference=(R[y, x], Z[y, x]),
                 contour=outline.get(index),
                 tracks=pixel.track_positions(bundle, track_keys, index),
+                paths=paths if column == at_zero else (),
                 contour_name=contour_name,
             )
             if row == 0:

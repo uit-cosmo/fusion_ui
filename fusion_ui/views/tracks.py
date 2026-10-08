@@ -16,7 +16,8 @@ tracked are highlighted, so there can be fewer highlighted points than lags coun
 Positions are drawn as displacements from the reference pixel in millimetres, against the lag in
 microseconds. The fitted line is the stored velocity as a line through the mean of the fitted
 points: that is the least-squares line itself when the estimator is ``lsq`` (the deck's), and the
-mean slope the velocity stands for otherwise.
+mean slope the velocity stands for otherwise. ``pixel.velocity_line`` makes it, and the lag strip's
+trajectory (``overlays.path_traces``) draws the same two lines as one path in the R-Z plane.
 """
 
 import numpy as np
@@ -180,11 +181,12 @@ def tracks_figure(bundle):
                 if f"{speed_key}_{key}" in fields
                 else np.nan
             )
-            if np.isfinite(speed) and fitted.any():
-                # The velocity as a line through the mean of the fitted points: the least-squares
-                # line itself when the estimator is lsq.
-                t_fit = lag[fitted]
-                line = (speed / MM) * (t_fit - t_fit.mean()) + position[fitted].mean()
+            # The velocity as a line through the mean of the fitted points: the least-squares line
+            # itself when the estimator is lsq. The lag strip's trajectory draws the same line in the
+            # R-Z plane (``pixel.velocity_line``).
+            straight = pixel.velocity_line(lag, position, fitted, speed / MM)
+            if straight is not None:
+                t_fit, line = straight
                 traces.append(
                     go.Scatter(
                         x=t_fit,

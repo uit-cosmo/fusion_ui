@@ -154,7 +154,12 @@ PIXEL_VIEWS = [
         controls=_strip_controls,
         caption=(
             "Each row keeps one colour scale across its lags. The dashed contour is drawn at the level "
-            "the average implies, one level for every lag, so it shrinks and vanishes as the average decays."
+            "the average implies, one level for every lag, so it shrinks and vanishes as the average decays. "
+            "The panel at τ = 0, or the nearest to it when the lags shown leave 0 out, also carries each "
+            "track's trajectory in R and Z over every lag of the bank: a line with small markers, thicker "
+            "over the lags its slope rests on, and the stored velocity as a straight dashed path in the "
+            "track's colour over those lags. A lag the tracker lost leaves a gap. The trajectories come "
+            "from method_fields, and are left out without it."
         ),
     ),
     View(
