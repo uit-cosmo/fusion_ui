@@ -1444,6 +1444,33 @@ runs `precompute dead_pixels --force` on the server.
 - The single-shot page's "Window" caption gives the analysis window when the
   file stores one.
 
+**J6e landed 2026-10-08 (003ecf2, 940 tests with the slow ones).**
+
+- **`PlotSpec.whole_record`**, default False. `loader.input_for` is the one
+  place that decides between the cut and the whole record, for the
+  single-shot page and for `precompute` alike. The discharge window travels in
+  the dataset's attribute `fusion_ui_discharge_window`, and
+  `loader.discharge_window` raises rather than guess. `register()` refuses the
+  flag on a live spec, and on a chain whose links disagree. CLAUDE.md names it
+  as the one exception to "never load a full time axis".
+- **`dead_pixels.compute`** finds the puff on the whole record with
+  `puff.puff_window`, then judges, and draws PDFs and spectra, over the
+  analysis window only: `estimate_shot` step for step, checked equal on
+  1160616027 and 009 through both the page and `precompute`. The result gains
+  `puff_signal` and the window's attributes. `DeadPixelParams` is unchanged,
+  and a test pins its hash (`c87bebad…`).
+- **The view** draws the array-mean signal over the whole record, with both
+  windows shaded and the threshold lines, above the grid. A cached result from
+  before says so and offers Recompute. `METHOD` names the analysis window.
+- **Tests and `__main__`.** Streamlit's script runner leaves
+  `sys.modules['__main__']` replaced after an `AppTest`. A spawned `precompute`
+  pool then re-runs it, so whether a pool test passed depended on which file
+  ran before it, on main too (J6d's `from_function` tests followed by the pool
+  tests: 7 failures). An autouse fixture in `tests/conftest.py` puts it back
+  around every test, and `tests/test_main_module.py` is the regression test.
+- **Still to do on the server:** restart the service, then run
+  `precompute dead_pixels --force --workers 4` once batch 2 is done.
+
 ### J10 — Remove the old `velocity_field` · Sonnet 5.5 · fusion_ui
 
 - Delete `plots/velocity_field.py`, its import and
