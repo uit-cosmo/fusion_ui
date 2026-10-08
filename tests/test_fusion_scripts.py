@@ -25,7 +25,12 @@ from fusion_ui.core import catalog, db
 REPO = Path(__file__).resolve().parent.parent
 PACKAGE = REPO / "fusion_ui"
 APP = PACKAGE / "app.py"
-PAGES = ("pages/2_single_shot.py", "pages/3_multi_shot.py", "pages/5_fields.py")
+PAGES = (
+    "pages/2_single_shot.py",
+    "pages/3_multi_shot.py",
+    "pages/5_fields.py",
+    "pages/6_documentation.py",
+)
 
 #: The last thing every child does: report, as one line of JSON, what the bare name ``config`` is, where
 #: fusion_scripts' own is (beside the ``decorrelation`` the specs imported), and what fusion_ui reads.
@@ -160,8 +165,13 @@ def test_the_app_opens_every_page_that_imports_the_specs(deployment):
         deployment,
     )
     assert seen["early"] == []
-    assert [run["exceptions"] for run in seen["runs"]] == [[]] * 4
+    assert [run["exceptions"] for run in seen["runs"]] == [[]] * (1 + len(PAGES))
     titles = [run["titles"] for run in seen["runs"]]
     assert "Shot Explorer" in titles[0][0]
-    assert titles[1:] == [["Single shot"], ["Multi shot"], ["Fields"]]
+    assert titles[1:] == [
+        ["Single shot"],
+        ["Multi shot"],
+        ["Fields"],
+        ["Documentation"],
+    ]
     assert_the_bare_name_is_fusion_scripts(seen, deployment)
