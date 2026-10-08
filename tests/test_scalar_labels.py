@@ -129,16 +129,13 @@ SOURCES = (
 )
 
 
-def test_the_shared_names_are_the_five_groups_g2_listed():
+def test_the_shared_names_are_the_five_the_seed_still_shares_with_a_product():
     assert set(scalar_labels.SHARED) == {
         "number_events",
         "taud_psd",
         "lambda_psd",
         "lr",
         "lz",
-        "lx_f",
-        "ly_f",
-        "theta_f",
     }
     assert set(scalar_labels.SHARED) <= set(scalar_labels.LABELS)
 
@@ -191,8 +188,8 @@ def test_a_shared_names_label_names_no_source():
 
 
 def test_the_shared_names_keep_the_unit_every_source_gives_them():
-    """Sizes in metres (``fwhm_sizes`` and ``gaussian_sizes`` divide by 100 for it, as the seed's rows
-    are), the tilt in radians, the duration time in seconds, and counts and asymmetries without.
+    """Sizes in metres (``fwhm_sizes`` divides by 100 for it, as the seed's rows are), the duration time
+    in seconds, and counts and asymmetries without.
     """
     expected = {
         "number_events": scalar_labels.NO_UNIT,
@@ -200,11 +197,31 @@ def test_the_shared_names_keep_the_unit_every_source_gives_them():
         "lambda_psd": scalar_labels.NO_UNIT,
         "lr": "m",
         "lz": "m",
+    }
+    assert {name: unit_of(name) for name in expected} == expected
+
+
+def test_the_gaussian_fit_names_are_no_longer_shared_with_the_seed():
+    """The seed held the contour ellipse under these names, so it does not write them any more
+    (``seed.NOT_IMPORTED``) and they leave ``SHARED``. They are still written by ``gaussian_sizes`` and by
+    ``blob_parameters``, which fit the same Gaussian, and the label says so; their units are the
+    blob parameters' (``test_the_units_of_the_blob_parameters_are_the_fields_pages``).
+    """
+    discharge = pytest.importorskip("density_scan.discharge")
+    names = {"lx_f", "ly_f", "theta_f"}
+    assert set(seed.NOT_IMPORTED) == names
+    assert not names & set(scalar_labels.SHARED)
+    assert names <= written_by("gaussian_sizes")
+    assert names <= set(blob_parameters.SCALARS)
+    # The seed's records still have the fields; the import is what leaves them out.
+    assert names <= {f.name for f in dataclasses.fields(discharge.BlobParameters)}
+    for name in names:
+        assert "Gaussian fit" in scalar_labels.LABELS[name].quantity, name
+    assert {name: unit_of(name) for name in names} == {
         "lx_f": "m",
         "ly_f": "m",
         "theta_f": "rad",
     }
-    assert {name: unit_of(name) for name in expected} == expected
 
 
 # -- what an axis shows --------------------------------------------------------------------------------

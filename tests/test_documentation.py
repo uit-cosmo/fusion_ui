@@ -63,6 +63,19 @@ def test_every_entry_names_a_scalar_some_source_writes_and_every_such_name_has_o
     assert named == documentation.documented_names()
 
 
+def test_the_entry_of_the_gaussian_fit_says_what_the_seed_held_and_that_it_was_removed(
+    doc,
+):
+    """The seed's values under ``lx_f``, ``ly_f`` and ``theta_f`` were a contour ellipse at 0.3 of the
+    maximum, and are gone: the text says both, with the date, where a reader of the three names looks.
+    """
+    (entry,) = [e for e in entries(doc) if "lx_f" in e.names]
+    assert set(entry.names) == set(seed.NOT_IMPORTED)
+    text = " ".join(entry.text.split())
+    assert "seed" in text and "contour at 0.3 of the maximum" in text
+    assert "removed on 2026-10-08" in text
+
+
 def test_each_entry_shows_its_names_labels_as_the_code_has_them(doc):
     for entry in entries(doc):
         lines = documentation.entry_lines(entry.names).splitlines()
@@ -159,10 +172,23 @@ def test_every_older_source_listed_is_a_registered_spec_or_the_seed():
         ), source
 
 
-def test_the_seeds_names_are_the_fields_of_its_records():
+def test_the_seeds_names_are_the_fields_of_its_records_but_the_three_it_leaves_out():
     discharge = pytest.importorskip("density_scan.discharge")
     fields = {field.name for field in dataclasses.fields(discharge.BlobParameters)}
-    assert set(documentation.OLDER_SOURCES[seed.IMPORT_PLOT]) == fields
+    assert len(fields) == 15 and set(seed.NOT_IMPORTED) <= fields
+    assert set(documentation.OLDER_SOURCES[seed.IMPORT_PLOT]) == fields - set(
+        seed.NOT_IMPORTED
+    )
+
+
+def test_the_seed_is_no_source_of_the_names_it_no_longer_writes():
+    by_name = {row.name: row for row in documentation.scalar_rows()}
+    for name in seed.NOT_IMPORTED:
+        assert seed.IMPORT_PLOT not in by_name[name].sources, name
+        assert by_name[name].sources == ("blob_parameters", "gaussian_sizes"), name
+    # Every other name of the seed is still its.
+    for name in documentation.OLDER_SOURCES[seed.IMPORT_PLOT]:
+        assert seed.IMPORT_PLOT in by_name[name].sources, name
 
 
 def test_the_products_names_are_their_scalars():

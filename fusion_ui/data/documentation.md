@@ -495,13 +495,17 @@ the lx axis, turning towards Z, between 0 and π.
   size (`docs/PLAN.md`, phase 03).
 - **The amplitude is fixed at 1**, while `cond_av` is in running standard deviations and peaks above the
   2DCA threshold. The centre is the reference pixel's position, not fitted.
-- **The seed's values under these names are not this fit.** `density_scan/utils.py: analysis` stores the
-  ellipse fitted to the contour at 0.3 of the maximum (`get_contour_parameters`) as `lx_f`, `ly_f` and
-  `theta_f`, in every version that wrote `results.json`, while the docstring of
-  `density_scan/discharge.py: BlobParameters` says Gaussian fit. Recomputed from the seed's own averages,
-  its `lx_f` and `ly_f` match that contour ellipse to a few percent and are far from the Gaussian fit, and
-  its `theta_f` is in an older angle convention. On the Multi shot page the seed source of these three names
-  is another quantity, under the same label.
+- **The seed's values under these names were not this fit, and were removed on 2026-10-08.**
+  `density_scan/utils.py: analysis` stores the ellipse fitted to the contour at 0.3 of the maximum
+  (`get_contour_parameters`) as `lx_f`, `ly_f` and `theta_f`, in every version that wrote `results.json`,
+  while the docstring of `density_scan/discharge.py: BlobParameters` says Gaussian fit. Recomputed from the
+  seed's own averages, its `lx_f` and `ly_f` matched that contour ellipse to a few percent and were far from
+  the Gaussian fit, and its `theta_f` was in an older angle convention. Two quantities under one name would
+  have shared an axis, so the three were deleted from the ledger (`fusion_ui/core/store.py:
+  prune_scalars`, through `fusion-ui prune --plot density_scan_import --scalar lx_f --scalar ly_f --scalar
+  theta_f`) and `fusion-ui import-results` no longer writes them (`fusion_ui/core/seed.py: NOT_IMPORTED`).
+  The seed's other twelve names stay. On the Multi shot page these three names have no seed source any
+  more.
 - The older `gaussian_sizes` runs this fit, with the same defaults, on a `two_dca` average.
 
 ### `taud_psd`, `lambda_psd`

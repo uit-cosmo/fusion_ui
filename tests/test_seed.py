@@ -134,3 +134,80 @@ def test_the_seeded_scalars_are_visible_to_the_multi_shot_query(conn, results_js
 def test_a_missing_file_is_reported_not_traced_back(conn, tmp_path):
     with pytest.raises(FileNotFoundError):
         seed.import_results(conn, str(tmp_path / "nope.json"), machine="cmod")
+
+
+# -- the three names the seed holds a different quantity under -------------------------------------------
+
+#: The fifteen names of a per-pixel record in the real file (``density_scan.discharge.BlobParameters``).
+FIFTEEN = (
+    "vx_c vy_c area_c vx_2dca_tde vy_2dca_tde vx_tde vy_tde lx_f ly_f lr lz theta_f"
+    " taud_psd lambda_psd number_events"
+).split()
+#: ``density_scan/utils.py: analysis`` stores the ellipse fitted to the contour under these, not the
+#: Gaussian fit the names mean everywhere else in the store.
+ELLIPSE = ("lx_f", "ly_f", "theta_f")
+
+
+@pytest.fixture
+def full_results_json(tmp_path):
+    """One shot with two analysed pixels, each holding all fifteen names, as the real file does."""
+    record = {name: float(index + 1) for index, name in enumerate(FIFTEEN)}
+    data = {
+        "1160616027": {
+            "plasma_discharge": RESULTS["1160616027"]["plasma_discharge"],
+            "blob_params": {"6": {"6": dict(record), "5": dict(record)}},
+        }
+    }
+    path = tmp_path / "full_results.json"
+    path.write_text(json.dumps(data, indent=4))
+    return str(path)
+
+
+def test_the_three_names_the_seed_holds_a_contour_ellipse_under_are_not_imported():
+    assert seed.NOT_IMPORTED == ELLIPSE
+
+
+def test_the_import_writes_twelve_of_the_fifteen_names_and_not_the_ellipse(
+    conn, full_results_json
+):
+    stats = seed.import_results(conn, full_results_json, machine="cmod")
+
+    names = {row[0] for row in conn.execute("SELECT DISTINCT name FROM scalars")}
+    assert len(FIFTEEN) == 15 and len(names) == 12
+    assert names == set(FIFTEEN) - set(ELLIPSE)
+    for name in ELLIPSE:
+        rows = conn.execute("SELECT COUNT(*) FROM scalars WHERE name = ?", (name,))
+        assert rows.fetchone()[0] == 0, name
+    assert (stats.shots, stats.pixels, stats.scalars) == (1, 2, 2 * 12)
+    assert conn.execute("SELECT COUNT(*) FROM scalars").fetchone()[0] == 24
+
+
+def test_the_other_twelve_keep_the_files_values(conn, full_results_json):
+    seed.import_results(conn, full_results_json, machine="cmod")
+
+    rows = {
+        row["name"]: row["value"]
+        for row in conn.execute("SELECT * FROM scalars WHERE x = 6 AND y = 6")
+    }
+    assert rows == {
+        name: float(index + 1)
+        for index, name in enumerate(FIFTEEN)
+        if name not in ELLIPSE
+    }
+
+
+def test_a_file_that_was_imported_before_is_left_as_it_is_so_the_prune_is_what_clears_it(
+    conn, full_results_json, monkeypatch
+):
+    """The import skips a file it has already read, whole. A ledger that holds an earlier import, which
+    wrote all fifteen names, keeps the three until ``fusion-ui prune --scalar`` removes them, and the
+    import does not bring them back after it."""
+    with monkeypatch.context() as earlier:
+        earlier.setattr(seed, "NOT_IMPORTED", ())
+        seed.import_results(conn, full_results_json, machine="cmod")
+    assert conn.execute("SELECT COUNT(*) FROM scalars").fetchone()[0] == 2 * 15
+
+    again = seed.import_results(conn, full_results_json, machine="cmod")
+
+    assert (again.shots, again.skipped, again.scalars) == (0, 1, 0)
+    assert conn.execute("SELECT COUNT(*) FROM scalars").fetchone()[0] == 2 * 15

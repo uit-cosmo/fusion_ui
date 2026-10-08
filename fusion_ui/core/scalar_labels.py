@@ -12,12 +12,13 @@ so that a unit someone forgot cannot be mistaken for one that does not exist. Th
 radians are what the products store (R and Z in metres, lags in seconds). For the blob parameters they
 are also what ``fusion_ui.views.numbers.BLOB_PARAMETERS`` gives, which a test compares.
 
-**Labels are per name, not per source.** Eight of the 32 names are written by an older source too
-(:data:`SHARED`), and the axis shows the same label whichever source is picked. Each of those is
+**Labels are per name, not per source.** Five of the 32 names are written by the seed as well as by a
+product (:data:`SHARED`), and the axis shows the same label whichever source is picked. Each of those is
 therefore worded by what the quantity is, never by the product that happens to write it, and carries
 the unit all its sources give it. G2 settled that they are the same estimators in the same units; the
-wording follows the older sources' own docstrings (``fwhm_sizes``, ``gaussian_sizes``, ``taud_psd``
-and the seed's ``density_scan``).
+wording follows the older sources' own docstrings (``fwhm_sizes``, ``taud_psd`` and the seed's
+``density_scan``). The three Gaussian-fit names are worded the same way, for ``gaussian_sizes`` and
+``blob_parameters``, though they are no longer in :data:`SHARED` (see there).
 
 Nothing in this module touches Streamlit, the database or the filesystem.
 """
@@ -44,18 +45,20 @@ class Label:
         return f"{self.quantity} [{self.unit}]"
 
 
-#: The names that an older source writes as well as a phase-06 product, and which sources those are:
-#: plot keys, and the seed's ``density_scan_import``. A test checks that each source named does write the
-#: name. A label here has to read true for every one of them.
+#: The names that the seed writes as well as a phase-06 product, and which older sources those are: plot
+#: keys, and the seed's ``density_scan_import``. A test checks that each source named does write the name.
+#: A label here has to read true for every one of them.
+#:
+#: ``lx_f``, ``ly_f`` and ``theta_f`` are not here since the seed stopped writing them: its values under
+#: those names were the ellipse fitted to the contour, not the Gaussian fit, and are no longer imported
+#: (``fusion_ui.core.seed.NOT_IMPORTED``). Their label reads the Gaussian fit, which is what both
+#: ``gaussian_sizes`` and ``blob_parameters`` write under them.
 SHARED = {
     "number_events": ("two_dca", "density_scan_import"),
     "taud_psd": ("taud_psd", "density_scan_import"),
     "lambda_psd": ("taud_psd", "density_scan_import"),
     "lr": ("fwhm_sizes", "density_scan_import"),
     "lz": ("fwhm_sizes", "density_scan_import"),
-    "lx_f": ("gaussian_sizes", "density_scan_import"),
-    "ly_f": ("gaussian_sizes", "density_scan_import"),
-    "theta_f": ("gaussian_sizes", "density_scan_import"),
 }
 
 #: The method names are the Fields page's panel titles (``fusion_ui.views.methods``), so that a point

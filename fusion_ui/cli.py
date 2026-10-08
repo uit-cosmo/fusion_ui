@@ -580,7 +580,8 @@ def build_parser():
 
     seed_results = subparsers.add_parser(
         "import-results",
-        help="seed `scalars` from a density_scan results.json",
+        help="seed `scalars` from a density_scan results.json (all but lx_f, ly_f"
+        " and theta_f, which it holds a contour ellipse under)",
     )
     seed_results.add_argument(
         "--results",
