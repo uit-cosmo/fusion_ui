@@ -35,8 +35,10 @@ deployed pages could not import the specs under Streamlit, and now open. G1
 passed, with two requests: a plain account of the dead-pixel logic, and the
 time before the gas puff cut out at preprocessing. J6d merged (d622f1d): the
 stored-mask view and the plain summary. J8a merged (c3ac9b1): each track's
-trajectory in R and Z on the lag strip. J6 is under way; J6e, J11, the
-production preprocessing and batch 2 follow. J8 is under way with the user.
+trajectory in R and Z on the lag strip. J6 merged into fusion_scripts
+(9e14f01): the puff window and `density_scan/preprocess.py`. J6e and J11 are
+under way; the production preprocessing, waiting for the user, and batch 2
+follow. J8 is under way with the user.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -1344,6 +1346,45 @@ into `/hdd1/fusion_data`, which the live service reads.
   files are unchanged (same mtime), and the replaced 1140827 files are in
   `superseded/`.
 
+**J6 landed 2026-10-08 (fusion_scripts 9e14f01).**
+
+- **`density_scan/puff.py`.** `puff_window(ds, (t_start, t_end))` returns a
+  `PuffWindow`: the analysis window, baseline, level, threshold, the puff's
+  start and end, dips, `found`, a note, `fallback`, and the smoothed signal to
+  draw. `find_puff` does the same on a 1-D array mean.
+  - **The agent's added limits.** A record whose first 5 ms vary by more than
+    4% of the rise does not start dark (`FLAT_START`). A window whose median
+    is under 0.25 of the way to its largest excursion has no clear rise
+    (`CLEAR_RISE`). The polarity comes from the side of that excursion.
+  - **Small cases.** A cut under 1 ms is not made, a puff that overlaps the
+    window by under 20 ms is not judged, and dips under 1 ms are not
+    reported.
+  - **The margins on the 111 shots:**
+    - the 82 judged start flat to 2.2%;
+    - the 28 lit starts vary by 6.3–23%;
+    - 1091216034, which only decays, refuses the fallback at 5.4%. That
+      margin is thin.
+- **`dead_pixels.estimate_shot(shot, window="puff")`.** `window="discharge"` is
+  the old behaviour, and `estimate()` is byte-identical.
+- **`preprocess.py`** stores everything J6 lists. Files are mode 0664, readable
+  by the service. `--force` hard-links the old file into `superseded/` before
+  the new one is renamed in. `--check [--frames]` re-judges a file, and pools
+  run one BLAS thread a process.
+- **The windows** (`~/phase06_j6/out_tables/puff_windows.txt`): 82 of 111
+  judged, 38 cut. Batch 2's 1140827029 keeps 84 ms (0.656–0.740 s), which
+  may be too short for the 2DCA.
+- **Measured.** Up to 999 s and 3.7 GB a shot. With 4 workers, the 102 files
+  take about 4 h.
+- **Tests.** App venv: 187 pass, with the baseline's failure and errors.
+  Paper venv: 189 pass and 8 skip.
+- **The orchestrator's own check**, at the final commit on the server:
+  - on 1120814026, 1140827019 and 1160929016 (the last preprocessed by the
+    orchestrator), the run day's mask, the shot's own verdict and the window
+    recomputed fresh equal the stored ones;
+  - 1120814026's frames are bit-equal to a fresh `preprocess_dataset` over
+    its analysis window (641,180 samples).
+- **Scratch:** `~/phase06_j6` (about 1.6 GB) is for the user to delete.
+
 ### J6d — Stored-mask view · Sonnet 5.5 · fusion_ui
 
 A live spec `stored_mask`, "Dead-pixel mask stored at preprocessing", with
@@ -1390,6 +1431,12 @@ J6's function, and draws the array-mean signal with the discharge window and the
 analysis window marked, so the cut can be checked by eye. Then the orchestrator
 runs `precompute dead_pixels --force` on the server.
 
+- **The whole record.** `puff_window` must see the record from its start. The
+  page and `precompute` slice every dataset to `loader.time_window` before
+  `compute`, so a spec needs a way to receive the whole record. Add one at the
+  `PlotSpec` level, honoured by both, documented in CLAUDE.md's contract.
+  Otherwise the window can differ from preprocessing's where the discharge
+  window starts in darkness after the record does.
 - `METHOD` says the analysis window where it says the discharge window, and is
   true on both views (J6d's note).
 - The single-shot page's "Window" caption gives the analysis window when the
