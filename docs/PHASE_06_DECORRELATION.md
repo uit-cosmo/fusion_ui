@@ -664,7 +664,8 @@ Built, tested and pushed to main on 2026-10-07, and deployed the same day (JD).
 | J7 | Deploy, first batch, regression on the server | orchestrator | server | G3; 1140827 after J6 | — |
 | J8 | Physics validation | **user** | — | J7 | — |
 | J8a | The trajectory in R and Z on the lag strip | **Sonnet 5.5** | fusion_ui | J8's request | J6, J6d |
-| J9 | Docs | **Haiku 4.5** | both | J8 | — |
+| J11 | The Documentation page: every quantity, how it is computed, what depends on what | **Opus 5.5** | fusion_ui | J8's labels; J6's code merged | J6's production run, J6e |
+| J9 | Docs | **Haiku 4.5** | both | J8, J11 | — |
 
 **Why these models.** `PLAN.md` splits work by how expensive a wrong decision
 is to undo, not by how hard it is, and so does this table.
@@ -1483,8 +1484,11 @@ websocket check must return `101`).
   opens the Fields page as it should.
 - The lag strip matches `decorrelation/manuscript/figures/lags_1160616027_x5y4.pdf`,
   and the user asked for the trajectory in R and Z on it (J8a).
-- Open: the edge pixels ((8, 6) reads −103 m/s by the centroid, (8, 3) 46),
-  and the labels, on which the user will send feedback.
+- The labels read fine. The group says radial and poloidal for R and Z, and x
+  and y for distances along the blob's own axes, which need not line up with R
+  and Z. So "size in x" stays. The user asked for a page that explains every
+  quantity (J11).
+- Open: the edge pixels ((8, 6) reads −103 m/s by the centroid, (8, 3) 46).
 
 ### J8a — The trajectory on the lag strip · Sonnet 5.5 · fusion_ui
 
@@ -1511,10 +1515,50 @@ position a panel.
 path along (v_R, v_Z), and nothing without `method_fields`; and the full
 suites pass.
 
+### J11 — The Documentation page · Opus 5.5 · fusion_ui
+
+The user asked for a page, "Documentation", that says in plain words what each
+quantity means, how it is computed and how the quantities depend on one
+another. There are now too many to keep in one's head. For example, the user
+took `level_com` for a setting. It is read off each pixel's average: the mean
+ratio of the zero-lag peak's four neighbours to the peak
+(`twodca_manuscript/contour_level.neighbour_level`), and only the neighbours'
+distance, `neighbour_step`, is set.
+
+- **What it covers:**
+  - the data: raw and preprocessed files, the analysis window (the discharge
+    window and J6's puff cut), the normalisation, and how dead pixels are
+    found;
+  - the products and what each stores: `pixel_averages`, `method_fields` and
+    `blob_parameters`, and the older single-shot specs where they share a name;
+  - every scalar name in the ledger, with its label (`core/scalar_labels.py`),
+    its unit, how it is computed (naming the function), and its caveats, such
+    as `nlags` counting interpolated lags, or `theta_f`'s convention differing
+    from the seed's `theta`;
+  - the settings: each field of the params classes, its default read from the
+    classes, and which products a change recomputes;
+  - how they depend on one another, from the settings to the bank, the tracks,
+    the fields and the Fields page's cuts, as a diagram
+    (`st.graphviz_chart` takes DOT text, so no new dependency);
+  - the conventions: radial and poloidal for R and Z, and x and y along the
+    blob's own axes, which a tilt turns away from R and Z; and SI units.
+- **How:**
+  - The prose goes in a markdown file under `fusion_ui/data/`, like
+    `run_days.md`, so it is easy to reword.
+  - The tables (labels, units, defaults) are generated from the code, so they
+    cannot drift.
+  - Each account of a computation names the function it describes and is
+    checked against that code. Where the code and the paper's description
+    differ, the page says what the code does, and the report lists it.
+- **Accept when:**
+  - an `AppTest` renders the page;
+  - a test ties every label to an entry on the page and back;
+  - the orchestrator has read the whole text against the code before merging.
+
 ### J9 — Docs · Haiku 4.5 · both repos
 
-- `README.md`: the Fields page, the new `precompute` flags, and the recompute
-  table.
+- `README.md`: the Fields page, the Documentation page, the new `precompute`
+  flags, and the recompute table.
 - `CLAUDE.md`: current state; the batch-only, lookup, `views/` and product
   conventions.
 - `PLAN.md`: phase 06 marked done, with the decisions that came out
