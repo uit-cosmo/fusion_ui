@@ -4,7 +4,8 @@
 deploying; ``import-results`` is run once, to seed the scalar store from
 ``density_scan``; ``precompute`` (phase 04) warms the cache overnight, for
 several plots and on several workers since phase 06. ``prune`` deletes every
-stored result of one plot, and counts them first.
+stored result of one plot, or with ``--scalar`` only the scalars of some names
+under it, and counts them first.
 """
 
 import argparse
@@ -223,9 +224,14 @@ def cmd_prune(args):
     need not be registered: this is how the results of a removed spec go. The
     deletion is :func:`fusion_ui.core.store.prune`, whose docstring says in what
     order, and why. Imports nothing of the analysis packages.
+
+    With ``--scalar NAME`` (repeatable) it deletes only the scalar rows of those
+    names under ``--plot``'s runs, in the same two steps (:func:`_prune_scalars`).
     """
     conn = db.open_db(args.database)
     try:
+        if args.scalar:
+            return _prune_scalars(args, conn)
         plan = store.plan_prune(conn, args.plot)
         if plan.empty:
             known = ", ".join(f"{plot} ({n})" for plot, n in plan.plots.items())
@@ -253,6 +259,43 @@ def cmd_prune(args):
         return 1 if report.kept else 0
     finally:
         conn.close()
+
+
+def _prune_scalars(args, conn):
+    """``prune --plot KEY --scalar NAME ...``: the scalars of those names, counted first.
+
+    The runs, their blobs, their other scalars and the same names under any other
+    plot key stay (:func:`fusion_ui.core.store.prune_scalars`). Without ``--yes``
+    it prints the counts, deletes nothing and exits 1, as the whole-plot prune
+    does. A name with no rows is counted as 0 and is not an error; a plot with no
+    runs at all is, since that is a mistyped key.
+    """
+    plan = store.plan_prune_scalars(conn, args.plot, args.scalar)
+    if plan.empty:
+        known = ", ".join(f"{plot} ({n})" for plot, n in plan.plots.items())
+        print(
+            f"The ledger holds no runs of plot {args.plot!r}, so no scalars to"
+            f" prune. Plots with runs: {known or 'none'}.",
+            file=sys.stderr,
+        )
+        return 1
+    for line in plan.lines():
+        _print_flushed(line)
+    if not args.yes:
+        print(
+            "Nothing was deleted. "
+            + (
+                "Run it again with --yes to delete these."
+                if plan.total
+                else "None of these names has a row to delete."
+            ),
+            file=sys.stderr,
+        )
+        return 1
+    report = store.prune_scalars(conn, plan)
+    for line in report.lines():
+        _print_flushed(line)
+    return 0
 
 
 def cmd_backfill_dt(args):
@@ -481,7 +524,8 @@ def build_parser():
 
     prune = subparsers.add_parser(
         "prune",
-        help="delete every stored result of one plot (counts first; --yes deletes)",
+        help="delete every stored result of one plot, or only some of its scalars"
+        " (counts first; --yes deletes)",
     )
     prune.add_argument(
         "--plot",
@@ -489,7 +533,18 @@ def build_parser():
         metavar="KEY",
         help="plot key whose blobs, runs, scalars and parameter sets go. It need"
         " not be registered any more, which is how a removed spec's results are"
-        " cleared; the other plots are untouched",
+        " cleared; the other plots are untouched. With --scalar, the plot key"
+        " whose scalars of those names go, and nothing else of it",
+    )
+    prune.add_argument(
+        "--scalar",
+        action="append",
+        default=None,
+        metavar="NAME",
+        help="delete only the scalar rows of this exact name under --plot's runs"
+        " (repeatable). The runs, their blobs, their other scalars and the same"
+        " name under any other plot stay. A name with no rows counts as 0; it is"
+        " not an error",
     )
     prune.add_argument(
         "--yes",

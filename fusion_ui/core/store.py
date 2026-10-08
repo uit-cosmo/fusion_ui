@@ -46,6 +46,12 @@ counts every run of one plot key, its scalars, its blobs and the parameter sets
 nothing else will reference; :func:`prune` deletes them -- blobs first, then the
 ledger in one transaction -- for a plot that is no longer registered as well as
 for one that is. ``fusion-ui prune --plot KEY`` is the front end.
+
+**So is deleting some of a plot's scalars.** :func:`plan_prune_scalars` counts,
+per name, the rows of those names under one plot key; :func:`prune_scalars`
+deletes exactly those rows in one transaction. The runs, their blobs, their
+other scalars and the same names under any other plot key stay.
+``fusion-ui prune --plot KEY --scalar NAME`` is the front end.
 """
 
 import math
@@ -785,7 +791,7 @@ def stale_runs(conn, plot=None):
 
 
 class PruneError(RuntimeError):
-    """:func:`prune` refused to start, or could not write the ledger.
+    """:func:`prune` or :func:`prune_scalars` refused to start, or could not write.
 
     The message says which, and what state that leaves behind. A
     ``RuntimeError``, so ``fusion-ui`` prints it and exits 1, like every other
@@ -1098,4 +1104,207 @@ def prune(conn, plan):
     deleted = set(deletable)
     report.scalars = sum(plan.scalars.get(run_id, 0) for run_id in deleted)
     report.stale = sum(1 for _, _, upstream in plan.dependents if upstream in deleted)
+    return report
+
+
+# ---------------------------------------------------------------------------
+# Pruning some of a plot's scalars
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ScalarPrunePlan:
+    """Some names' scalar rows under one plot key, counted: see :func:`plan_prune_scalars`."""
+
+    plot: str
+    names: tuple  # the names asked for, in the order given, each once
+    rows: dict  # name -> {run id: rows of that name in it}: exactly what would go
+    runs: int  # the plot's runs: every one of them stays, with its blob
+    kept: int  # the plot's scalar rows of other names: they stay
+    elsewhere: dict  # plot -> rows of these names under another plot: untouched
+    held: list  # the names the plot's scalars have, for a mistyped name's hint
+    plots: dict  # every plot in the ledger -> its runs, for a mistyped key's hint
+
+    @property
+    def counts(self):
+        """``{name: scalar rows that would go}``, a name with none counted as 0."""
+        return {name: sum(self.rows[name].values()) for name in self.names}
+
+    @property
+    def total(self):
+        """Every row that would go, over all the names."""
+        return sum(self.counts.values())
+
+    @property
+    def empty(self):
+        """The ledger holds no run of the plot at all: the key is mistyped, not a name."""
+        return self.runs == 0
+
+    def lines(self):
+        """The counts, a line each, for whoever is about to say ``--yes``."""
+        width = max([14, *(len(name) + 2 for name in self.names)])
+        rows = [("plot", self.plot)]
+        for name in self.names:
+            held = self.rows[name]
+            rows.append((name, f"{sum(held.values())} scalar rows in {len(held)} runs"))
+        rows += [
+            ("to delete", f"{self.total} scalar rows"),
+            (
+                "stays",
+                f"all {self.runs} runs of the plot, with their blobs, and its"
+                f" {self.kept} scalar rows of other names",
+            ),
+        ]
+        if self.elsewhere:
+            where = ", ".join(
+                f"{plot} {n}" for plot, n in sorted(self.elsewhere.items())
+            )
+            rows.append(
+                ("elsewhere", f"the same names under other plots, not touched: {where}")
+            )
+        else:
+            rows.append(("elsewhere", "none of these names under another plot"))
+        absent = [name for name in self.names if not self.rows[name]]
+        if absent:
+            # Not an error, but a typo looks the same as a job already done.
+            shown = ", ".join(self.held[:20]) or "none"
+            more = f" and {len(self.held) - 20} more" if len(self.held) > 20 else ""
+            rows.append(
+                (
+                    "no rows",
+                    f"{', '.join(absent)}: nothing of that name to delete. The scalar"
+                    f" names this plot has: {shown}{more}",
+                )
+            )
+        return [f"{label:<{width}}{value}" for label, value in rows]
+
+
+@dataclass
+class ScalarPruneReport:
+    """What :func:`prune_scalars` did."""
+
+    plot: str
+    deleted: dict = field(default_factory=dict)  # name -> scalar rows deleted
+
+    @property
+    def scalars(self):
+        return sum(self.deleted.values())
+
+    def lines(self):
+        """What was done, a line."""
+        names = ", ".join(f"{name} {n}" for name, n in self.deleted.items())
+        return [f"{'deleted':<14}{self.scalars} scalar rows ({names})"]
+
+
+def plan_prune_scalars(conn, plot, names):
+    """Count the scalar rows of ``names`` under ``plot`` that would go, and delete nothing.
+
+    ``plot`` is a plain string matched against ``runs.plot``. It need not be
+    registered: the seed's key, ``density_scan_import``, is no spec's. ``names``
+    are exact scalar names, a repeated one counted once, and need not be known to
+    the registry or the Documentation page either. No ``CACHE_DIR`` is needed: no
+    blob is looked at.
+
+    Counted are the rows of every position, a pixel's and a shot-level one, in
+    every run of the plot. A name with no row is counted as 0, which is not an
+    error: the plan keeps the names the plot does have (``held``) to say so with.
+    ``runs`` is 0 when the ledger has no run of the plot at all. That is a
+    mistyped key, which the caller reports (:attr:`~ScalarPrunePlan.empty`).
+
+    What stays is counted too, so that whoever says ``--yes`` can see it:
+    every run of the plot with its blob, its scalars of other names, and the
+    same names under every other plot key (``elsewhere``).
+    """
+    names = tuple(dict.fromkeys(str(name) for name in names))
+    if not names:
+        raise ValueError("no scalar name to prune")
+    marks = ", ".join("?" * len(names))
+    rows = {name: {} for name in names}
+    for run_id, name, n in conn.execute(
+        "SELECT s.run_id, s.name, COUNT(*) FROM scalars s"
+        "  JOIN runs r ON r.id = s.run_id"
+        f" WHERE r.plot = ? AND s.name IN ({marks})"
+        " GROUP BY s.run_id, s.name ORDER BY s.run_id",
+        (plot, *names),
+    ):
+        rows[name][run_id] = n
+    gone = sum(sum(held.values()) for held in rows.values())
+    runs = conn.execute("SELECT COUNT(*) FROM runs WHERE plot = ?", (plot,)).fetchone()
+    scalars = conn.execute(
+        "SELECT COUNT(*) FROM scalars s JOIN runs r ON r.id = s.run_id"
+        " WHERE r.plot = ?",
+        (plot,),
+    ).fetchone()
+    elsewhere = {
+        row[0]: row[1]
+        for row in conn.execute(
+            "SELECT r.plot, COUNT(*) FROM scalars s JOIN runs r ON r.id = s.run_id"
+            f" WHERE r.plot <> ? AND s.name IN ({marks})"
+            " GROUP BY r.plot ORDER BY r.plot",
+            (plot, *names),
+        )
+    }
+    held = [
+        row[0]
+        for row in conn.execute(
+            "SELECT DISTINCT s.name FROM scalars s JOIN runs r ON r.id = s.run_id"
+            " WHERE r.plot = ? ORDER BY s.name",
+            (plot,),
+        )
+    ]
+    plots = {
+        row[0]: row[1]
+        for row in conn.execute(
+            "SELECT plot, COUNT(*) FROM runs GROUP BY plot ORDER BY plot"
+        )
+    }
+    return ScalarPrunePlan(
+        plot=plot,
+        names=names,
+        rows=rows,
+        runs=runs[0],
+        kept=scalars[0] - gone,
+        elsewhere=elsewhere,
+        held=held,
+        plots=plots,
+    )
+
+
+def prune_scalars(conn, plan):
+    """Delete what ``plan`` counted, and return a :class:`ScalarPruneReport`.
+
+    The rows go in **one transaction**: all of them, or, if the ledger cannot be
+    written, none, and :class:`PruneError` says it is unchanged. Only the runs
+    and names the plan counted are touched: a run written after it was made is
+    not in it and keeps its rows. The runs themselves, their blobs and their
+    parameter sets are never touched, and nor is a scalar of another name or the
+    same name under another plot key.
+
+    The rows hang off nothing, so unlike :func:`prune` this does not need the
+    cascade. A connection with ``foreign_keys`` off is refused all the same, as
+    there: one that did not come from :func:`fusion_ui.core.db.open_db` is not
+    one the store's rules were written for, and a deletion is the wrong place
+    to find out what else it lacks.
+
+    Run it while nothing is writing the plot, as for :func:`prune`.
+    """
+    if not conn.execute("PRAGMA foreign_keys").fetchone()[0]:
+        raise PruneError(
+            "Refusing to prune scalars on a connection with foreign keys off: it did"
+            " not come from fusion_ui.core.db.open_db, whose rules the store assumes."
+            " Nothing was deleted."
+        )
+    report = ScalarPruneReport(plan.plot)
+    try:
+        with conn:
+            for name in plan.names:
+                report.deleted[name] = conn.executemany(
+                    "DELETE FROM scalars WHERE run_id = ? AND name = ?",
+                    [(run_id, name) for run_id in plan.rows[name]],
+                ).rowcount
+    except sqlite3.Error as error:
+        raise PruneError(
+            f"The ledger could not be updated ({error}), so it is unchanged and"
+            " nothing was deleted."
+        ) from error
     return report
