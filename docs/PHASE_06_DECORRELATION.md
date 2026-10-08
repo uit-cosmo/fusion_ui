@@ -11,7 +11,7 @@ this file and the files its job lists. `docs/PLAN.md` and `CLAUDE.md` still
 hold the app's architecture and conventions; this file adds to them and does
 not repeat them.
 
-Status, 2026-10-07: JD done. The dead-pixel view is deployed and cached for all
+Status, 2026-10-08: JD done. The dead-pixel view is deployed and cached for all
 111 raw shots ([Dead pixels](#dead-pixels-done-2026-10-07)), and G1, the user's
 check of the masks, is open. J0 done at 828 files: the user left the `_ca`
 group out of phase 06 (Decisions). J2a merged (e8d87f8): schema v4, `lookup`,
@@ -28,8 +28,9 @@ and the paper's `reliable()` as a Fields-page toggle
 merged (02bb826): the paper's `reliable()` as a Fields-page checkbox, and the
 page tested on the real specs. J5 merged (6ee5e8b): the multi-shot jump to the
 Fields page, and labels for the 32 names. J5b merged (4fe2104): three small
-fixes. Everything for G3 is merged (777 fast and 12 slow tests); G3, J6, J6d and
-what follows are not started.
+fixes. G3 approved; J7 under way: both repositories deployed, the ledger at v4,
+`velocity_field` pruned (134 runs, 41,400 scalar rows, 115 blobs), and batch 1
+(1160616) running. G1 is still open, and J6, J6d and what follows wait for it.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -1316,11 +1317,13 @@ websocket check must return `101`).
 2. Run `~/fusion_ui/.venv/bin/pip install -e ~/fusion_ui --no-deps`, but only
    if `pyproject.toml` changed.
 3. Ask the user to restart the service (G3) straight after the pull.
-   - Do not migrate before the restart. The deployed code's `init_db` raises
-     on a database newer than it knows, so a v4 file would fail every new
-     session of the old service.
-   - Until the restart, the old process can also read new page files beside
-     its old modules.
+   - Until the restart, the old process can read new page files beside its
+     old modules.
+   - The `rescan` cron (every 15 minutes, as `fusionui`) runs the pulled code,
+     whose `open_db` migrates the ledger. On 2026-10-08 the 07:00 rescan
+     migrated a pull made at 06:57, and the old service ran on the v4 file
+     until the restart at 09:49. No harm came of it: the old service checks the
+     schema once, when its process starts, and its inserts name their columns.
 4. Run `fusion-ui init-db` (v4), then `fusion-ui status`. The new service's
    `open_db` also migrates on its first connection, which is harmless.
 5. Run `fusion-ui prune --plot velocity_field`, the dry run, then again with
