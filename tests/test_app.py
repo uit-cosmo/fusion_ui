@@ -764,6 +764,11 @@ def test_the_dead_pixel_view_draws_its_method_and_grid(single_shot_deployment):
     assert [e.label for e in app.expander] == ["How dead pixels are found"]
     assert widget(app, "radio", "Show").options == list(dead_pixels.VIEWS)
 
+    # The plain summary is always shown, directly above the technical text in the expander.
+    column = list(app.main.children.values())
+    above = column[[element.type for element in column].index("expander") - 1]
+    assert above.type == "markdown" and above.value == dead_pixels.plain_summary()
+
     conn = db.connect(single_shot_deployment)
     names = {r["name"] for r in conn.execute("SELECT name FROM scalars")}
     conn.close()
