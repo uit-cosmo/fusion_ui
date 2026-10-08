@@ -37,8 +37,9 @@ time before the gas puff cut out at preprocessing. J6d merged (d622f1d): the
 stored-mask view and the plain summary. J8a merged (c3ac9b1): each track's
 trajectory in R and Z on the lag strip. J6 merged into fusion_scripts
 (9e14f01): the puff window and `density_scan/preprocess.py`. J6e and J11 are
-under way; the production preprocessing, waiting for the user, and batch 2
-follow. J8 is under way with the user.
+under way. fusion_scripts is deployed at 9e14f01, and the production
+preprocessing runs in tmux `prep06` (from 14:03), followed by `rescan` and
+batch 2. J8 is under way with the user.
 
 ## Decisions (the user, 2026-10-07)
 
