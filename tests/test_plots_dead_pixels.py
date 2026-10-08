@@ -12,7 +12,6 @@ import plotly.graph_objects as go
 import pytest
 import xarray as xr
 from scipy import signal
-from streamlit.testing.v1 import AppTest
 
 import fusion_ui.plots  # noqa: F401 - registers every spec
 from fusion_ui.core import fusion_scripts, loader, registry
@@ -414,7 +413,9 @@ def test_a_fallback_level_says_so_in_the_legend(scenarios):
 
 
 # ---------------------------------------------------------------------------
-# The words, and what the view draws
+# The words, and the grid. What the page draws of the whole -- the figure of the cut above the grid, the window line
+# under it, the note for a result that predates it -- is tested through the page, in ``test_whole_record.py``: a
+# result in hand has no Streamlit to be drawn into without an AppTest script of its own.
 # ---------------------------------------------------------------------------
 
 
@@ -425,51 +426,6 @@ def test_the_window_line_sets_the_analysis_window_beside_the_discharge_window_an
     assert dead_pixels.window_line(None, None, "the puff rises") == "Puff rule: the puff rises"
     assert dead_pixels.window_line() is None
     assert dead_pixels.seconds((1.0734, 1.4)) == "1.0734–1.4000 s"
-
-
-def drawn(result, params, target):
-    from fusion_ui.plots import dead_pixels
-
-    dead_pixels.render(result, params, target)
-
-
-def draw(result):
-    target = registry.Target("cmod", 1234, "apd", False, "unused", 0.0, 0.12)
-    app = AppTest.from_function(drawn, args=(result, dead_pixels.DeadPixelParams(), target), default_timeout=60).run()
-    assert not app.exception, [e.value for e in app.exception]
-    return app
-
-
-def kinds(app):
-    return [element.type for element in app.main.children.values()]
-
-
-def test_the_view_draws_the_cut_above_the_grid_with_the_window_line_under_it(scenarios):
-    s = scenarios["two puffs"]
-    app = draw(s.result)
-    column = kinds(app)
-    # The counts, the plain words and the method, then the figure of the cut and its line, then the toggle and grid.
-    assert column.index("expander") < column.index("plotly_chart") < column.index("radio")
-    assert column.count("plotly_chart") == 2
-    assert column[column.index("plotly_chart") + 1] == "caption"
-    found = dead_pixels.puff_of(s.result)
-    line = [c.value for c in app.caption if c.value.startswith("Analysis window")]
-    seconds = dead_pixels.seconds
-    expected = dead_pixels.window_line(seconds(found.analysis_window), seconds(found.discharge_window), found.rule)
-    assert line == [expected]
-    assert "0.0350–0.1150 s" in line[0] and "dip below threshold at 0.035-0.050 s" in line[0]
-    assert not app.info and not app.warning
-
-
-def test_a_result_that_predates_the_puff_window_still_draws_its_grid_and_says_so(scenarios):
-    app = draw(pf.before_the_puff_window(scenarios["two puffs"].result))
-    assert [i.value for i in app.info] == [dead_pixels.PREDATES]
-    assert "predates the puff window" in app.info[0].value and "Recompute" in app.info[0].value
-    column = kinds(app)
-    assert column.count("plotly_chart") == 1  # the grid; no figure of the cut to draw
-    assert column.index("expander") < column.index("radio") < column.index("plotly_chart")
-    assert not [c for c in app.caption if c.value.startswith("Analysis window")]
-    assert [r.options for r in app.radio] == [list(dead_pixels.VIEWS)]
 
 
 def test_every_view_of_the_grid_still_draws_for_a_result_with_a_puff_window(scenarios):

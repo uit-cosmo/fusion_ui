@@ -6,10 +6,16 @@ of terabytes.
 """
 
 import json
+import sys
 
 import pytest
 
 from fusion_ui.core import db
+
+#: ``sys.modules['__main__']`` as the session starts: pytest's own. Read here, at
+#: import, before any test or fixture can have replaced it. See
+#: ``keep_the_main_module``.
+MAIN = sys.modules["__main__"]
 
 # Mirrors the real descriptor's shapes: a fully curated shot, one where f_GW has
 # to be derived from I_p and n̄_e, one with nothing but a shot number, and an
@@ -92,6 +98,34 @@ def isolate_environment(monkeypatch):
     """
     for name in ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def keep_the_main_module():
+    """Give every test, and take back from it, the ``__main__`` the session
+    started with.
+
+    Streamlit's script runner installs the script it runs as
+    ``sys.modules['__main__']`` and never puts the old one back, so every
+    ``AppTest`` run leaves it replaced: by the page for ``from_file``, by a
+    generated script for ``from_function``. ``precompute``'s pool starts its
+    workers with ``spawn``, and a spawned child runs its parent's ``__main__``
+    again from the file it came from (``multiprocessing.spawn``,
+    ``init_main_from_path``). A page run again in the child has been harmless,
+    only slow. The generated script ends in ``function(*__args, **__kwargs)``,
+    names AppTest puts in the running module and not in the file, so the child
+    dies with ``NameError: name '__args' is not defined`` and every target of
+    the fill comes back broken.
+
+    Without this, which test breaks depends on which test ran before it. The
+    suite passed in its usual order only because a ``from_file`` test came
+    between the ``from_function`` ones and the pool's; another pair of files
+    could fail (``tests/test_main_module.py`` is the regression test). pytest's
+    own ``__main__`` is left alone by a spawned child.
+    """
+    sys.modules["__main__"] = MAIN
+    yield
+    sys.modules["__main__"] = MAIN
 
 
 @pytest.fixture

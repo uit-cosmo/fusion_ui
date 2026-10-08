@@ -270,10 +270,20 @@ def test_the_page_and_precompute_end_at_the_analysis_window_of_the_whole_record(
     from_page = stored(raw_record.conn)
     assert dead_pixels.puff_of(from_page).analysis_window == ours
     assert dead_pixels.puff_of(from_page).discharge_window == raw_record.case.window
-    # The page draws the figure of that cut, and says it under it.
-    assert len(app.get("plotly_chart")) == 2
+    # The page draws the figure of that cut, and says it under it: the counts, the plain words and the method, then the
+    # figure and its line, then the toggle and the grid.
+    column = [element.type for element in app.main.children.values()]
+    assert column.index("expander") < column.index("plotly_chart") < column.index("radio")
+    assert column.count("plotly_chart") == 2
+    assert column[column.index("plotly_chart") + 1] == "caption"
     (line,) = [c.value for c in app.caption if c.value.startswith("Analysis window")]
-    assert line.startswith(f"Analysis window {dead_pixels.seconds(ours)} · discharge window ")
+    found = dead_pixels.puff_of(from_page)
+    seconds = dead_pixels.seconds
+    assert line == dead_pixels.window_line(seconds(found.analysis_window), seconds(found.discharge_window), found.rule)
+    assert line.startswith(f"Analysis window {seconds(ours)} · discharge window {seconds(raw_record.case.window)}")
+    if raw_record.name == "two puffs":
+        assert "dip below threshold at 0.035-0.050 s" in line  # the gap the window starts in, reported and not cut
+    assert not app.info and not app.warning
 
     # The record cut to the discharge window first -- as the page cut every dataset before this flag -- would have
     # ended elsewhere, except on the control: a window that starts with the record.
@@ -304,7 +314,11 @@ def test_a_cached_result_without_the_puff_window_renders_with_its_note_and_recom
     assert not app.exception, [e.value for e in app.exception]
     assert not app.error, [e.value for e in app.error]
     assert [i.value for i in app.info] == [dead_pixels.PREDATES]
-    assert len(app.get("plotly_chart")) == 1  # the grid: nothing was stored of the cut to draw
+    assert "predates the puff window" in app.info[0].value and "Recompute" in app.info[0].value
+    column = [element.type for element in app.main.children.values()]
+    assert column.count("plotly_chart") == 1  # the grid: nothing was stored of the cut to draw
+    assert column.index("expander") < column.index("radio") < column.index("plotly_chart")
+    assert [r.options for r in app.radio if r.label == "Show"] == [list(dead_pixels.VIEWS)]
     assert not [c for c in app.caption if c.value.startswith("Analysis window")]
     assert "Recompute" in [b.label for b in app.button]
 
