@@ -70,12 +70,17 @@ The old `velocity_field` spec, a different estimator from the paper's, is gone
 no longer registered and counts what it would delete before it deletes.
 
 The `density_scan/results.json` seed is imported with `fusion-ui
-import-results`: 50 shots, 3880 pixels, 58 200 scalars under the plot key
-`density_scan_import`. Values computed today agree with the seed on
-`taud_psd`/`lambda_psd` exactly and on `number_events` exactly, and to 1–5% on
-the contour quantities — the seed is from 1 June 2026 and predates upstream's
-non-uniform-grid fix in `contours.py`. `theta` changed convention outright.
-A **large** disagreement is a finding; these are drift.
+import-results`: 50 shots, 3880 pixels, 46 560 scalars (twelve names) under the
+plot key `density_scan_import`. The file holds fifteen names. Three are not
+imported (`core/seed.py: NOT_IMPORTED`): the seed stored the ellipse fitted to
+the contour under `lx_f`, `ly_f` and `theta_f`, not the Gaussian fit those names
+mean here, and its `theta_f` is in an older angle convention. `fusion-ui prune
+--plot density_scan_import --scalar lx_f --scalar ly_f --scalar theta_f --yes`
+clears them from a ledger that holds an earlier import. Values computed today
+agree with the seed on `taud_psd`/`lambda_psd` exactly and on `number_events`
+exactly, and to 1–5% on the contour quantities — the seed is from 1 June 2026
+and predates upstream's non-uniform-grid fix in `contours.py`. A **large**
+disagreement is a finding; these are drift.
 
 ## Setup
 

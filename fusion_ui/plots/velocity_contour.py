@@ -228,9 +228,11 @@ def scalars(result):
     """The three names density_scan reports for this estimator.
 
     ``lx`` / ``ly`` / ``theta`` are computed and drawn but deliberately not
-    written: the seeded ``lx_f`` / ``ly_f`` / ``theta_f`` are the Gaussian fit,
-    a different estimator, and putting a contour size under those names would
-    silently mix two quantities on one axis in the multi-shot view.
+    written: the names ``lx_f`` / ``ly_f`` / ``theta_f`` mean the Gaussian fit
+    (``gaussian_sizes``, ``blob_parameters``), a different estimator, and putting
+    a contour size under those names would silently mix two quantities on one
+    axis in the multi-shot view. The seed once did exactly that, by mistake, and
+    no longer writes them (``fusion_ui.core.seed.NOT_IMPORTED``).
     """
     x, y = int(result["refx"]), int(result["refy"])
     return {

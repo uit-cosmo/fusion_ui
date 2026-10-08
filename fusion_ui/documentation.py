@@ -58,7 +58,7 @@ SEED = seed.IMPORT_PLOT
 
 #: What every source but the products writes: each single-shot spec that writes scalars, by plot key, and
 #: the seed. A test runs every registered spec's ``scalars`` and holds this to it; the seed's names are the
-#: fields of ``density_scan.discharge.BlobParameters``.
+#: fields of ``density_scan.discharge.BlobParameters`` but the three of ``seed.NOT_IMPORTED``.
 OLDER_SOURCES = {
     "two_dca": ("number_events",),
     "taud_psd": ("taud_psd", "lambda_psd"),
@@ -78,11 +78,8 @@ OLDER_SOURCES = {
         "vy_2dca_tde",
         "vx_tde",
         "vy_tde",
-        "lx_f",
-        "ly_f",
         "lr",
         "lz",
-        "theta_f",
         "taud_psd",
         "lambda_psd",
         "number_events",

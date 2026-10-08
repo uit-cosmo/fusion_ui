@@ -226,6 +226,7 @@ fusion-ui rescan           # index the data tree into `shots` (cron this)
 fusion-ui import-results   # seed `scalars` from density_scan/results.json (once)
 fusion-ui precompute PLOT  # run a plot's compute over every shot to warm the cache
 fusion-ui prune --plot KEY # count, then (with --yes) delete one plot's stored results
+                           # (with --scalar NAME, repeatable: only those names' scalars)
 fusion-ui backfill-dt      # measure phantom frame intervals into `shots.dt`
 fusion-ui status           # resolved paths, index and result counts
 ```

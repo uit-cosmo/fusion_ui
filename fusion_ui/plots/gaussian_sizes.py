@@ -1,10 +1,11 @@
 """Blob size from a Gaussian ellipse fitted to the conditional average.
 
-Ported from ``density_scan/utils.py:get_gaussian_fit_sizes``, which is the
-estimator behind the ``lx_f`` / ``ly_f`` / ``theta_f`` columns in the group's
-results: fit a tilted, penalised 2D Gaussian to the zero-lag frame of the
-conditional average, centred on the reference pixel, and read off its two
-semi-axes and its tilt.
+Ported from ``density_scan/utils.py:get_gaussian_fit_sizes``, the estimator the
+``lx_f`` / ``ly_f`` / ``theta_f`` names stand for (the ``results.json`` seed holds
+a contour ellipse under them instead, and is no longer imported: see
+``fusion_ui.core.seed.NOT_IMPORTED``): fit a tilted, penalised 2D Gaussian to the
+zero-lag frame of the conditional average, centred on the reference pixel, and
+read off its two semi-axes and its tilt.
 
 ``imaging_methods.fit_ellipse_to_event`` takes the conditional average and the
 reference pixel plus the three penalty factors from ``GaussFitParams``; upstream's
