@@ -38,14 +38,15 @@ twelve names and four behaviours decide what people will see there.
 `core/multishot.py` and `core/precompute.py` are in,
 `pages/2_single_shot.py` is a thin dispatcher over the registry,
 `pages/3_multi_shot.py` draws the scalar scatter (its pure logic lives in
-`core/multishot.py`), and `fusion_ui/plots/` holds fifteen specs: the twelve
+`core/multishot.py`), and `fusion_ui/plots/` holds sixteen specs: the thirteen
 below and the three phase-06 products (`pixel_averages`, `method_fields`,
 `blob_parameters`; see `docs/PHASE_06_DECORRELATION.md`):
 
 | module | spec | |
 |---|---|---|
 | `raw.py` | `raw_frames` | live: frames, click-a-pixel trace, mp4 export |
-| `dead_pixels.py` | `dead_pixels` | cached, raw files only: the dead-pixel mask preprocessing uses, with every pixel's PDF and spectrum to check it by eye |
+| `dead_pixels.py` | `dead_pixels` | cached, raw files only: the dead-pixel mask preprocessing uses, with every pixel's PDF and spectrum to check it by eye. **The dead-pixel words**, which both dead-pixel views show through `explain()`: a plain summary, hand-written Markdown in `fusion_ui/data/dead_pixels_in_plain_words.md` beside `run_days.md` and read at every rerun, and `METHOD`, the technical text, in this module's expander |
+| `stored_mask.py` | `stored_mask` | live, preprocessed files only: the mask the file was made with (`dead`, `dead_shot`, `dead_evidence`, `dead_psd_ratio`), where the run day's mask overrides the shot's own verdict, its source, and the window preprocessing cropped to |
 | `probe.py` | `probe_trace` | live: the ragged ASP/FSP trace |
 | `spectra.py` | `taud_psd` | cached: the PSD duration-time fit |
 | `two_dca.py` | `two_dca` | cached: the conditional average — **the base of the phase-03 chain** |
@@ -250,7 +251,8 @@ class PlotSpec:
   single-shot page offers a spec only on a version it accepts (`registry.
   for_diagnostic(diagnostic, preprocessed)`), and `precompute` skips the other
   version. `dead_pixels` is raw-only, because preprocessing interpolates dead
-  pixels away.
+  pixels away; `stored_mask` is preprocessed-only, because the mask it draws is
+  stored in that file.
 - **Diagnostics are strings** — `"apd"`, `"asp"` — matching `catalog.DIAGNOSTICS`,
   `shots.diagnostic` and `loader.dataset_path`. `experimental_database`'s
   `Diagnostic` enum stays an implementation detail inside `core/loader.py`.
