@@ -16,7 +16,7 @@ import plotly.graph_objects as go
 import xarray as xr
 from plotly.subplots import make_subplots
 
-from fusion_ui.core import loader, registry
+from fusion_ui.core import fusion_scripts, loader, registry
 
 N_BINS = 120  # most PDF bins per pixel; fewer when it spans fewer digitizer levels
 N_FREQ = 200  # log-spaced PSD points kept for drawing
@@ -90,6 +90,7 @@ def _pdf(samples):
 
 def compute(ds, params):
     """The mask and its evidence, plus each pixel's PDF and a log-spaced PSD for drawing."""
+    fusion_scripts.import_config()  # density_scan reads its settings by the bare name `config`
     from density_scan import dead_pixels
 
     variable = loader.image_variable(ds)
@@ -257,6 +258,7 @@ def _hand_made(target):
     """The hand-made 1160616 mask, for that run day only."""
     if target.shot // 1000 != 1160616:
         return None
+    fusion_scripts.import_config()  # as in compute
     from density_scan.dead_pixel_mask import get_dead_pixel_mask
 
     return get_dead_pixel_mask().values
