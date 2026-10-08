@@ -1815,7 +1815,10 @@ After J11 is merged.
 - `README.md`: the Fields page, the Documentation page, the new `precompute`
   flags, and the recompute table.
 - `CLAUDE.md`: current state; the batch-only, lookup, `views/` and product
-  conventions.
+  conventions. The `dead_pixels` row still says that 111 stored results
+  predate the puff window. The server's were all recomputed on 2026-10-08, so
+  say only that a result stored before J6e says so, and that
+  `precompute dead_pixels --force` recomputes it.
 - `PLAN.md`: phase 06 marked done, with the decisions that came out
   differently.
 - In fusion_scripts: `decorrelation/README.md` (the `pipeline.py` API, with
