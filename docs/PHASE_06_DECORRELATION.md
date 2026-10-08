@@ -663,6 +663,7 @@ Built, tested and pushed to main on 2026-10-07, and deployed the same day (JD).
 | G3 | Approve push and deploy; restart the service | **user** | — | J2b, J3, J4, J10, G2 | — |
 | J7 | Deploy, first batch, regression on the server | orchestrator | server | G3; 1140827 after J6 | — |
 | J8 | Physics validation | **user** | — | J7 | — |
+| J8a | The trajectory in R and Z on the lag strip | **Sonnet 5.5** | fusion_ui | J8's request | J6, J6d |
 | J9 | Docs | **Haiku 4.5** | both | J8 | — |
 
 **Why these models.** `PLAN.md` splits work by how expensive a wrong decision
@@ -1480,10 +1481,35 @@ websocket check must return `101`).
 - Settled: the 2DCC arrows stay coloured by events; `nlags_*` keeps counting
   interpolated lags, as the paper does; a real click on a multi-shot point
   opens the Fields page as it should.
-- Open: the lag strip against
-  `decorrelation/manuscript/figures/lags_1160616027_x5y4.pdf`, the edge pixels
-  ((8, 6) reads −103 m/s by the centroid, (8, 3) 46), and the labels, on
-  which the user will send feedback.
+- The lag strip matches `decorrelation/manuscript/figures/lags_1160616027_x5y4.pdf`,
+  and the user asked for the trajectory in R and Z on it (J8a).
+- Open: the edge pixels ((8, 6) reads −103 m/s by the centroid, (8, 3) 46),
+  and the labels, on which the user will send feedback.
+
+### J8a — The trajectory on the lag strip · Sonnet 5.5 · fusion_ui
+
+The user wants each track's path in the R–Z plane. Today only the Tracks view
+has it, as R against lag and Z against lag, and the lag strip marks one
+position a panel.
+
+- **Where:** on the lag strip's τ = 0 panel, or the panel nearest it when the
+  lags shown leave 0 out. Each track goes on its own field's row
+  (`pixel.FIELD_TRACKS`): the maximum and the centroid on the conditional
+  average, the 2DCC on the cross-correlation.
+- **What:** for each track, its positions at every lag of the bank as a line
+  with small markers, the lags the slope rests on highlighted as in the Tracks
+  view, and the straight path the stored velocity implies (dashed, like the
+  Tracks view's line), over the span of the fitted lags. Lags without a
+  position leave gaps. Colours, symbols and legend groups are the tracks'
+  own.
+- Only when `method_fields` is loaded; without it the strip is unchanged. The
+  caption says what the τ = 0 panel shows.
+- Builders stay pure. No product, parameter or hash changes.
+
+**Accept when** builder tests on the synthetic bundle show the paths on the
+τ = 0 panel only, their points equal to `pos_*` at every lag, the dashed
+path along (v_R, v_Z), and nothing without `method_fields`; and the full
+suites pass.
 
 ### J9 — Docs · Haiku 4.5 · both repos
 
