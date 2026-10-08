@@ -12,6 +12,25 @@ technical ``METHOD`` under it in an expander. The summary is hand-written Markdo
 
 The PDFs are histograms aligned on the digitizer's levels. A dead pixel spans a few tens of levels, and bins
 finer than a level would draw it as a comb of spikes. One bin per level draws it as the narrow Gaussian it is.
+
+**The window.** The mask is judged over the *analysis window*: the discharge window cut to the gas puff
+(``density_scan.puff``), the window preprocessing crops its files to. On many shots the discharge window starts
+before the puff, and the live pixels' dark stretch there gives bimodal PDFs and dilutes the spectra. The puff is
+found against the dark level at the *start of the record*, so this spec declares ``whole_record``: it is handed the
+whole record, with the discharge window in its attributes (``loader.discharge_window``), finds the puff on it, and
+judges and draws its PDFs and spectra over the analysis window only. Cut to the discharge window first, as every
+other spec's input is, a window that began after the puff had risen would read "already on", and the view would
+differ from preprocessing. The array mean and what the search found of it are drawn above the grid, so the cut
+can be checked by eye.
+
+The result holds, beside ``dead``, ``evidence``, ``red_ratio``, ``gain``, ``psd``, ``pdf``, ``pdf_volts``, ``mean``
+and ``std`` (all over the analysis window), the search for the puff: the smoothed array mean ``puff_signal`` over
+``puff_time`` (the whole record, at most 4000 points), and the attributes ``analysis_window``, ``discharge_window``
+and ``record_window`` (each ``[start, end]`` in seconds), ``puff_found``, ``puff_start``, ``puff_end``,
+``puff_baseline``, ``puff_level``, ``puff_level_quantile``, ``puff_threshold``, ``puff_note``, ``puff_rule`` and,
+when the signal dips below the threshold inside the window, ``puff_dips`` (start, end, start, end, ...). The four
+that ``density_scan.dead_pixels.estimate_shot`` also gives its result carry its names. A result computed before this
+has none of it: :func:`puff_of` says so, and the view says that it predates the puff window.
 """
 
 import os
@@ -67,7 +86,18 @@ A pixel is **live when it sees the plasma**, and the evidence is in its fluctuat
 pixel inside the separatrix has a narrow, near-Gaussian PDF just as a dead one does. A dead channel can be skewed
 by rare spikes or by telegraph noise.
 
-1. **Red spectrum.** The Welch PSD of each pixel over the discharge window gives a ratio: the median over
+**The window.** The judgement is made over the *analysis window*: the discharge window of the discharge DB, cut to
+the gas puff. On many shots the discharge window starts before the puff, while the live pixels still sit at the
+digitizer's dark level, and that dark stretch gives bimodal PDFs and dilutes the spectra. The puff is found in the
+array-mean light, smoothed over 1 ms: it starts where the signal crosses halfway between its dark level at the
+start of the record and its median over the discharge window, and stays across for at least 5 ms. Where most of
+the window is dark after a short puff, the window's 90th percentile stands for the light in place of its median.
+A record that starts with the light already on, or has no clear rise, keeps the discharge window, and says why. A
+dip below the halfway level inside the window, as between two puffs, is reported and not cut. The raw file's view
+draws the array mean with both windows marked; a preprocessed file is cropped to the analysis window, and its view
+quotes it.
+
+1. **Red spectrum.** The Welch PSD of each pixel over the analysis window gives a ratio: the median over
    1–20 kHz (the blob band) divided by the median over 300–900 kHz (digitizer noise only). The medians ignore
    the narrow pickup lines in that upper band. Noise is white, a ratio near 1. A ratio above **{red:g}** means
    the pixel is live.
@@ -79,11 +109,15 @@ by rare spikes or by telegraph noise.
 3. **Everything else is dead.**
 
 Hardware does not change within a run day. Preprocessing therefore marks a pixel dead all day when it is dead in
-at least a third of the day's shots. This view shows the single shot.
+at least a third of the day's shots. The raw file's view shows this shot's own verdict, before that rule; a
+preprocessed file's view shows the mask the file was made with, which is the day's, and marks the pixels where it
+overrides the shot's own verdict.
 
 Checked on the 111 raw APD shots on the server. It reproduces the hand-made 1160616 mask on all nine shots. From
 2012-02 to 2015-09 it gives the same 18 pixels on every run day; the four extra dead pixels of 2016 died between
-1150916 and 1160616. The code is `density_scan/dead_pixels.py` in fusion_scripts.
+1150916 and 1160616. Cut to the gas puff, every one of the 111 shots gets the verdict it got over the whole
+discharge window, and so every run day gets the same mask. The code is `density_scan/dead_pixels.py` and
+`density_scan/puff.py` in fusion_scripts.
 """
 
 
@@ -119,15 +153,24 @@ def _pdf(samples):
 
 
 def compute(ds, params):
-    """The mask and its evidence, plus each pixel's PDF and a log-spaced PSD for drawing."""
-    fusion_scripts.import_config()  # density_scan reads its settings by the bare name `config`
-    from density_scan import dead_pixels
+    """The mask over the analysis window and its evidence, each pixel's PDF and a log-spaced PSD for drawing, and
+    the search for the gas puff that chose the window.
 
+    ``ds`` is the whole record with its discharge window in its attributes (``whole_record``): the puff is found
+    on all of it, against the dark level at its start, and everything else is judged over the analysis window.
+    This is ``density_scan.dead_pixels.estimate_shot(shot, window="puff")``, step for step, on a record in hand.
+    """
+    fusion_scripts.import_config()  # density_scan reads its settings by the bare name `config`
+    from density_scan import dead_pixels, puff
+
+    discharge = loader.discharge_window(ds)
     variable = loader.image_variable(ds)
     record = ds[[variable]].rename({variable: "frames"}).transpose("y", "x", "time").load()
-    result = dead_pixels.estimate(record, red=params.red, gain=params.gain, keep_psd=True)
+    found = puff.puff_window(record, discharge)
+    analysed = record.sel(time=slice(*found.analysis_window))
+    result = dead_pixels.estimate(analysed, red=params.red, gain=params.gain, keep_psd=True)
 
-    frames = record.frames.values
+    frames = analysed.frames.values
     ny, nx, _ = frames.shape
     centres = np.full((ny, nx, N_BINS + 2), np.nan, dtype=np.float32)
     density = np.full_like(centres, np.nan)
@@ -142,11 +185,112 @@ def compute(ds, params):
 
     nf = result.frequency.size
     keep = np.unique(np.round(np.geomspace(1, nf - 1, N_FREQ)).astype(int))
-    return result.isel(frequency=keep).assign(
-        pdf=(("y", "x", "bin"), density),
-        pdf_volts=(("y", "x", "bin"), centres),
-        mean=(("y", "x"), mean),
-        std=(("y", "x"), std),
+    out = (
+        result.isel(frequency=keep)
+        .assign(
+            pdf=(("y", "x", "bin"), density),
+            pdf_volts=(("y", "x", "bin"), centres),
+            mean=(("y", "x"), mean),
+            std=(("y", "x"), std),
+            puff_signal=("puff_time", found.signal),
+        )
+        .assign_coords(puff_time=found.time)
+    )
+    out.attrs.update(
+        analysis_window=list(map(float, found.analysis_window)),
+        discharge_window=list(map(float, found.discharge_window)),
+        record_window=list(map(float, found.record_window)),
+        puff_found=int(found.found),
+        puff_start=float(found.start),
+        puff_end=float(found.end),
+        puff_baseline=float(found.baseline),
+        puff_level=float(found.level),
+        puff_level_quantile=float(found.level_quantile),
+        puff_threshold=float(found.threshold),
+        puff_note=found.note,
+        puff_rule=found.rule,
+    )
+    if found.dips:  # a netCDF attribute cannot be empty: no dips, no attribute
+        out.attrs["puff_dips"] = [float(edge) for dip in found.dips for edge in dip]
+    return out
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# The search for the puff, as the result stores it
+# ---------------------------------------------------------------------------------------------------------------
+
+
+@dataclass(eq=False)  # arrays inside: identity, not a generated __eq__ that raises
+class Puff:
+    """What the result stores of the search for the gas puff, read back by :func:`puff_of`.
+
+    Times are seconds and the signal volts. ``analysis_window`` is ``discharge_window`` whenever ``found`` is
+    False, and ``note`` then says why. ``start`` and ``end`` are NaN when the puff was not found.
+    """
+
+    found: bool
+    analysis_window: tuple
+    discharge_window: tuple
+    record_window: tuple
+    start: float
+    end: float
+    baseline: float  # the dark level at the start of the record
+    level: float  # the light: the window's median, or its ``level_quantile`` where the median is the dark level
+    level_quantile: float
+    threshold: float  # halfway between baseline and level
+    dips: tuple  # ((start, end), ...) below the threshold inside the analysis window
+    note: str  # what was decided about this record, and why
+    rule: str  # the rule in words, with the note: what a preprocessed file stores as ``puff_rule``
+    time: np.ndarray  # the smoothed array mean over the whole record, for drawing
+    signal: np.ndarray
+
+
+#: What a result has to carry to say it holds the search for the puff.
+_PUFF_ATTRS = (
+    "analysis_window",
+    "discharge_window",
+    "record_window",
+    "puff_found",
+    "puff_start",
+    "puff_end",
+    "puff_baseline",
+    "puff_level",
+    "puff_level_quantile",
+    "puff_threshold",
+    "puff_note",
+    "puff_rule",
+)
+
+
+def puff_of(result):
+    """The :class:`Puff` a result stores, or ``None`` for one that predates the puff window.
+
+    A result computed before the view looked for the puff has neither the smoothed array mean nor the attributes.
+    One that has part of it is treated the same way: the figure of a cut needs all of it.
+    """
+    if "puff_signal" not in result or any(name not in result.attrs for name in _PUFF_ATTRS):
+        return None
+    a = result.attrs
+    windows = [loader.as_window(a[name]) for name in ("analysis_window", "discharge_window", "record_window")]
+    if any(window is None for window in windows):
+        return None
+    dips = np.asarray(a.get("puff_dips", []), dtype=float).reshape(-1, 2)
+    return Puff(
+        found=bool(a["puff_found"]),
+        analysis_window=windows[0],
+        discharge_window=windows[1],
+        record_window=windows[2],
+        start=float(a["puff_start"]),
+        end=float(a["puff_end"]),
+        baseline=float(a["puff_baseline"]),
+        level=float(a["puff_level"]),
+        level_quantile=float(a["puff_level_quantile"]),
+        threshold=float(a["puff_threshold"]),
+        dips=tuple((float(start), float(end)) for start, end in dips),
+        note=str(a["puff_note"]),
+        rule=str(a["puff_rule"]),
+        time=result["puff_time"].values.astype(float),
+        signal=result["puff_signal"].values.astype(float),
     )
 
 
@@ -285,6 +429,179 @@ def figure(result, view=VIEWS[0]):
     return fig
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# The puff window, drawn
+# ---------------------------------------------------------------------------------------------------------------
+
+#: The colours of the puff figure. Chosen to read on a light and a dark page alike, and apart from the evidence
+#: colours above, which belong to the grid: a pixel's colour there means a verdict.
+PUFF_COLOURS = {
+    "signal": "#1f77b4",
+    "discharge": "#7f7f7f",
+    "analysis": "#2ca02c",
+    "baseline": "#7f7f7f",
+    "level": "#17becf",
+    "threshold": "#9467bd",
+    "dip": "#d62728",
+    "edge": "#ff7f0e",
+}
+
+#: What the page says about a result that holds no search for the puff: all 111 cached ones, until they are computed
+#: again. The grid below it is still drawn, over the discharge window it was computed on.
+PREDATES = (
+    "This result predates the puff window. It was computed over the whole discharge window, dark stretch before "
+    "the gas puff included, and it records no search for the puff, so there is nothing to draw of the cut and the "
+    "mask below may differ from the one preprocessing now makes. Recompute it (the button under the grid) to judge "
+    "it over the analysis window."
+)
+
+
+def seconds(window):
+    """A ``(start, end)`` window in seconds as ``"1.0734–1.4000 s"``."""
+    return f"{window[0]:.4f}–{window[1]:.4f} s"
+
+
+def window_line(analysis_window=None, discharge_window=None, rule=None):
+    """The analysis window beside the discharge window and the puff rule that chose it, in words.
+
+    The arguments are the text of each, ``None`` for one that is not known; the result is ``None`` when none of the
+    three is. Both dead-pixel views end with this line, the raw one under the figure of the cut and the preprocessed
+    one from the file's own attributes (``stored_mask``), so the two read alike.
+    """
+    parts = []
+    if analysis_window is not None:
+        parts.append(f"analysis window {analysis_window}")
+    if discharge_window is not None:
+        parts.append(f"discharge window {discharge_window}")
+    if rule is not None:
+        parts.append(f"puff rule: {rule}")
+    line = " · ".join(parts)
+    return line[:1].upper() + line[1:] if line else None
+
+
+def _ordinal(n):
+    suffix = "th" if n % 100 in (11, 12, 13) else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def light_level(quantile):
+    """How the light level is named: ``"median"``, or ``"90th percentile"`` where the median is the dark level."""
+    return "median" if quantile == 0.5 else f"{_ordinal(round(100 * quantile))} percentile"
+
+
+def _rgba(colour, alpha):
+    """``"#rrggbb"`` as an ``rgba(...)`` string."""
+    r, g, b = (int(colour[i : i + 2], 16) for i in (1, 3, 5))
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def puff_figure(puff):
+    """The smoothed array mean over the whole record, with the cut marked, so that it can be checked by eye.
+
+    Shaded: the discharge window, and over it the analysis window, which is what the mask below was judged on; and
+    each dip below the threshold that the cut leaves in. The lines are what the rule compared the signal with: its
+    dark level at the start of the record, the light level of the window, and the threshold halfway between. The
+    triangles mark where the puff comes on and goes off (no "off" for a puff still on when the record ends). Drawn
+    the same when the puff was not found: the lines then show what the rule had to stand on, and the note under the
+    figure says what it lacked.
+    """
+    first, last = puff.record_window
+    d0, d1 = puff.discharge_window
+    a0, a1 = puff.analysis_window
+    colour = PUFF_COLOURS
+
+    def band(x0, x1, key, alpha, y0=0.0, y1=1.0):
+        return dict(
+            type="rect",
+            xref="x",
+            yref="y domain",
+            x0=x0,
+            x1=x1,
+            y0=y0,
+            y1=y1,
+            fillcolor=_rgba(colour[key], alpha),
+            line_width=0,
+            layer="below",
+        )
+
+    shapes = [band(d0, d1, "discharge", 0.16), band(a0, a1, "analysis", 0.22)]
+    # A dip lies inside the analysis window: a strip along the bottom of it, since a third translucent fill over the
+    # other two would only turn them brown.
+    shapes += [band(start, end, "dip", 0.7, y0=0.0, y1=0.05) for start, end in puff.dips]
+
+    fig = go.Figure(
+        go.Scatter(
+            x=puff.time,
+            y=puff.signal,
+            mode="lines",
+            name="array mean, 1 ms mean",
+            line=dict(color=colour["signal"], width=1.4),
+            hovertemplate="%{x:.4f} s: %{y:.3f} V<extra>array mean</extra>",
+        )
+    )
+    for name, value, key, dash in (
+        ("baseline", puff.baseline, "baseline", "dash"),
+        (f"level ({light_level(puff.level_quantile)})", puff.level, "level", "dash"),
+        ("threshold", puff.threshold, "threshold", "dot"),
+    ):
+        fig.add_trace(
+            go.Scatter(
+                x=[first, last],
+                y=[value, value],
+                mode="lines",
+                name=f"{name} {value:.3f} V",
+                line=dict(color=colour[key], width=1.2, dash=dash),
+                hovertemplate=f"{name}: {value:.3f} V<extra></extra>",
+            )
+        )
+    if puff.found:
+        # A puff still on when the record ends does not go off there: the rule's "end" is then the record's last
+        # sample, which is no event, and a triangle at the edge of the axes would pass for one.
+        events = [("on", puff.start, "triangle-up")]
+        if puff.end < puff.time[-1]:
+            events.append(("off", puff.end, "triangle-down"))
+        when = [t for _, t, _ in events]
+        fig.add_trace(
+            go.Scatter(
+                x=when,
+                y=np.interp(when, puff.time, puff.signal),
+                mode="markers",
+                name="puff " + ", ".join(name for name, _, _ in events),
+                marker=dict(symbol=[symbol for _, _, symbol in events], size=11, color=colour["edge"]),
+                customdata=[name for name, _, _ in events],
+                hovertemplate="puff %{customdata} at %{x:.4f} s<extra></extra>",
+            )
+        )
+    for name, key, shown in (
+        ("discharge window", "discharge", True),
+        ("analysis window", "analysis", True),
+        ("dip below the threshold, not cut", "dip", bool(puff.dips)),
+    ):
+        if shown:  # a legend entry for a band, which a shape cannot give
+            fig.add_trace(
+                go.Scatter(
+                    x=[None],
+                    y=[None],
+                    mode="lines",
+                    name=name,
+                    line=dict(color=_rgba(colour[key], 0.45), width=9),
+                )
+            )
+    fig.update_xaxes(title="time (s)", range=[first, last], zeroline=False, automargin=True)
+    fig.update_yaxes(title="array mean (V)", zeroline=False, automargin=True)
+    fig.update_layout(
+        shapes=shapes,
+        height=340,
+        margin=dict(l=10, r=10, t=95, b=10),
+        hovermode="x",
+        legend=dict(orientation="h", y=1.02, x=0, yanchor="bottom"),
+        title=dict(
+            text="Where the gas puff is: the array-mean light over the whole record", font=dict(size=13), y=0.995
+        ),
+    )
+    return fig
+
+
 def hand_made(target):
     """The hand-made 1160616 mask as a ``(y, x)`` bool array, for that run day only; ``None`` for any other."""
     if target.shot // 1000 != 1160616:
@@ -312,8 +629,24 @@ def explain(red=DeadPixelParams.red, gain=DeadPixelParams.gain):
         st.markdown(METHOD.format(red=red, gain=gain))
 
 
+def show_puff(result):
+    """The figure of the cut with the window line under it, drawn above the grid it chose the window of.
+
+    A result that predates the puff window has no search to draw: the note saying so stands in its place, and the
+    grid is drawn all the same.
+    """
+    import streamlit as st
+
+    found = puff_of(result)
+    if found is None:
+        st.info(PREDATES, icon="ℹ️")
+        return
+    st.plotly_chart(puff_figure(found), use_container_width=True)
+    st.caption(window_line(seconds(found.analysis_window), seconds(found.discharge_window), found.rule))
+
+
 def render(result, params, target):
-    """Summary, the plain words and the method, a view toggle and the grid; draws into Streamlit."""
+    """Summary, the plain words and the method, the puff window, a view toggle and the grid; draws into Streamlit."""
     import streamlit as st
 
     st.caption(summary(result))
@@ -326,6 +659,7 @@ def render(result, params, target):
             else f"Differs from the hand-made 1160616 mask at {cells(differ)}."
         )
     explain(params.red, params.gain)
+    show_puff(result)
     view = st.radio("Show", VIEWS, horizontal=True, key=f"dead_pixels.view.{target.key}")
     st.plotly_chart(figure(result, view), use_container_width=True)
     return None
@@ -351,9 +685,11 @@ SPEC = registry.register(
         compute=compute,
         scalars=scalars,
         preprocessed=False,
+        whole_record=True,
         description=(
-            "The dead-pixel mask preprocessing uses, estimated from this raw file, with every pixel's PDF and "
-            "spectrum laid out as the array is, to check it by eye. Seconds per shot. Emits dead and "
+            "The dead-pixel mask preprocessing uses, estimated from this raw file over the part of the record "
+            "with the gas puff on (the cut is drawn first), with every pixel's PDF and spectrum laid out as "
+            "the array is, to check it by eye. Reads the whole record: seconds per shot. Emits dead and "
             "psd_ratio at every pixel and number_dead."
         ),
     )

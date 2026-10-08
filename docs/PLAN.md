@@ -198,7 +198,9 @@ APIs rather than reaching into scripts.
   collection grows. Never touch the full time axis: default every view to the
   discharge DB's `t_start..t_end`, typically a 0.3 s slice of a 3 s record. For
   a shot with no metadata yet, default to a centred 0.2 s window rather than the
-  whole record.
+  whole record. One declared exception: a spec with `PlotSpec.whole_record`
+  (the dead-pixel view, which finds the gas puff against the dark level at the
+  start of the record) is handed the whole record; see `CLAUDE.md`.
 - **Plotly dies above roughly 50k points.** Interactive traces were the choice,
   so decimation is not optional — one shared min/max-envelope helper on the way
   to every 1D trace, preserving spikes that naive striding would drop. This is

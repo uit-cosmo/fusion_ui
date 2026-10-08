@@ -219,6 +219,32 @@ def test_two_workers_fill_four_targets_then_skip_them_all_as_cached(
     assert sum("cached, skipping" in line for line in lines) == 4
 
 
+def test_a_worker_loads_the_whole_record_only_for_the_spec_that_declares_it(tree):
+    """Both in one fill, so a job's steps want both: each kind is read once."""
+    report, _ = fill(tree.conn, ["toy_mean", "toy_whole"], workers=2)
+    assert all(counts(s) == (4, 0, 0, 0, 0) for s in report.stats)
+    attrs = {}
+    for plot in ("toy_mean", "toy_whole"):
+        for (_, shot), row in runs(tree.conn, plot).items():
+            with xr.open_dataset(row["blob_path"]) as blob:
+                attrs[(plot, shot)] = dict(blob.attrs)
+    for shot, n_time in SHOTS.items():
+        cut, whole = attrs[("toy_mean", shot)], attrs[("toy_whole", shot)]
+        assert whole["pid"] != os.getpid()
+        assert whole["in_memory"] == 1 and cut["in_memory"] == 1
+        assert whole["samples"] == n_time  # the whole record, whatever the window
+        assert (whole["first"], whole["last"]) == pytest.approx((1.0, 1.02))
+        # The window the cut spec was cut to is the one the whole-record spec is
+        # told: the descriptor's, or, for a shot with none, the record itself (the
+        # centred 0.2 s default, clipped to it).
+        expected = WINDOW if shot == 1160616001 else (1.0, 1.02)
+        assert (whole["window_start"], whole["window_end"]) == pytest.approx(expected)
+        if shot == 1160616001:
+            assert 0 < cut["samples"] < n_time
+        else:
+            assert cut["samples"] == n_time
+
+
 def test_a_pool_takes_the_largest_files_first():
     def job(shot, size):
         target = registry.Target("cmod", shot, "apd", False, "", 0.0, 0.0)
