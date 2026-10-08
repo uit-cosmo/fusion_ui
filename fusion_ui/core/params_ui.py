@@ -563,6 +563,15 @@ def _help_for(cls, field_name, path):
     return _docstring_help(cls).get(field_name) or None
 
 
+def help_for(cls, field_name, path):
+    """The help text the form shows for field ``field_name`` of ``cls`` at dotted ``path``, or ``None``.
+
+    :data:`HELP` first, then the class docstring. The Documentation page's settings table quotes the same
+    words, so a setting reads alike in the form and on that page.
+    """
+    return _help_for(cls, field_name, path)
+
+
 def _label(name):
     return name.replace("_", " ")
 
