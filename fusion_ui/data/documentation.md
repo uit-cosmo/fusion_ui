@@ -351,7 +351,8 @@ failed pixels; it is not retuned.
 To compute with other settings, name the part that changes in a JSON file, such as
 `{"averages": {"window": 30}}`, and run `fusion-ui precompute method_fields blob_parameters --shot N
 --params-json params.json`. The Single shot page computes `method_fields` and `blob_parameters` with other
-settings itself once their bank is stored. The Fields page offers every parameter set the ledger has.
+settings itself once their bank is stored. The Fields page offers every `method_fields` parameter set the
+ledger has.
 
 **Not settings.** The contour level is read off each pixel's average, and only `neighbour_step` is set. The
 reference pixel is every live pixel in turn. The Fields page's cuts are view state: moving them recomputes
@@ -362,8 +363,8 @@ nothing.
 A scalar is one number per pixel, or one per shot, kept in the ledger; the Multi shot page plots it across
 shots. A name can be written by several sources, a product, an older spec or the seed, each with its own
 settings, and the Multi shot page lists the sources apart. Its mean, median and maximum over pixels take
-every pixel that has a value: the Fields page's cuts do not apply there. A dead pixel has no row. A live
-pixel whose estimate failed has an empty value, which means tried and failed.
+every pixel that has a value: the Fields page's cuts do not apply there. In the products a dead pixel has no
+row, and a live pixel whose estimate failed has an empty value, which means tried and failed.
 
 {{table:scalars}}
 
