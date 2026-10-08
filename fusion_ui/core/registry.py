@@ -46,6 +46,19 @@ whole group. A spec built on a batch-only one is still computed on demand,
 but only once every batch-only link beneath it is cached; see
 :func:`fusion_ui.core.store.missing_batch_upstreams`.
 
+A cached spec may also need *the whole record* (``whole_record=True``). Every
+other spec computes on the file cut to the discharge window, which is what
+keeps a 500 MB record out of memory. A spec that has to find something
+*against the start of the record* cannot work from that cut: the gas puff is
+found against the dark level at the start of the record, and a discharge window
+that begins after the puff has risen would read "already on". Such a spec is
+handed the whole record, with the discharge window it would have been cut to
+carried in the dataset's attributes
+(:func:`fusion_ui.core.loader.discharge_window`), and cuts the record itself.
+Every place that cuts a dataset before ``compute`` honours the flag, through
+:func:`fusion_ui.core.loader.input_for`: the single-shot page and
+``fusion-ui precompute``.
+
 What must never enter a spec's ``params``: view state. A frame index, a
 selected pixel, a zoom -- those live in ``st.session_state`` keyed off
 :attr:`Target.key`. A slider drag must not mint a new ``param_sets`` row.
@@ -150,6 +163,14 @@ class PlotSpec:
     #: it, and many-pixel mode offers neither it nor anything built on it.
     #: Only a cached spec can be batch only.
     batch_only: bool = False
+    #: ``compute`` is handed the whole record, not the file cut to the
+    #: discharge window, with the discharge window in its attributes
+    #: (``loader.discharge_window(ds)``). The one exception to "never load a
+    #: full time axis", for a spec that must see the record from its start: the
+    #: dead-pixel view finds the gas puff against the dark level there. Only a
+    #: cached spec can need it, and a chain agrees on it, since the store hands
+    #: every link the same dataset.
+    whole_record: bool = False
 
     @property
     def cached(self):
@@ -178,6 +199,11 @@ def register(spec):
             f"{spec.key!r} is batch only but a live spec: there is nothing to "
             "compute in batch, so nothing a page could read back"
         )
+    if spec.whole_record and spec.compute is None:
+        raise ValueError(
+            f"{spec.key!r} needs the whole record but is a live spec: a live "
+            "spec has no compute to hand it to, and its view is the cut dataset"
+        )
     if spec.requires is not None:
         # Checked at registration, not at compute time: a typo here would
         # otherwise surface as a failed run on someone's shot.
@@ -198,6 +224,15 @@ def register(spec):
             raise ValueError(
                 f"{spec.key!r} accepts {sorted(missing)} but its upstream "
                 f"{spec.requires!r} does not"
+            )
+        if spec.whole_record != REGISTRY[spec.requires].whole_record:
+            # The store hands the same dataset down the chain: one link given
+            # the whole record would silently compute on a time axis it was
+            # never written for, or one given the cut would look for the start
+            # of a record that is not there.
+            raise ValueError(
+                f"{spec.key!r} and its upstream {spec.requires!r} disagree on "
+                "whole_record, but the store hands both the same dataset"
             )
     elif spec.upstream_params is not None:
         raise ValueError(f"{spec.key!r} sets upstream_params but no requires")

@@ -69,6 +69,17 @@ def mean_scalars(result):
     return {"mean": float(result["mean"].mean()), (1, 2, "pixel_mean"): 1.0}
 
 
+def whole_compute(ds, params):
+    """``mean_compute`` on a record that needs to be whole: what it was given."""
+    from fusion_ui.core import loader
+
+    out = mean_compute(ds, params)
+    start, end = loader.discharge_window(ds)
+    out.attrs.update(window_start=start, window_end=end)
+    out.attrs.update(first=float(ds.time[0]), last=float(ds.time[-1]))
+    return out
+
+
 # --- a chain: a batch-only bank, and two products on it ----------------------
 
 
@@ -188,6 +199,16 @@ SPECS = [
         render=_render,
         compute=mean_compute,
         scalars=mean_scalars,
+    ),
+    registry.PlotSpec(
+        key="toy_whole",
+        label="Toy whole record",
+        diagnostics=("apd",),
+        params=ToyParams,
+        render=_render,
+        compute=whole_compute,
+        scalars=mean_scalars,
+        whole_record=True,
     ),
     registry.PlotSpec(
         key="toy_bank",

@@ -25,14 +25,13 @@ with is unknown, possibly another run day's, and the view says that instead of d
 Every variable and attribute is optional but ``dead``: a file that stores only part of it draws what it has.
 """
 
-import json
 from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
 import plotly.graph_objects as go
 
-from fusion_ui.core import registry
+from fusion_ui.core import loader, registry
 from fusion_ui.plots import dead_pixels
 
 # Why a pixel is dead or live. The first four are density_scan.dead_pixels' evidence codes, the codes the file stores
@@ -122,24 +121,15 @@ def _text(value):
     return str(value)
 
 
-def window(value):
-    """``(start, end)`` in seconds from a ``[start, end]`` attribute (an array, a list or its JSON), else ``None``."""
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except ValueError:
-            return None
-    try:
-        start, end = (float(v) for v in np.asarray(value, dtype=float).ravel())
-    except (TypeError, ValueError):
-        return None
-    return (start, end) if np.isfinite([start, end]).all() else None
+#: ``(start, end)`` in seconds from a ``[start, end]`` attribute (an array, a list or its JSON), else ``None``. The
+#: single-shot page reads a file's ``analysis_window`` the same way (``loader.stored_window``).
+window = loader.as_window
 
 
 def _window_text(value):
     """A window attribute as ``"1.0734–1.4000 s"``, or as it is stored when it is not a ``[start, end]``."""
     found = window(value)
-    return f"{found[0]:.4f}–{found[1]:.4f} s" if found else _text(value)
+    return dead_pixels.seconds(found) if found else _text(value)
 
 
 def _grid(ds, name):
@@ -262,15 +252,7 @@ def window_line(mask):
 
     ``None`` when the file records none of the three: a file made before the puff was looked for.
     """
-    parts = []
-    if mask.analysis_window is not None:
-        parts.append(f"analysis window {mask.analysis_window}")
-    if mask.discharge_window is not None:
-        parts.append(f"discharge window {mask.discharge_window}")
-    if mask.puff_rule is not None:
-        parts.append(f"puff rule: {mask.puff_rule}")
-    line = " · ".join(parts)
-    return line[:1].upper() + line[1:] if line else None
+    return dead_pixels.window_line(mask.analysis_window, mask.discharge_window, mask.puff_rule)
 
 
 def made_line(mask):

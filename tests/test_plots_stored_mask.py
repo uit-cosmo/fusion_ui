@@ -693,6 +693,51 @@ def test_a_file_without_a_window_draws_the_mask_and_no_window_line(tree):
 # ---------------------------------------------------------------------------
 
 
+def window_captions(app):
+    return [c for c in captions(app) if c.startswith("Window ")]
+
+
+def test_the_windows_caption_gives_the_analysis_window_a_cropped_file_stores(tree):
+    """A preprocessed file is cut to its analysis window: that is the window of its data, so that is what the page
+    says. With no discharge-DB entry to set beside it, it says no more."""
+    app = open_view(tree(preprocessed(ESTIMATED_SHOT)))
+    assert window_captions(app) == ["Window 1.0734–1.4000 s — the analysis window this file is cropped to."]
+
+
+def test_the_windows_caption_sets_the_discharge_dbs_window_beside_it(tree, monkeypatch, tmp_path):
+    import json
+
+    from tests import puff_fixtures as pf
+
+    descriptor = tmp_path / "plasma_discharges.json"
+    descriptor.write_text(json.dumps([pf.discharge_entry(ESTIMATED_SHOT, (0.95, 1.4))]))
+    monkeypatch.setenv("FUSION_DISCHARGE_DB", str(descriptor))
+    app = open_view(tree(preprocessed(ESTIMATED_SHOT)))
+    assert window_captions(app) == [
+        "Window 1.0734–1.4000 s — the analysis window this file is cropped to"
+        " (the discharge DB's window is 0.9500–1.4000 s)."
+    ]
+
+
+#: What the page says of a file that gives it no analysis window to quote, on a record the 0.2 s default makes sense of.
+DEFAULT_CAPTION = "Window 0.9000–1.1000 s — no discharge-DB entry yet, showing a centred 0.2 s default."
+
+
+def over_a_default_window(ds):
+    return ds.assign_coords(time=np.linspace(0.9, 1.1, N_TIME))
+
+
+def test_the_windows_caption_is_the_old_one_for_a_file_that_stores_no_analysis_window(tree):
+    ds = over_a_default_window(preprocessed(ESTIMATED_SHOT, drop=("analysis_window",)))
+    assert window_captions(open_view(tree(ds))) == [DEFAULT_CAPTION]
+
+
+def test_an_analysis_window_that_is_not_a_window_is_not_quoted(tree):
+    ds = over_a_default_window(preprocessed(ESTIMATED_SHOT))
+    ds.attrs["analysis_window"] = "the puff"
+    assert window_captions(open_view(tree(ds))) == [DEFAULT_CAPTION]
+
+
 def test_the_view_reads_the_one_file_the_user_rewords(tree, monkeypatch, tmp_path):
     """Edit the plain summary's file and the stored-mask view follows on its next rerun: it keeps no copy."""
     reworded = tmp_path / "reworded.md"
