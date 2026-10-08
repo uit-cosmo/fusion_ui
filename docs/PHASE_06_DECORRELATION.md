@@ -36,10 +36,13 @@ passed, with two requests: a plain account of the dead-pixel logic, and the
 time before the gas puff cut out at preprocessing. J6d merged (d622f1d): the
 stored-mask view and the plain summary. J8a merged (c3ac9b1): each track's
 trajectory in R and Z on the lag strip. J6 merged into fusion_scripts
-(9e14f01): the puff window and `density_scan/preprocess.py`. J6e and J11 are
-under way. fusion_scripts is deployed at 9e14f01, and the production
-preprocessing runs in tmux `prep06` (from 14:03), followed by `rescan` and
-batch 2. J8 is under way with the user.
+(9e14f01) and deployed: the production preprocessing runs in tmux `prep06`,
+followed by `rescan` and batch 2. J6e (003ecf2), J11 (77b73db) and J5c
+(ed59e75) merged and deployed at 5b5926e (restart 2026-10-08 16:26): the
+dead-pixel view on the puff window, the Documentation page, and the seed's
+`lx_f`, `ly_f`, `theta_f` pruned (none on the server, which never imported the
+seed; 11,640 rows from the laptop's ledger). Still to come: the forced
+`dead_pixels` recompute after batch 2, J8's edge pixels, and J9.
 
 ## Decisions (the user, 2026-10-07)
 
