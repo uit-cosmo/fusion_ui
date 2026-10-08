@@ -1315,6 +1315,23 @@ into `/hdd1/fusion_data`, which the live service reads.
   The 1160616 files are not touched. If one of their discharge windows starts
   before the puff, that goes to the user.
 
+**The user's answers to J6's first report (2026-10-08):**
+
+- Of 111 raw shots, 79 have a dark start and a clear rise, and 35 of those get
+  a cut (median 8%, at most 31%). None of the nine 1160616 windows starts
+  before the puff (they start 16–36 ms after it). Over the puff window, the
+  run-day masks equal the ones G1 approved, on every day.
+- **Short puffs: add a fallback.** Three shots have a short puff in a mostly
+  dark window (1140827029, in batch 2, and 1150618031 and 037), so the
+  window's median is the dark level. Only where the median fails the
+  clear-rise test, the window's 90th percentile is the level.
+- **Records that start with the light on keep their discharge window.** These
+  are the 28 records of 1110201 and 1120217, plus 1140228019 and 1160706029.
+  Their first 5–30 ms are a rising ramp, not dark.
+- **For J6e:** `puff_window` needs the record from its start. fusion_ui's
+  loader slices to `t_start..t_end`, so a window that starts after the puff
+  would read "already on".
+
 **Accept when:**
 
 - on one shot, the frames are identical to `preprocess_dataset`'s with the same
