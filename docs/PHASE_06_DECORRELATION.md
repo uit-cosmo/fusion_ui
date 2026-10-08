@@ -669,7 +669,8 @@ Built, tested and pushed to main on 2026-10-07, and deployed the same day (JD).
 | J8 | Physics validation | **user** | — | J7 | — |
 | J8a | The trajectory in R and Z on the lag strip | **Sonnet 5.5** | fusion_ui | J8's request | J6, J6d |
 | J11 | The Documentation page: every quantity, how it is computed, what depends on what | **Opus 5.5** | fusion_ui | J8's labels; J6's code merged | J6's production run, J6e |
-| J9 | Docs | **Haiku 4.5** | both | J8, J11 | — |
+| J5c | Prune the seed's mislabelled ellipse (`lx_f`, `ly_f`, `theta_f`) | **Sonnet 5.5** | fusion_ui | J11 | — |
+| J9 | Docs | **Haiku 4.5** | both | J8, J11, J5c | — |
 
 **Why these models.** `PLAN.md` splits work by how expensive a wrong decision
 is to undo, not by how hard it is, and so does this table.
@@ -1662,6 +1663,38 @@ distance, `neighbour_step`, is set.
   - a test ties every label to an entry on the page and back;
   - the orchestrator has read the whole text against the code before merging.
 
+**J11's findings, and the user's answers (2026-10-08).** Checking the text
+against the code turned up two things in older numbers. The orchestrator
+confirmed both in the code.
+
+- **The seed's `lx_f`, `ly_f`, `theta_f` are not the Gaussian fit.** Since
+  fusion_scripts 1940daf (2026-03-03), `density_scan/utils.py: analysis` stores
+  the ellipse fitted to the contour at 0.3 of the maximum under these names,
+  and its `theta_f` is in an older angle convention. At 1160616027 (6, 6) the
+  seed reads 4.37/10.34 mm against 3.33/5.80 mm for the Gaussian fit. The
+  user chose to **prune the seed's three** (J5c).
+- **`imaging_methods.estimate_fwhm_sizes` is off by one.** It interpolates over
+  `values[:idx]`, leaving out the last point of the falling stretch. A
+  half-maximum between the last two points is held at the earlier one, and a
+  side that falls one pixel then rises gives 0, not NaN. This affects `lr`
+  and `lz` in every source, the paper's included. The user chose to **fix it
+  later, as its own job** (L12).
+
+### J5c — Prune the seed's mislabelled ellipse · Sonnet 5.5 · fusion_ui
+
+After J11 is merged.
+
+- **Through the store.** A function in `core/store.py` that deletes the scalars
+  of given names under one plot key, counting before it deletes, as
+  `plan_prune`/`prune` do. Then `fusion-ui prune --plot density_scan_import
+  --scalar lx_f --scalar ly_f --scalar theta_f [--yes]`, a dry run without
+  `--yes`. Runs and blobs stay.
+- **For good.** `fusion-ui import-results` no longer writes the three names,
+  with a comment saying why. `scalar_labels.SHARED` drops them. The
+  Documentation page's text says they were removed and why.
+- **Then the orchestrator** runs the dry run on the server, and the deletion
+  when the counts are as expected.
+
 ### J9 — Docs · Haiku 4.5 · both repos
 
 - `README.md`: the Fields page, the Documentation page, the new `precompute`
@@ -1791,6 +1824,7 @@ is reached.
 | L6 | **One cache.** `figures.py`/`cmod_scan` read fusion_ui's blobs instead of their own cache | Opus 5.5 |
 | L10 | **Record the discharge window on each run.** The products are computed over the discharge DB's `t_start..t_end`, which no run records: if the window is edited after a bank is computed, the products on it, or a bank computed afterwards, disagree silently, and `stale_runs` cannot see it (J3) | Opus 5.5 |
 | L11 | **The app's entry script outside the package.** `streamlit run fusion_ui/app.py` puts `fusion_ui/` on `sys.path`, where every module there shadows a top-level one of the same name. J3b covers `config`, the only collision found. Moving `app.py` and `pages/` into a directory of their own, or to `st.navigation`, removes the cause, and changes the systemd unit | Sonnet 5.5, user (systemd) |
+| L12 | **The FWHM off by one** (J11). Fix `imaging_methods.estimate_fwhm_sizes` to interpolate over the whole falling stretch (`values[:idx + 1]`), with tests. Report which pixels' `lr` and `lz` change, and by how much, on the 17 shots, then ask the user before `blob_parameters` is recomputed (`--force`), since the paper's numbers change too | Sonnet 5.5; the user decides |
 | L9 | **The CA TDE** (velocity_estimation's `TDEMethod.CA`, the paper's `_ca` group) as its own product, once the user chooses its event selector: fc5e59a's in-package `cond_av`, which the paper used, or PlasmaPy's `ConditionalEvents` in b3b6945. On 1160616027 they differ by a median of 0.2–0.7%, at most 12% in v_R, and about 2% in events (2026-10-07). The paper's nine files are kept in `~/Data/reference/tde_ca_fc5e59a_laptop/` | Opus 5.5 |
 
 ## Open questions for the user
