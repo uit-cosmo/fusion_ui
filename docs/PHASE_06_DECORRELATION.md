@@ -30,9 +30,9 @@ page tested on the real specs. J5 merged (6ee5e8b): the multi-shot jump to the
 Fields page, and labels for the 32 names. J5b merged (4fe2104): three small
 fixes. G3 approved; J7 under way: both repositories deployed, the ledger at v4,
 `velocity_field` pruned, and batch 1 (1160616) computed in 41 min and bit-equal
-to J0's snapshot on all nine shots. J3b merged (6cf7b9b): the deployed pages
-could not import the specs under Streamlit; its deploy waits for the user. G1
-is still open, and J6, J6d and what follows wait for it.
+to J0's snapshot on all nine shots. J3b merged (6cf7b9b) and deployed: the
+deployed pages could not import the specs under Streamlit, and now open. J8 is
+the user's. G1 is still open, and J6, J6d and batch 2 wait for it.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -1384,7 +1384,7 @@ websocket check must return `101`).
 - **The regression passes exactly.** On all nine shots, 19/19 velocity and
   13/13 blob variables are bit-equal, and so are 68/68 bank references.
 - **J3b** was found here: under Streamlit the deployed pages could not import
-  the specs. It is merged, and its deploy waits for the user.
+  the specs. It was deployed at 17c6e1b, and the user saw the pages open.
 - **For J8**, the page is `https://fp1-hpz4fusion.int.uit.no/fields`, which
   has its own run-day and shot pickers.
 
@@ -1393,6 +1393,9 @@ websocket check must return `101`).
 - **1160616027 fields.** The 2DCA-centroid field matches the deck's field grid,
   and pixel (5, 7) reads about 471 m/s by the centroid against 166 m/s by the
   maximum.
+  - The store, bit-equal to J0's snapshot, reads 603 m/s there by the
+    centroid, 166 by the maximum, 475 by the 2DCC and 467 by the three-point
+    TDE (J7). Where the 471 came from needs checking.
 - **Pixel (5, 4) lag strip.** It looks like `fig_lags`.
 - **A few edge pixels.** These are where the estimators are known to misbehave.
 
