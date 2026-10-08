@@ -55,7 +55,7 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-# The hand-written run-day summaries the landing page reads.
+# The hand-written prose the pages read: the run-day summaries, and the dead-pixel summary in plain words.
 fusion_ui = ["data/*.md"]
 
 [tool.pytest.ini_options]
