@@ -31,8 +31,11 @@ Fields page, and labels for the 32 names. J5b merged (4fe2104): three small
 fixes. G3 approved; J7 under way: both repositories deployed, the ledger at v4,
 `velocity_field` pruned, and batch 1 (1160616) computed in 41 min and bit-equal
 to J0's snapshot on all nine shots. J3b merged (6cf7b9b) and deployed: the
-deployed pages could not import the specs under Streamlit, and now open. J8 is
-the user's. G1 is still open, and J6, J6d and batch 2 wait for it.
+deployed pages could not import the specs under Streamlit, and now open. G1
+passed, with two requests: a plain account of the dead-pixel logic, and the
+time before the gas puff cut out at preprocessing. J6 and J6d are under way;
+J6e, the production preprocessing and batch 2 follow. J8 is under way with the
+user.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -110,8 +113,10 @@ not say otherwise):
   Its view cuts are `MIN_LAGS = 8`, `MIN_EVENTS = 200` and interior pixels only.
   The 2DCA track it compares against is the centroid (`TRACK = "_com"`): the
   maximum sticks to the reference pixel where a pulse passes near its centre
-  (1160616027 pixel (5, 7): 166 m/s by the maximum against 471 m/s by the
-  centroid).
+  (1160616027 pixel (5, 7): 166 m/s by the maximum against 603 m/s by the
+  centroid, in J0's snapshot and the store alike. The 471 m/s in a comment of
+  `figures.py` dates from 2026-09-25, before later changes to the fields
+  code).
 
 **Shot Explorer today**:
 
@@ -652,7 +657,8 @@ Built, tested and pushed to main on 2026-10-07, and deployed the same day (JD).
 | J4 | Fields page and builders | **Sonnet 5.5** | fusion_ui | J2a; integrate after J3 | J1, J2b, J3 |
 | J5 | Multi-shot jump and labels | **Sonnet 5.5** | fusion_ui | J4 | — |
 | J6 | Preprocess with estimated masks: the 94 raw shots, and the eight 1140827 files again | **Sonnet 5.5** | fusion_scripts + server | G1 | J1–J5 |
-| J6d | Stored-mask view for preprocessed files | **Sonnet 5.5** | fusion_ui | J6's file format | J6 |
+| J6d | Stored-mask view for preprocessed files, and the logic in plain words | **Sonnet 5.5** | fusion_ui | J6's file format | J6 |
+| J6e | The dead-pixel view on the puff window | **Sonnet 5.5** | fusion_ui | J6's code merged | — |
 | J10 | Remove the old `velocity_field`; `fusion-ui prune` | **Sonnet 5.5** | fusion_ui | J4, whose quiver starts from its drawing | J5, J6 |
 | G3 | Approve push and deploy; restart the service | **user** | — | J2b, J3, J4, J10, G2 | — |
 | J7 | Deploy, first batch, regression on the server | orchestrator | server | G3; 1140827 after J6 | — |
@@ -1218,7 +1224,47 @@ If a pixel is wrong, say which one. J6 then adds an override file
 (`density_scan/dead_pixel_overrides.json`, per run day, recorded in each file's
 attrs) rather than retuning the thresholds.
 
+**Passed 2026-10-08** ("looks good for now"), with two requests:
+
+- **The logic in plain words.** The dead-pixel view had it only in a collapsed,
+  technical expander. A short plain summary is now always shown, with the
+  technical text kept below it (J6d).
+- **The time before the gas puff.** Some live pixels' PDFs have a bump at low
+  values. Preprocessing crops to the discharge DB's `t_start..t_end`, but on
+  many shots that window is the whole record and starts before the puff:
+  - 1120814026: the window is 0.95–1.40 s, and the puff arrives at about
+    1.07 s, so 27% of it is dark baseline;
+  - 1140827019: 0.60–1.30 s, puff at about 0.65 s (7%), with a second rise at
+    about 1.02 s;
+  - 1160616027: the window starts at 1.15 s, after the puff has risen.
+
+  The user chose to detect the puff at preprocessing (J6), estimate the mask
+  over the same window, store it in the file, and draw it in the dead-pixel
+  views (J6d, J6e).
+
 ### J6 — Preprocess with estimated masks · Sonnet 5.5 · fusion_scripts + server
+
+**The split (2026-10-08).** The agent delivers the code and measures it on
+the server, writing only to a scratch directory. The orchestrator reviews and
+merges it. Then, after the user approves the push and pull, it runs the
+production preprocessing itself (Order, below). Unreviewed code never writes
+into `/hdd1/fusion_data`, which the live service reads.
+
+**The puff window** (G1). A function in `density_scan`, used by both
+`dead_pixels.estimate_shot` and `preprocess.py`:
+
+- The signal is the array mean of the raw frames, smoothed by a 1 ms running
+  mean.
+- The baseline is the dark level at the start of the record, and the level is
+  the signal's median over the discharge window. The threshold is halfway
+  between them. Do not assume the polarity: on C-Mod more light reads higher
+  (dark about −1.11 V).
+- The puff starts where the signal crosses the threshold and stays above it
+  for at least 5 ms, and ends at the last such point. The analysis window is
+  the overlap of that span with the discharge window.
+- A record that starts with the puff already on, or with no clear rise, keeps
+  the discharge window, and the file and the report say so. A dip below the
+  threshold inside the window, as between two puffs, is reported, not cut.
 
 **Deliver** `density_scan/preprocess.py`:
 `python -m density_scan.preprocess [--shot N]... [--run-day D]... [--workers 4]
@@ -1238,10 +1284,24 @@ attrs) rather than retuning the thresholds.
   - `dead_evidence` and `dead_psd_ratio`;
   - attrs `dead_mask_source` ("estimated, run day D, N shots" or "hand-made,
     1160616"), `dead_thresholds`, `preprocess_radius`, `fusion_scripts_commit`
-    and `created`. Keep `shot_number`, which the API's `dead_mask` reads.
+    and `created`. Keep `shot_number`, which the API's `dead_mask` reads;
+  - attrs `analysis_window` and `discharge_window` (each `[start, end]` in
+    seconds) and `puff_rule` (the rule in words, or why the discharge window
+    was kept).
+- **Cropping:** run `preprocess_dataset` as it is, then cut its result to the
+  analysis window. Its running normalisation then sees the same neighbours as
+  before, and the kept frames are bit-equal to its own.
 - **Writing:** write to `<file>.tmp` and rename into place. Never overwrite
   without `--force`, and leave files group-readable.
-- **Order:**
+- **On the server, read only, from a scratch clone** (`~/phase06_j6`, the
+  branch brought over as a git bundle):
+  - the puff window of all 111 raw shots, as a table: record, discharge window,
+    puff start and end, analysis window, dark fraction cut, and notes;
+  - per run day, the consolidated mask over the puff window against the one
+    over the discharge window, which G1 approved;
+  - one shot preprocessed into the scratch directory, timed, with its peak RSS
+    and a proposed worker count.
+- **Order of the production run** (the orchestrator, after review):
   1. The eight 1140827 files first (`--run-day 1140827 --force`), since they
      were made with the wrong mask. **Move the old files to
      `/hdd1/fusion_data/apd/superseded/`; never delete them.** The user removes
@@ -1249,18 +1309,20 @@ attrs) rather than retuning the thresholds.
   2. Then the 94 raw-only shots.
   3. Then `~/fusion_ui/.venv/bin/fusion-ui rescan`.
 
-  The 1160616 files are not touched.
-- Measure one shot first (time, peak RSS) and choose the worker count from it.
+  The 1160616 files are not touched. If one of their discharge windows starts
+  before the puff, that goes to the user.
 
 **Accept when:**
 
 - on one shot, the frames are identical to `preprocess_dataset`'s with the same
-  mask;
+  mask, over the analysis window;
 - on three files, `dead` equals a `consolidate` of fresh `estimate_shot` calls,
   recomputed by the orchestrator itself;
-- `rescan` reports 111 preprocessed files;
-- the 1160616 files are unchanged (same mtime);
-- the replaced 1140827 files are in `superseded/`.
+- the window table covers all 111 shots, and the shots it could not judge are
+  named;
+- after the production run, `rescan` reports 111 preprocessed files, the 1160616
+  files are unchanged (same mtime), and the replaced 1140827 files are in
+  `superseded/`.
 
 ### J6d — Stored-mask view · Sonnet 5.5 · fusion_ui
 
@@ -1276,8 +1338,21 @@ A live spec `stored_mask`, "Dead-pixel mask stored at preprocessing", with
   it gets a warning that the file predates stored masks and must be
   preprocessed again.
 
+- **The logic in plain words** (G1). A short plain summary of how a pixel is
+  judged dead, always shown on this view and on the dead-pixel view, with the
+  technical text kept in the expander below it. One text, written once.
+- **The window.** When the file has `analysis_window`, a line gives it beside
+  the discharge window and `puff_rule`.
+
 **Accept when** an `AppTest` passes on a fixture preprocessed file both with and
 without the variables.
+
+### J6e — The dead-pixel view on the puff window · Sonnet 5.5 · fusion_ui
+
+After J6's code is merged. `dead_pixels` estimates over the puff window, through
+J6's function, and draws the array-mean signal with the discharge window and the
+analysis window marked, so the cut can be checked by eye. Then the orchestrator
+runs `precompute dead_pixels --force` on the server.
 
 ### J10 — Remove the old `velocity_field` · Sonnet 5.5 · fusion_ui
 
@@ -1395,9 +1470,20 @@ websocket check must return `101`).
   maximum.
   - The store, bit-equal to J0's snapshot, reads 603 m/s there by the
     centroid, 166 by the maximum, 475 by the 2DCC and 467 by the three-point
-    TDE (J7). Where the 471 came from needs checking.
+    TDE (J7). The 471 is a stale comment in `figures.py` (Facts): the laptop's
+    own cache, written 2026-10-05, reads 603 too.
 - **Pixel (5, 4) lag strip.** It looks like `fig_lags`.
 - **A few edge pixels.** These are where the estimators are known to misbehave.
+
+**The user's answers, 2026-10-08.**
+
+- Settled: the 2DCC arrows stay coloured by events; `nlags_*` keeps counting
+  interpolated lags, as the paper does; a real click on a multi-shot point
+  opens the Fields page as it should.
+- Open: the lag strip against
+  `decorrelation/manuscript/figures/lags_1160616027_x5y4.pdf`, the edge pixels
+  ((8, 6) reads −103 m/s by the centroid, (8, 3) 46), and the labels, on
+  which the user will send feedback.
 
 ### J9 — Docs · Haiku 4.5 · both repos
 
@@ -1409,7 +1495,9 @@ websocket check must return `101`).
   differently.
 - In fusion_scripts: `decorrelation/README.md` (the `pipeline.py` API, with
   `cmod_scan` as a client) and notes on `density_scan/preprocess.py` and
-  `density_scan/dead_pixels.py`.
+  `density_scan/dead_pixels.py`. Correct the comment above `TRACK` in
+  `decorrelation/apd_check/figures.py`: pixel (5, 7) reads 603 m/s by the
+  centroid, not 471.
 
 The orchestrator reviews the result before merging.
 
