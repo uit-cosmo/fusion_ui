@@ -1707,6 +1707,32 @@ confirmed both in the code.
   and `lz` in every source, the paper's included. The user chose to **fix it
   later, as its own job** (L12).
 
+**J11 landed 2026-10-08 (77b73db, 971 tests with the slow ones).**
+
+- `pages/6_documentation.py` draws; `fusion_ui/documentation.py` builds,
+  without Streamlit, the generated tables, the diagram as DOT text and the
+  markdown parser. The prose is `fusion_ui/data/documentation.md`, read at
+  every rerun.
+- **All 50 scalar names**, not only the 32 labelled: the seed's and the older
+  specs' too. A test runs every registered spec's `scalars` and fails on a
+  name the page does not describe. The page also lists any name in the ledger
+  that it does not describe.
+- **Numbers come from the code**, as placeholders for defaults and constants.
+  An unknown placeholder fails a test and is flagged on the page.
+- **The diagram** renders in the browser from DOT text. The venv has no Python
+  `graphviz`, and none is needed.
+- **The orchestrator's reading.** I read the whole text, and checked these
+  claims against the code:
+  - the Gaussian fit (amplitude 1, centred on the reference, lx < ly, θ in
+    (0, π), 1/e sizes);
+  - `cond_repr`, and how the cross-correlation is normalised;
+  - the two-point TDE's 0 at zero delay, and the 100-sample search;
+  - the seed's 0.3 contour, and the FWHM off-by-one.
+
+  All held.
+- **Not checked on the server:** "x grows with R and y with Z" was checked on
+  the laptop's 2011 and 2016 files only.
+
 ### J5c — Prune the seed's mislabelled ellipse · Sonnet 5.5 · fusion_ui
 
 After J11 is merged.
