@@ -33,8 +33,9 @@ fixes. G3 approved; J7 under way: both repositories deployed, the ledger at v4,
 to J0's snapshot on all nine shots. J3b merged (6cf7b9b) and deployed: the
 deployed pages could not import the specs under Streamlit, and now open. G1
 passed, with two requests: a plain account of the dead-pixel logic, and the
-time before the gas puff cut out at preprocessing. J6 and J6d are under way;
-J6e, the production preprocessing and batch 2 follow. J8 is under way with the
+time before the gas puff cut out at preprocessing. J6d merged (d622f1d): the
+stored-mask view and the plain summary. J6 and J8a are under way; J6e, J11,
+the production preprocessing and batch 2 follow. J8 is under way with the
 user.
 
 ## Decisions (the user, 2026-10-07)
@@ -1349,12 +1350,33 @@ A live spec `stored_mask`, "Dead-pixel mask stored at preprocessing", with
 **Accept when** an `AppTest` passes on a fixture preprocessed file both with and
 without the variables.
 
+**J6d landed 2026-10-08 (d622f1d, 835 tests).**
+
+- **`stored_mask`**, a live spec on preprocessed files, reads the mask and its
+  evidence off the file. Its classes are dead, live by spectrum, live through
+  a neighbour and no data, in the dead-pixel view's colours, plus two classes
+  where the run day's mask overrode the shot's verdict. Every variable but
+  `dead` is optional.
+- **The plain summary** is `fusion_ui/data/dead_pixels_in_plain_words.md`, read
+  at every rerun, so a reworded file shows without a restart. Both views show
+  it through `dead_pixels.explain()`, above the unchanged `METHOD` expander.
+- **It accepts** `analysis_window` and `discharge_window` as an array, a list
+  or a JSON string, and `dead_evidence` as int or float.
+- **Left for J6e:** `METHOD` ends "This view shows the single shot.", which is
+  wrong on the stored view. And the single-shot page's "Window" caption gives
+  the discharge window even for a file cropped to the analysis window.
+
 ### J6e — The dead-pixel view on the puff window · Sonnet 5.5 · fusion_ui
 
 After J6's code is merged. `dead_pixels` estimates over the puff window, through
 J6's function, and draws the array-mean signal with the discharge window and the
 analysis window marked, so the cut can be checked by eye. Then the orchestrator
 runs `precompute dead_pixels --force` on the server.
+
+- `METHOD` says the analysis window where it says the discharge window, and is
+  true on both views (J6d's note).
+- The single-shot page's "Window" caption gives the analysis window when the
+  file stores one.
 
 ### J10 — Remove the old `velocity_field` · Sonnet 5.5 · fusion_ui
 
