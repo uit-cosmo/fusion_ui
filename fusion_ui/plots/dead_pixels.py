@@ -3,12 +3,18 @@
 The mask comes from ``density_scan.dead_pixels`` (fusion_scripts), the step preprocessing uses to choose which
 pixels to interpolate. This spec runs it on the raw file and draws what it looked at, laid out as the array is,
 so a mask can be checked by eye the way masks used to be made: one PDF per pixel. Raw files only -- the
-preprocessed file has its dead pixels interpolated from their neighbours, so nothing is left to judge there.
+preprocessed file has its dead pixels interpolated from their neighbours, so nothing is left to judge there. What
+that file does keep is the mask it was made with, which ``stored_mask`` draws.
+
+The two views explain the method alike: a plain summary for a physicist new to the code, always shown, and the
+technical ``METHOD`` under it in an expander. The summary is hand-written Markdown in ``fusion_ui/data/``, beside
+``run_days.md``; ``METHOD`` is below.
 
 The PDFs are histograms aligned on the digitizer's levels. A dead pixel spans a few tens of levels, and bins
 finer than a level would draw it as a comb of spikes. One bin per level draws it as the narrow Gaussian it is.
 """
 
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -31,6 +37,30 @@ LABELS = {
     2: "live, red spectrum",
 }
 VIEWS = ("PDF, standardised", "PDF, volts", "Spectrum")
+
+# ---------------------------------------------------------------------------------------------------------------
+# The words. Both dead-pixel views show a plain summary, always, and METHOD under it in a collapsed expander: this
+# view, on the raw file, and ``stored_mask``, on the preprocessed one. Both go through ``explain`` below.
+#
+# The plain summary is hand-written Markdown in fusion_ui/data/dead_pixels_in_plain_words.md, beside run_days.md, so
+# that rewording it is an edit to that file and nothing else. It is read at every rerun: an edit shows on the next
+# one, with no restart. METHOD is the technical text, Markdown with the two thresholds in force filled in as
+# {red:g} and {gain:g}.
+# ---------------------------------------------------------------------------------------------------------------
+
+PLAIN_SUMMARY_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "dead_pixels_in_plain_words.md"
+)
+
+
+def plain_summary():
+    """The plain summary, as ``PLAIN_SUMMARY_PATH`` holds it now."""
+    with open(PLAIN_SUMMARY_PATH, encoding="utf-8") as f:
+        return f.read().strip()
+
+
+#: The title of the expander that holds METHOD.
+METHOD_TITLE = "How dead pixels are found"
 
 METHOD = """
 A pixel is **live when it sees the plasma**, and the evidence is in its fluctuations, not in its PDF alone. A dim
@@ -120,7 +150,8 @@ def compute(ds, params):
     )
 
 
-def _cells(mask):
+def cells(mask):
+    """The pixels of a ``(y, x)`` bool mask as ``"(y, x), (y, x)"``, or ``"none"``."""
     return ", ".join(f"({y}, {x})" for y, x in np.argwhere(mask)) or "none"
 
 
@@ -128,8 +159,8 @@ def summary(result):
     ev = result.evidence.values
     dead = result.dead.values
     return (
-        f"{int(dead.sum())} of {dead.size} pixels dead: {_cells(dead)} · "
-        f"{int((ev == 1).sum())} live only through a neighbour: {_cells(ev == 1)}"
+        f"{int(dead.sum())} of {dead.size} pixels dead: {cells(dead)} · "
+        f"{int((ev == 1).sum())} live only through a neighbour: {cells(ev == 1)}"
     )
 
 
@@ -254,8 +285,8 @@ def figure(result, view=VIEWS[0]):
     return fig
 
 
-def _hand_made(target):
-    """The hand-made 1160616 mask, for that run day only."""
+def hand_made(target):
+    """The hand-made 1160616 mask as a ``(y, x)`` bool array, for that run day only; ``None`` for any other."""
     if target.shot // 1000 != 1160616:
         return None
     fusion_scripts.import_config()  # as in compute
@@ -264,21 +295,37 @@ def _hand_made(target):
     return get_dead_pixel_mask().values
 
 
+def explain(red=DeadPixelParams.red, gain=DeadPixelParams.gain):
+    """The plain summary, always shown, and the technical method in an expander under it.
+
+    Both dead-pixel views end their opening lines with this, so the two read alike and the words are in one place.
+    ``red`` and ``gain`` are the thresholds METHOD quotes: the form's on a raw file, the defaults where a view has
+    no form for them.
+    """
+    import streamlit as st
+
+    try:
+        st.markdown(plain_summary())
+    except OSError as error:  # a broken deployment must not take the technical text down with it
+        st.warning(f"The plain-language summary could not be read: {error}", icon="⚠️")
+    with st.expander(METHOD_TITLE):
+        st.markdown(METHOD.format(red=red, gain=gain))
+
+
 def render(result, params, target):
-    """Summary, the method, a view toggle and the grid; draws into Streamlit."""
+    """Summary, the plain words and the method, a view toggle and the grid; draws into Streamlit."""
     import streamlit as st
 
     st.caption(summary(result))
-    hand_made = _hand_made(target)
-    if hand_made is not None and hand_made.shape == result.dead.shape:
-        differ = hand_made != result.dead.values
+    by_hand = hand_made(target)
+    if by_hand is not None and by_hand.shape == result.dead.shape:
+        differ = by_hand != result.dead.values
         st.caption(
             "Agrees with the hand-made 1160616 mask."
             if not differ.any()
-            else f"Differs from the hand-made 1160616 mask at {_cells(differ)}."
+            else f"Differs from the hand-made 1160616 mask at {cells(differ)}."
         )
-    with st.expander("How dead pixels are found"):
-        st.markdown(METHOD.format(red=params.red, gain=params.gain))
+    explain(params.red, params.gain)
     view = st.radio("Show", VIEWS, horizontal=True, key=f"dead_pixels.view.{target.key}")
     st.plotly_chart(figure(result, view), use_container_width=True)
     return None
