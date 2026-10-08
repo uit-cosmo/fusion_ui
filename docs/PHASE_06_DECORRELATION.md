@@ -29,8 +29,10 @@ merged (02bb826): the paper's `reliable()` as a Fields-page checkbox, and the
 page tested on the real specs. J5 merged (6ee5e8b): the multi-shot jump to the
 Fields page, and labels for the 32 names. J5b merged (4fe2104): three small
 fixes. G3 approved; J7 under way: both repositories deployed, the ledger at v4,
-`velocity_field` pruned (134 runs, 41,400 scalar rows, 115 blobs), and batch 1
-(1160616) running. G1 is still open, and J6, J6d and what follows wait for it.
+`velocity_field` pruned, and batch 1 (1160616) computed in 41 min and bit-equal
+to J0's snapshot on all nine shots. J3b merged (6cf7b9b): the deployed pages
+could not import the specs under Streamlit; its deploy waits for the user. G1
+is still open, and J6, J6d and what follows wait for it.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -530,8 +532,8 @@ cd ~/fusion_ui && nice -n 10 .venv/bin/fusion-ui precompute method_fields blob_p
   target, so one worker handles a shot end to end and computes its bank once.
 - `--workers N` runs a process pool over the targets, largest file first, so
   the last shots do not start alone.
-- 9 shots take 2 waves on 7 workers, about 1.5 h. All 17 take about 3 h, and
-  all 111 later about 13 h.
+- 9 shots took 41 min in 2 waves on 7 workers (J7, 2026-10-08). At that pace
+  all 17 take about 1.5 h, and all 111 about 7 h.
 
 | what changed | run | cost |
 |---|---|---|
@@ -1015,6 +1017,33 @@ merging.
     `vr_2dcc` at 2.2e-11 relative, which is the machines' floating point. J7's
     exact check runs on the server.
 
+**J3b, a hotfix found in J7, landed 2026-10-08 (6cf7b9b, 780 tests).**
+
+- **The failure.** Deployed, the single-shot, multi-shot and Fields pages
+  failed with `module 'config' has no attribute 'W7X_PRESENTATION_DIR'`.
+  - `streamlit run fusion_ui/app.py` puts the package directory first on
+    `sys.path`, at startup and again around every script run.
+  - There `fusion_ui/config.py` answers to the bare name `config`, which
+    fusion_scripts reads its settings by, before fusion_scripts' editable
+    finder can map it.
+  - The CLI, pytest and `AppTest` on a page file never put that directory on
+    the path, so batch 1 and the suite were unaffected.
+- **The fix.** `core/fusion_scripts.import_config()` imports fusion_scripts'
+  module once with that directory left out, and every later bare
+  `import config` gets it from `sys.modules`. It is called before fusion_ui
+  reaches fusion_scripts code:
+  - the API, in `_pipeline.py`;
+  - `plotting_scripts`, in `geometry.py`, whose R−R_sep labels would otherwise
+    have fallen back to R, Z without a word;
+  - `density_scan`, in `dead_pixels.py`;
+  - `seed.py`.
+- **Tests.** `tests/test_fusion_scripts.py` runs three fresh interpreters, one
+  of them the real app opened on the three pages. All three fail without the
+  fix.
+- **Limit.** The helper leaves out only its own checkout's package directory.
+  So `streamlit run` from a checkout other than the installed one raises a
+  clear `ImportError`. L11 would remove the cause.
+
 ### J4 — Fields page and builders · Sonnet 5.5 · fusion_ui
 
 Build what [The Fields page](#the-fields-page) describes. The schema is frozen,
@@ -1343,6 +1372,22 @@ websocket check must return `101`).
 9. Report per shot: status, seconds, failures with their errors, disk used, and
    the page URL for J8.
 
+**Progress, 2026-10-08.** Steps 1–7 are done, and step 8 waits for J6.
+
+- **Deployed:** fusion_scripts 7e0d38f and fusion_ui 679376f. The ledger is at
+  v4. The prune deleted 134 `velocity_field` runs, 41,400 scalar rows, 115
+  blobs and 2 parameter sets, as the dry run said.
+- **Batch 1** took 41 min on 7 workers, and all 9 shots are ok:
+  - the bank took 5–23 min a shot (11.9 MB), `method_fields` 2–5 min (0.3 MB,
+    1360 scalars), and `blob_parameters` under 1.5 min (816 scalars);
+  - the hashes are J3's defaults, and the cache grew by 106 MB to 213 MB.
+- **The regression passes exactly.** On all nine shots, 19/19 velocity and
+  13/13 blob variables are bit-equal, and so are 68/68 bank references.
+- **J3b** was found here: under Streamlit the deployed pages could not import
+  the specs. It is merged, and its deploy waits for the user.
+- **For J8**, the page is `https://fp1-hpz4fusion.int.uit.no/fields`, which
+  has its own run-day and shot pickers.
+
 ### J8 — the user checks the physics
 
 - **1160616027 fields.** The 2DCA-centroid field matches the deck's field grid,
@@ -1477,6 +1522,7 @@ is reached.
 | L8 | **W7-X and phantom data** through the same products. The API is kept machine-agnostic for this (invariant 9) | Opus 5.5 for the first, Sonnet 5.5 after |
 | L6 | **One cache.** `figures.py`/`cmod_scan` read fusion_ui's blobs instead of their own cache | Opus 5.5 |
 | L10 | **Record the discharge window on each run.** The products are computed over the discharge DB's `t_start..t_end`, which no run records: if the window is edited after a bank is computed, the products on it, or a bank computed afterwards, disagree silently, and `stale_runs` cannot see it (J3) | Opus 5.5 |
+| L11 | **The app's entry script outside the package.** `streamlit run fusion_ui/app.py` puts `fusion_ui/` on `sys.path`, where every module there shadows a top-level one of the same name. J3b covers `config`, the only collision found. Moving `app.py` and `pages/` into a directory of their own, or to `st.navigation`, removes the cause, and changes the systemd unit | Sonnet 5.5, user (systemd) |
 | L9 | **The CA TDE** (velocity_estimation's `TDEMethod.CA`, the paper's `_ca` group) as its own product, once the user chooses its event selector: fc5e59a's in-package `cond_av`, which the paper used, or PlasmaPy's `ConditionalEvents` in b3b6945. On 1160616027 they differ by a median of 0.2–0.7%, at most 12% in v_R, and about 2% in events (2026-10-07). The paper's nine files are kept in `~/Data/reference/tde_ca_fc5e59a_laptop/` | Opus 5.5 |
 
 ## Open questions for the user
