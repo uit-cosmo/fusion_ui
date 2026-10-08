@@ -38,12 +38,13 @@ stored-mask view and the plain summary. J8a merged (c3ac9b1): each track's
 trajectory in R and Z on the lag strip. J6 merged into fusion_scripts
 (9e14f01) and deployed. Its production run finished at 18:20: all 115 APD
 shots have a preprocessed file, and the index shows them. Batch 2 (1140827)
-runs in tmux `j7batch2`. J6e (003ecf2), J11 (77b73db) and J5c
+is done, with all eight shots ok in 42 min. J6e (003ecf2), J11 (77b73db) and J5c
 (ed59e75) merged and deployed at 5b5926e (restart 2026-10-08 16:26): the
 dead-pixel view on the puff window, the Documentation page, and the seed's
 `lx_f`, `ly_f`, `theta_f` pruned (none on the server, which never imported the
-seed; 11,640 rows from the laptop's ledger). Still to come: the forced
-`dead_pixels` recompute after batch 2, J8's edge pixels, and J9.
+seed; 11,640 rows from the laptop's ledger). The forced `dead_pixels`
+recompute is done: all 115 shots ok, each equal to its file's mask. Still to
+come: J8's edge pixels, and J9.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -1491,8 +1492,20 @@ runs `precompute dead_pixels --force` on the server.
   ran before it, on main too (J6d's `from_function` tests followed by the pool
   tests: 7 failures). An autouse fixture in `tests/conftest.py` puts it back
   around every test, and `tests/test_main_module.py` is the regression test.
-- **Still to do on the server:** restart the service, then run
-  `precompute dead_pixels --force --workers 4` once batch 2 is done.
+- **On the server.** The service was restarted at 16:26. At 19:10, after
+  batch 2, `precompute dead_pixels --force --workers 4` recomputed all 115 raw
+  shots in 132 s, with none failed. These are the 111 old results and the four
+  new shots.
+  - **The new results agree with the files.** On all 106 files that store the
+    puff window, each new result matches its preprocessed file exactly:
+    - the analysis and discharge windows;
+    - the shot's own verdict (`dead_shot`);
+    - its evidence (`dead_evidence`).
+
+    Two code paths now give the same answer.
+  - **The nine 1160616 files** predate the puff window, so there is nothing
+    to compare them with.
+  - **No puff found:** 29 shots, which keep their discharge window.
 
 ### J10 — Remove the old `velocity_field` · Sonnet 5.5 · fusion_ui
 
@@ -1587,7 +1600,7 @@ websocket check must return `101`).
 9. Report per shot: status, seconds, failures with their errors, disk used, and
    the page URL for J8.
 
-**Progress, 2026-10-08.** Steps 1–7 are done, and step 8 waits for J6.
+**Progress, 2026-10-08.** All nine steps are done.
 
 - **Deployed:** fusion_scripts 7e0d38f and fusion_ui 679376f. The ledger is at
   v4. The prune deleted 134 `velocity_field` runs, 41,400 scalar rows, 115
@@ -1600,6 +1613,16 @@ websocket check must return `101`).
   13/13 blob variables are bit-equal, and so are 68/68 bank references.
 - **J3b** was found here: under Streamlit the deployed pages could not import
   the specs. It was deployed at 17c6e1b, and the user saw the pages open.
+- **Batch 2** (1140827, on J6's new files) took 42 min on 7 workers, and all 8
+  shots are ok (fusion_ui 5b5926e, fusion_scripts 9417aa9):
+  - the bank took 5–36 min a shot, `method_fields` 3.5–6.5 min, and
+    `blob_parameters` under 1.5 min;
+  - each shot has 72 live pixels (18 dead), so 1440 and 864 scalars;
+  - the hashes are batch 1's, and the cache is now 306 MB.
+- **1140827029**, cut to 84 ms by the puff, is ok but has about a fifth of
+  the events: a median of 222 a pixel, against 740–1180 on the other seven.
+  It and 1140827030 read faster than the other six. By the centroid, their
+  median `vr_com` is 610 and 511 m/s, against 184–290.
 - **For J8**, the page is `https://fp1-hpz4fusion.int.uit.no/fields`, which
   has its own run-day and shot pickers.
 
