@@ -35,6 +35,11 @@ def separatrix_radius(ds, t, z):
     except KeyError:
         return None
     try:
+        from fusion_ui.core import fusion_scripts
+
+        # plotting_scripts imports the bare name `config`, which under
+        # Streamlit would otherwise bind fusion_ui's config.py to it for good.
+        fusion_scripts.import_config()
         from plotting_scripts.figure_plots import calculate_splinted_LCFS
 
         r_fine, z_fine = calculate_splinted_LCFS(

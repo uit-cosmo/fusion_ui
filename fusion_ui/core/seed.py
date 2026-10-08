@@ -66,12 +66,14 @@ def default_results_path():
     """``density_scan/results.json`` as ``fusion_scripts`` knows it.
 
     ``fusion_scripts`` installs its settings as a **top-level** module called
-    ``config``, so this import is emphatically not :mod:`fusion_ui.config`.
-    Imported inside the function and aliased so that neither reader nor linter
-    has to work that out from the module header.
+    ``config``, so this is emphatically not :mod:`fusion_ui.config`. Fetched
+    inside the function, through ``import_config`` (which makes sure the bare
+    name is fusion_scripts' module whatever ``sys.path`` says), and named so
+    that neither reader nor linter has to work that out.
     """
-    import config as fusion_scripts_config
+    from fusion_ui.core import fusion_scripts
 
+    fusion_scripts_config = fusion_scripts.import_config()
     return str(fusion_scripts_config.DENSITY_SCAN_RESULTS)
 
 

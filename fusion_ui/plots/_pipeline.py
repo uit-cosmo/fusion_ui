@@ -10,17 +10,23 @@ place that prepares what it is called with.
 group server that file names a folder that does not exist (``/hdd1/alcator``). ``fusion_ui.config`` fills
 the same variables the same way, from its own ``.env``, and whichever is imported first wins. So
 ``fusion_ui.config`` is imported first, below, and every module that needs the API imports it from here.
+The API also reads its settings by the bare name ``config``, which under Streamlit finds
+``fusion_ui/config.py`` instead; ``fusion_scripts.import_config`` settles which module that name is
+before the API is imported (:mod:`fusion_ui.core.fusion_scripts`).
 
 Nothing in this module touches Streamlit, the database or the filesystem.
 """
 
 # Before decorrelation.pipeline, always: see the module docstring.
 from fusion_ui import config  # noqa: F401 - imported for what it does to os.environ
+from fusion_ui.core import fusion_scripts
 
 import numpy as np
 
-from decorrelation import pipeline
-from decorrelation.pipeline import Averages, Blobs, Tde, Tracking
+fusion_scripts.import_config()
+
+from decorrelation import pipeline  # noqa: E402 - after import_config, see above
+from decorrelation.pipeline import Averages, Blobs, Tde, Tracking  # noqa: E402
 
 __all__ = [
     "Averages",
