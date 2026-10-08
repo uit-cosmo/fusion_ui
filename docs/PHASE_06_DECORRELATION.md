@@ -34,9 +34,9 @@ to J0's snapshot on all nine shots. J3b merged (6cf7b9b) and deployed: the
 deployed pages could not import the specs under Streamlit, and now open. G1
 passed, with two requests: a plain account of the dead-pixel logic, and the
 time before the gas puff cut out at preprocessing. J6d merged (d622f1d): the
-stored-mask view and the plain summary. J6 and J8a are under way; J6e, J11,
-the production preprocessing and batch 2 follow. J8 is under way with the
-user.
+stored-mask view and the plain summary. J8a merged (c3ac9b1): each track's
+trajectory in R and Z on the lag strip. J6 is under way; J6e, J11, the
+production preprocessing and batch 2 follow. J8 is under way with the user.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -1536,6 +1536,26 @@ position a panel.
 τ = 0 panel only, their points equal to `pos_*` at every lag, the dashed
 path along (v_R, v_Z), and nothing without `method_fields`; and the full
 suites pass.
+
+**J8a landed 2026-10-08 (c3ac9b1, 855 tests).**
+
+- **Three layers a track**, in its own colour, symbol and legend group, so
+  its legend entry hides them with its markers: every lag of the bank as a
+  faint line with gaps where a lag has no position; the lags of the fit
+  that have a position, thicker; and the stored velocity as a dashed
+  straight path through the mean of the fitted points.
+- **One line, two planes.** `pixel.velocity_line` now draws the Tracks view's
+  line too, and a test compares the two point by point. The dashed path can
+  be a lag shorter than `nlags_*`, since lags without a position are left
+  out, as in the Tracks view.
+- **Ties.** `lag_strip.zero_lag_column` takes the earlier of two lags equally
+  near 0 (to a part in 10⁹), so lags −6, −3, 3, 6 put the paths on −3 µs.
+- **Unchanged:** the "One frame" view and `pixel_averages`' own strip, which
+  has only the bank.
+- **For the user to judge on real shots:** the dashed path can hide under
+  the fitted band where the positions are nearly straight (a thinner band or
+  a halo would fix it); the centroid covers the maximum where they coincide;
+  paths are clipped at the panel edge.
 
 ### J11 — The Documentation page · Opus 5.5 · fusion_ui
 
