@@ -1,4 +1,4 @@
-"""One 1-D series from any diagnostic: naming it, and materialising it.
+"""One 1-D series from any diagnostic that has them (:data:`SOURCES`): naming it, and materialising it.
 
 Today nothing in the app takes "a trace" as its input. Every analysis is a
 ``PlotSpec`` bound to one ``Target`` -- one machine, one shot, one diagnostic --
@@ -7,7 +7,7 @@ and the two ways a 1-D series is obtained are unrelated:
 files. Comparing an APD pixel with a probe channel is not expressible.
 
 This module is the whole point of the statistics page: one type that names a
-1-D series from any diagnostic (``TraceRef``), and one function that
+1-D series from any of those diagnostics (``TraceRef``), and one function that
 materialises it over an arbitrary time window (``extract``). Pure -- numpy and
 xarray only, no Streamlit, no database.
 """
@@ -67,8 +67,14 @@ def channels(ds, diagnostic) -> list:
 
     All ``("pixel", x, y)`` for imaging, every ``("probe", quantity,
     position)`` from :func:`probes.quantities_and_positions` for a probe.
-    Reads names and shapes only -- no data touched.
+    Reads names and shapes only -- no data touched. A diagnostic that is not
+    in :data:`SOURCES` has no traces: that is refused, not answered with an
+    empty list that reads as "a file with no channels".
     """
+    if diagnostic not in SOURCES:
+        raise ValueError(
+            f"{diagnostic!r} has no traces to take; they come from {', '.join(SOURCES)}"
+        )
     if diagnostic in IMAGING:
         return [
             ("pixel", int(x), int(y))

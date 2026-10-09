@@ -617,8 +617,10 @@ the record are coloured by `cc_tde`, and all others by the pixel's events.
 ## Thomson scattering profiles
 
 The Single shot page draws the Thomson scattering (TS) profiles of a shot from `thomson_scattering_<shot>.nc`
-(`fusion_ui/plots/thomson_profiles.py: figure`). Nothing is computed in the app: the file holds the
-measurements and the fit, and the page draws them. fusion_scripts makes the file on mfe, where the tree and the
+(`fusion_ui/plots/thomson_profiles.py: figure`). Nothing is fitted in the app: the file holds the measurements
+and the fit, and the page draws them, working out only the p_e of the points
+(`fusion_ui/plots/thomson_profiles.py: Points.pe`) and where the separatrix is
+(`fusion_ui/plots/thomson_profiles.py: separatrix`). fusion_scripts makes the file on mfe, where the tree and the
 fitting code are (`tools/mfe/get_thomson_scattering.py: make`). This section was read against that script at
 fusion_scripts `30eb16d`, and against what it says of C-Mod_Analysis `d6a6466`, mfe's checkout.
 
@@ -661,20 +663,27 @@ another. A shot whose fit failed has no fit and says why in `fit_status`; every 
 What to distrust in it:
 
 - **The core is often an extrapolation.** The fit drops core T_e below 1 keV, and n_e below 0.5e20 m⁻³, inside
-  ρ_pol 0.2 (`fit_note`), so where the core points are lower the fit has none to rest on. On 1160616027 it reads
-  134 eV on axis where the core points read about 900 eV.
-- **`fit_check`** is run_db.py's own test: T_e above 100 eV at the grid's outer end, or T_e below 0.5 keV or n_e
-  below 0.5e20 m⁻³ on axis, means "something must have silently failed"
-  (`tools/mfe/get_thomson_scattering.py: run_db_check`). A fit that fails it is drawn all the same, with a
-  warning above the figure that quotes the check.
-- **The errors.** With `frac_err` the fit's n_e and T_e errors are 20% of the fit by construction, and `fit_pe_err`
-  adds a density to a temperature, so it is no error of p_e. That is why the page draws no band.
+  ρ_pol 0.2 (`cmod_tools.py: prefit_filter`), so where the core points are lower the fit has none to rest on.
+  `fit_note` says so when no core T_e inside ρ_pol 0.2 reaches 1 keV, and the page captions it whether or not the
+  check below passed: that is 15 of the 115 files of 2026-10-09, five of which pass the check. On 1160616027 the
+  fit reads 134 eV on axis where the core points read about 900 eV.
+- **`fit_check`** is run_db.py's own test (`tools/mfe/get_thomson_scattering.py: run_db_check`): T_e above 100 eV
+  at the grid's outer end, or T_e below 0.5 keV or n_e below 0.5e20 m⁻³ on axis, means "something must have
+  silently failed". A fit that does not pass is drawn all the same, with a warning above the figure that quotes the
+  check and says what the clause that failed means. **On axis**, the core is an extrapolation (12 of the 115 files).
+  **At the outer end**, the outer end is not credible (8 files): there the fit's T_e at ρ_pol 0.95 to 1.05 was 4
+  to 6 times the median of the points on three of them, and on one it ran on to about 51 keV past the last point.
+  The page takes nothing it cannot read for a pass: a file with a fit is warned about unless its check says
+  `passed`, whether the attribute is empty, missing, spelt another way or an outcome the page does not know.
+- **The errors.** With `frac_err`, which `cmod_tools.py: get_cmod_kin_profs` is given (`fit_settings` keeps it),
+  the fit's n_e and T_e errors are 20% of the fit by construction, and `fit_pe_err` adds a density to a
+  temperature, so it is no error of p_e. That is why the page draws no band.
 - **The pressure fit**, `fit_pe`, is a fit of its own and not e·n_e·T_e of the other two, so compare it with the
   pressure points drawn from the measurements. At ρ_pol 0.97 to 1 it lay 3.5 times above the median of the edge
   points on 1160616027, and within 10% of it on 1140827019 and 1091216009 (the samples, read on 2026-10-09).
 - **The scrape-off layer** is flat or linear by construction: `fit_reg` names the mtanh coefficients the fit sets
   to zero. It is no measurement of the SOL profile.
-- **The two-point model.** `Te_sep_2pm` and `lambda_q_2pm` come from `power_balance.Teu_2pt_model`, which falls
+- **The two-point model.** `Te_sep_2pm` and `lambda_q_2pm` come from `power_balance.py: Teu_2pt_model`, which falls
   back silently where the main bolometer has no data, or where B_t and B_p at the outboard midplane cannot be
   computed; `two_point_model` names the fallback. The page does not draw them: they are in the list under the
   figure.

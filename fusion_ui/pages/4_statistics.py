@@ -138,7 +138,8 @@ def add_picker(table):
     with st.expander("Add traces", expanded=not basket):
         if table.empty:
             st.warning(
-                "No shot with traces (imaging pixels or probe channels) is indexed — run a rescan on the Shot "
+                "No shot with traces (imaging pixels or probe channels) is indexed. A Thomson scattering file holds "
+                "profiles, not traces: the Single shot page draws it. If files were added, run a rescan on the Shot "
                 "browser page.",
                 icon="⚠️",
             )

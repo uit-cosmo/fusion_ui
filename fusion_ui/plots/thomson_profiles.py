@@ -28,10 +28,14 @@ What is drawn
     page's window, told apart by marker and colour, with the tree's ±1σ bars; the stored fit, over its whole range
     and **without a band**; and the separatrix. The file holds no p_e of the measurements, so its points are e·n_e·T_e,
     with the errors propagated, beside the fit's own ``fit_pe``. A band around the fit is left out on purpose (the
-    user, 2026-10-09):
-    with ``frac_err`` the fit's n_e and T_e errors are 20% of the fit by construction, and ``fit_pe_err`` adds a
-    density to a temperature, so it is no error of p_e. A fit that fails ``fit_check`` gets a warning that quotes it,
-    and the diagnostician's caveat is under every figure.
+    user, 2026-10-09): with ``frac_err`` the fit's n_e and T_e errors are 20% of the fit by construction, and
+    ``fit_pe_err`` adds a density to a temperature, so it is no error of p_e.
+
+    A fit that does not pass ``fit_check`` gets a warning above the figure that quotes it, and **anything but the
+    outcome** ``passed`` **is warned about**: a verdict spelt another way, an outcome nobody wrote a rule for, an empty
+    attribute. Its advice follows the clause that failed: the temperature on axis says the core is an extrapolation,
+    the temperature at the grid's outer end that the outer end is not credible. A ``fit_note`` that calls the core an
+    extrapolation gets a caption of its own, passed or not. The diagnostician's caveat is under every figure.
 
 Everything but :func:`render` is pure: it takes an opened file, or what :func:`read` made of one, and returns data, a
 figure or text, so each can be tested without Streamlit.
@@ -272,12 +276,9 @@ def _points(ds, system):
 
 
 def _window(attrs):
-    """The fit's ``(start, end)`` from ``window_t_start`` and ``window_t_end``, or ``None``."""
-    try:
-        start, end = float(attrs["window_t_start"]), float(attrs["window_t_end"])
-    except (KeyError, TypeError, ValueError):
-        return None
-    return (start, end) if np.isfinite([start, end]).all() else None
+    """The fit's ``(start, end)`` from ``window_t_start`` and ``window_t_end``, or ``None``: a window as the single-shot
+    page reads a preprocessed file's (:func:`fusion_ui.core.loader.as_window`)."""
+    return loader.as_window([attrs.get("window_t_start"), attrs.get("window_t_end")])
 
 
 def _fit(ds, attrs):
@@ -325,33 +326,89 @@ def read(ds):
 # What there is to say about it
 # ---------------------------------------------------------------------------
 
-#: ``fit_check`` ends in ``passed`` or ``failed: <reasons>``; the description before it says "silently failed'" and so
-#: never has a colon after its ``failed``.
-_FAILED = re.compile(r"(?:^|\s)failed:\s*(.*)$", re.S)
+#: ``fit_check`` is the rule's description, a colon, then the outcome, ``passed`` or ``failed: <reasons>``. The description
+#: ends in a quote ("... must have silently failed'"), so the last quote and colon are where the outcome begins.
+_OUTCOME_AFTER = "': "
+
+#: What a failed check says of the fit, by the clause of run_db.py's test that failed, as its reasons name it: a
+#: temperature or density too low "on axis", or a temperature too high at the grid's outer end ("rho_pol 1.10").
+CHECK_MEANING = (
+    (
+        "on axis",
+        "Its core is an extrapolation, not a description of the core points: read the points there, not the curve.",
+    ),
+    (
+        "rho_pol",
+        "Its outer end is not credible: its T_e there can lie several times above the points, or run on past the last "
+        "one. Read the points, not the curve, near the separatrix and beyond.",
+    ),
+)
+#: What it says of an outcome that names neither clause.
+CHECK_UNRECOGNISED = "It may have failed silently: read the points, not the curve."
 
 
-def check_failure(text):
-    """The reasons a ``fit_check`` attribute gives for a fit that failed run_db.py's own test.
+def check_outcome(text):
+    """What a ``fit_check`` attribute records of run_db.py's own test: ``"passed"``, ``"failed: <reasons>"`` as the
+    file writes it, or whatever else it says.
 
-    ``None`` for a fit that passed, for a file with no fit (``"no fit"``) and for no attribute at all.
+    ``""`` for no attribute, an empty one and ``"no fit"``, the words of a file that has none. A file with a fit has
+    one of the first two, so for it ``""`` means that no outcome was recorded.
     """
-    if not text:
-        return None
-    found = _FAILED.search(str(text))
-    return None if found is None else (found.group(1).strip() or "no reason given")
+    text = "" if text is None else str(text).strip()
+    if text in ("", "no fit"):
+        return ""
+    return text.rsplit(_OUTCOME_AFTER, 1)[-1].strip()
+
+
+def check_failed(profiles):
+    """Whether the fit that is drawn did not pass its check.
+
+    **Anything but the outcome** ``passed`` **counts**: a verdict spelt another way ("FAILED: ..."), an outcome this page
+    does not know, an empty or missing attribute. A check that cannot be read must not pass for one that was.
+    """
+    return profiles.fit is not None and check_outcome(profiles.attrs.get("fit_check")) != "passed"
+
+
+def check_meaning(outcome):
+    """What a failed check says of the fit, in sentences of advice: one for each clause that failed, or that it may have
+    failed silently when the outcome is not a verdict ``failed: <reasons>`` that names one.
+
+    Only the reasons of a verdict are read for clauses: the rule's description, which a file may record without an
+    outcome, says "on axis" too.
+    """
+    reasons = outcome if outcome.lower().startswith("failed") else ""
+    said = [text for clause, text in CHECK_MEANING if clause in reasons]
+    return " ".join(said) or CHECK_UNRECOGNISED
 
 
 def warning(profiles):
-    """The warning above the figure of a fit that fails ``fit_check``, quoting it, or ``None``."""
-    check = profiles.attrs.get("fit_check")
-    reasons = check_failure(check)
-    if reasons is None or profiles.fit is None:
+    """The warning above the figure of a fit that did not pass ``fit_check`` (:func:`check_failed`), quoting it, or ``None``.
+
+    What it advises follows the clause that failed (:func:`check_meaning`): a core that is an extrapolation, or an outer
+    end that is not credible. A fit whose outcome is empty, or is not one this page knows, is warned about too.
+    """
+    if not check_failed(profiles):
         return None
-    return (
-        f"**This fit fails run_db.py's own check: {reasons}.** A fit that fails it is not to be trusted in the core, "
-        "where it is often an extrapolation: read the points there, not the curve.\n\n"
-        f"The file's `fit_check`: “{check}”"
-    )
+    check = profiles.attrs.get("fit_check")
+    outcome = check_outcome(check)
+    verb = "fails" if outcome.lower().startswith("failed") else "does not pass"
+    said = f"“{outcome}”" if outcome else "the file records no result"
+    text = f"**This fit {verb} run_db.py's own check: {said}.** {check_meaning(outcome)}\n\n"
+    if check is None:
+        return text + "The file has no `fit_check`."
+    if not str(check).strip():
+        return text + "The file's `fit_check` is empty."
+    return text + f"The file's `fit_check`: “{check}”"
+
+
+def extrapolation(attrs):
+    """The sentence of ``fit_note`` that calls the fit's core an extrapolation, or ``""`` when it does not.
+
+    The file says so when it finds no core T_e of 1 keV or more inside ρ_pol 0.2: the fit's pre-filter drops the lower
+    ones, so the fit has none to rest on there, whether or not its check passed.
+    """
+    sentences = re.split(r"(?<=\.)\s+", str(attrs.get("fit_note") or ""))
+    return " ".join(sentence for sentence in sentences if "extrapolation" in sentence)
 
 
 def _settings(attrs):
@@ -377,7 +434,8 @@ def separatrix(profiles, axis):
         return float(sep)
     fit = profiles.fit
     if fit is not None and fit.R_mid is not None and fit.rho_pol.min() <= 1.0 <= fit.rho_pol.max():
-        return float(np.interp(1.0, fit.rho_pol, fit.R_mid))
+        found = float(np.interp(1.0, fit.rho_pol, fit.R_mid))
+        return found if np.isfinite(found) else None  # a fit_R_mid that is NaN there says nothing
     return None
 
 
@@ -414,7 +472,7 @@ def notes(profiles, target, axis):
     if not unmapped:
         why = ""
     elif attrs.get("efit_tree") == "none":
-        why = f", since {attrs.get('efit') or 'no EFIT tree could be opened'}: they are not drawn"
+        why = f", since {_escape(str(attrs.get('efit') or 'no EFIT tree could be opened'))}: they are not drawn"
     else:
         why = " (the pulse is outside the EFIT time base) and are not drawn"
     lines.append(
@@ -427,8 +485,8 @@ def notes(profiles, target, axis):
     # The fit.
     fit = profiles.fit
     if fit is None:
-        status = attrs.get("fit_status")
-        lines.append(f"No fit in this file ({status})." if status else "No fit in this file.")
+        status = attrs.get("fit_status")  # an exception's text, which may hold markdown's own characters
+        lines.append(f"No fit in this file ({_escape(str(status))})." if status else "No fit in this file.")
     else:
         what = attrs.get("fit_function") or "the file's fit"
         span = (
@@ -455,6 +513,13 @@ def notes(profiles, target, axis):
         else:
             text += " No band is drawn around it."
         lines.append(text)
+        # Whether or not the check passed: a core with no T_e of 1 keV or more has none for the fit to rest on.
+        core = extrapolation(attrs)
+        if core:
+            lines.append(
+                f"The fit's core is an extrapolation: the file's `fit_note` says “{core}” Read the points there, not "
+                "the curve."
+            )
 
     # The axis and the separatrix.
     sep = separatrix(profiles, axis)
@@ -515,13 +580,22 @@ def _rgba(colour, alpha):
     return f"rgba({r},{g},{b},{alpha})"
 
 
+def _number(value, digits):
+    """``value`` to ``digits`` significant digits, and no exponent below a million: a core T_e of 2140 eV reads ``2140``,
+    not ``2.14e+03``, and its error of 234 reads ``234``, not ``2.3e+02``."""
+    text = f"{value:.{digits}g}"
+    if "e" in text and 1 <= abs(value) < 1e6:
+        return f"{value:.0f}"
+    return text
+
+
 def _hover(points, quantity, scale, unit, values, errors):
     """One hover text per point: which system, when, where, and the value with its error."""
     texts = []
     for i in range(points.drawn):
-        value = f"{values[i] * scale:.3g}"
+        value = _number(values[i] * scale, 3)
         if np.isfinite(errors[i]):
-            value += f" ± {errors[i] * scale:.2g}"
+            value += f" ± {_number(errors[i] * scale, 2)}"
         texts.append(
             f"{LOOKS[points.system]['label']} · t = {points.time[i]:.4f} s · channel {int(points.channel[i])}<br>"
             f"ρ_pol = {points.rho_pol[i]:.3f} · R_mid = {points.R_mid[i]:.4f} m<br>"
@@ -551,7 +625,9 @@ def figure(profiles, axis="rho_pol"):
     The edge and core points, with their bars; the stored fit over its whole range, without a band; and the separatrix.
     Only what there is is drawn: a row with no point to place and no fit is left out, a system with none is left out
     of the legend, and a file with nothing at all gives a figure that says so. A legend entry appears once, however
-    many rows hold its trace, and hides it in all of them.
+    many rows hold its trace or its line (the separatrix is a line in every row), and hides it in all of them. Every
+    row starts at zero, as n_e, T_e and p_e are not negative, and a bar that reaches below it ends at the axis
+    instead of stretching the range.
     """
     if axis not in AXES:
         raise ValueError(f"axis is one of {', '.join(AXES)}, not {axis!r}")
@@ -609,31 +685,26 @@ def figure(profiles, axis="rho_pol"):
                     showlegend=row == 1,
                     line=dict(color=FIT_COLOUR, width=2),
                     hovertemplate=(
-                        f"{_fit_label(fit)}<br>{AXES[axis][1]} = %{{x:.4g}}<br>{label} = %{{y:.3g}} {unit}<extra></extra>"
+                        f"{_fit_label(fit)}<br>{AXES[axis][1]} = %{{x:.4g}}<br>{label} = %{{y:.4~g}} {unit}<extra></extra>"
                     ),
                 ),
                 row=row,
                 col=1,
             )
         if sep is not None:
-            fig.add_vline(x=sep, line=dict(color=SEPARATRIX_COLOUR, width=1, dash="dash"), row=row, col=1)
+            # A line of each row, one legend entry for them all: clicking it hides the separatrix everywhere.
+            fig.add_vline(
+                x=sep,
+                line=dict(color=SEPARATRIX_COLOUR, width=1, dash="dash"),
+                name="separatrix",
+                legendgroup="separatrix",
+                showlegend=row == 1,
+                row=row,
+                col=1,
+            )
         # From zero, and no lower: a bar that reaches below zero ends at the axis, and does not drag the range negative.
         fig.update_yaxes(title_text=title, autorangeoptions=dict(minallowed=0), row=row, col=1)
 
-    if sep is not None:
-        # Shapes have no legend entry of their own.
-        fig.add_trace(
-            go.Scatter(
-                x=[None],
-                y=[None],
-                mode="lines",
-                name="separatrix",
-                legendgroup="separatrix",
-                line=dict(color=SEPARATRIX_COLOUR, width=1, dash="dash"),
-            ),
-            row=1,
-            col=1,
-        )
     fig.update_xaxes(title_text=AXES[axis][0], row=len(rows), col=1)
     fig.update_layout(
         height=250 * len(rows) + 110,

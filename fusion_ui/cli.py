@@ -343,10 +343,11 @@ def cmd_status(args):
         print("index            empty — run `fusion-ui rescan`")
     else:
         print("index")
+        width = max(len(name) for name in catalog.DIAGNOSTICS)  # thomson_scattering is longer than the others
         for row in rows:
             kind = "preprocessed" if row["preprocessed"] else "raw"
             print(
-                f"  {row['machine']} {row['diagnostic']:<8} {kind:<12} "
+                f"  {row['machine']} {row['diagnostic']:<{width}} {kind:<12} "
                 f"{row['n']:>6} files, {row['curated']:>6} curated"
             )
         shots = conn.execute("SELECT COUNT(DISTINCT shot) FROM shots").fetchone()[0]

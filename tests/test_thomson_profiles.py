@@ -105,17 +105,47 @@ def test_the_spec_has_one_parameter_the_axis_and_it_is_not_a_many_pixel_view():
     assert params_ui.hash_params(spec.key, back)[0] == digest
 
 
+#: Where fusion_scripts' code is reached from: its own top-level packages, and the app's one door to them.
+FUSION_SCRIPTS = {"fusion_scripts", "density_scan", "decorrelation", "plotting_scripts", "tools"}
+
+
+def imported_names(source):
+    """Every name a module's source imports, dotted in full: ``from a.b import c`` is ``a.b`` and ``a.b.c``, so that
+    ``from fusion_ui.core import fusion_scripts`` is seen as the import of ``fusion_ui.core.fusion_scripts``."""
+    names = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            names += [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            module = "." * node.level + (node.module or "")
+            names += [module] + [f"{module}.{alias.name}".lstrip(".") for alias in node.names]
+    return names
+
+
+def reaches_fusion_scripts(source):
+    """The imports of ``source`` that go to fusion_scripts, directly or through the app's ``core.fusion_scripts``."""
+    return [name for name in imported_names(source) if FUSION_SCRIPTS & set(name.split("."))]
+
+
 def test_the_module_imports_nothing_from_fusion_scripts():
     """L14: the app is moving off fusion_scripts, so new code reads the file and nothing else."""
-    imported = []
-    for node in ast.walk(ast.parse(inspect.getsource(tp))):
-        if isinstance(node, ast.Import):
-            imported += [alias.name for alias in node.names]
-        elif isinstance(node, ast.ImportFrom):
-            imported.append(node.module or "")
-    banned = {"fusion_scripts", "density_scan", "decorrelation", "plotting_scripts", "tools"}
-    assert not [name for name in imported if name.split(".")[0] in banned], imported
-    assert "fusion_ui.core.fusion_scripts" not in imported
+    assert reaches_fusion_scripts(inspect.getsource(tp)) == []
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "import fusion_scripts",
+        "import density_scan.dead_pixels",
+        "from decorrelation import pipeline",
+        "from fusion_ui.core import fusion_scripts, loader",  # the way the codebase reaches it
+        "from fusion_ui.core.fusion_scripts import import_config",
+        "from ..core import fusion_scripts",
+    ],
+)
+def test_the_guard_sees_each_way_of_reaching_fusion_scripts(line):
+    assert reaches_fusion_scripts(line), line
+    assert reaches_fusion_scripts("from fusion_ui.core import loader, registry\nimport numpy as np") == []
 
 
 def test_the_catalog_indexes_the_thomson_scattering_folder_raw_only(conn, tmp_path):
@@ -195,16 +225,21 @@ def test_a_temperature_of_0_beside_a_density_is_not_drawn_and_a_bad_error_leaves
     ds["edge_ne_err"][4, 1] = -1.0
     ds["edge_Te_err"][4, 1] = np.nan
     ds["edge_ne_err"][6, 2] = 0.0
+    ds["edge_Te_err"][8, 0] = 0.0  # an error of exactly 0 is no error either
+    ds["edge_ne"][3, 2] = 0.0  # a density of 0 beside a temperature that reads: the plan's rule is n_e > 0
     points = tp.read(ds).points["edge"]
-    assert points.drawn == ds["edge_ne"].size  # n_e > 0 everywhere, so every point is kept
+    assert points.drawn == ds["edge_ne"].size - 1  # n_e > 0 everywhere but at the one reading of 0
 
     def at(row, channel):
-        return int(np.flatnonzero((points.time == ds["time"].values[row]) & (points.channel == channel))[0])
+        found = np.flatnonzero((points.time == ds["time"].values[row]) & (points.channel == channel))
+        return int(found[0]) if found.size else None
 
+    assert at(3, 2) is None  # not drawn, though its T_e is not 0
     assert np.isnan(points.Te[at(2, 3)]) and points.ne[at(2, 3)] > 0
     assert np.isnan(points.pe()[at(2, 3)])
     assert np.isnan(points.ne_err[at(4, 1)]) and np.isnan(points.Te_err[at(4, 1)])
     assert np.isnan(points.ne_err[at(6, 2)])
+    assert np.isnan(points.Te_err[at(8, 0)]) and np.isfinite(points.ne_err[at(8, 0)])
     assert np.isfinite(points.ne_err[at(5, 1)])
 
 
@@ -236,7 +271,7 @@ def test_the_files_scalars_and_attributes_come_back_as_plain_python():
 
 def test_n_e_t_e_and_p_e_share_one_axis_and_each_row_has_both_systems_and_the_fit():
     fig = figure_of()
-    assert names_in_row(fig, 1) == ["edge TS", "core TS", FIT, "separatrix"]
+    assert names_in_row(fig, 1) == ["edge TS", "core TS", FIT]
     assert names_in_row(fig, 2) == ["edge TS", "core TS", FIT]
     assert names_in_row(fig, 3) == ["edge TS", "core TS", FIT]
     # One shared axis: the upper two follow the bottom one, which carries the title.
@@ -257,15 +292,17 @@ def test_the_two_systems_differ_by_marker_and_by_colour_and_the_legend_lists_eac
     assert (edge.marker.symbol, core.marker.symbol) == ("circle", "diamond")
     assert edge.marker.color != core.marker.color
     assert edge.mode == core.mode == "markers"
-    assert [trace.name for trace in fig.data if trace.showlegend is not False] == [
-        "edge TS",
-        "core TS",
-        FIT,
-        "separatrix",
-    ]
+    assert [trace.name for trace in fig.data if trace.showlegend is not False] == ["edge TS", "core TS", FIT]
     # Toggling a legend entry hides that system in every row.
     for n in (1, 2, 3):
         assert [trace.legendgroup for trace in in_row(fig, n)][:3] == ["edge", "core", "fit"]
+    # The separatrix is a line in every row, one legend entry for the three, which hides them all.
+    shapes = fig.layout.shapes
+    assert [(s.name, s.legendgroup, s.showlegend) for s in shapes] == [
+        ("separatrix", "separatrix", True),
+        ("separatrix", "separatrix", False),
+        ("separatrix", "separatrix", False),
+    ]
 
 
 def test_the_values_are_drawn_in_the_units_of_the_axis_titles():
@@ -314,7 +351,7 @@ def test_the_fit_is_drawn_over_its_whole_range_without_a_band():
         assert fit.error_y.array is None
     assert not [trace for trace in fig.data if trace.fill not in (None, "none")]  # no filled band anywhere
     lines = {trace.name for trace in fig.data if trace.mode == "lines"}
-    assert lines == {FIT, "separatrix"}  # nothing else is a curve: no upper or lower edge of a band
+    assert lines == {FIT}  # nothing else is a curve: no upper or lower edge of a band
 
 
 def test_the_separatrix_is_rho_pol_1_in_every_row():
@@ -338,17 +375,27 @@ def test_the_separatrix_on_the_r_mid_axis_is_the_scalar_else_the_fits_at_rho_pol
     # A file without the scalar reads it off the fit's own R_mid at rho_pol = 1 (the grid has no point exactly there).
     from_fit = tp.separatrix(profiles_of(scalars=False), "R_mid")
     assert from_fit == pytest.approx(tf.r_mid(1.0), abs=1e-9)
-    # Neither: no line, and no legend entry for one.
+    # Neither: no line, and so no legend entry for one.
     none = profiles_of(scalars=False, fit=False)
     assert tp.separatrix(none, "R_mid") is None
-    fig = tp.figure(none, "R_mid")
-    assert not fig.layout.shapes and "separatrix" not in [trace.name for trace in fig.data]
+    assert not tp.figure(none, "R_mid").layout.shapes
+    # The scalar comes first, even where the fit's own R_mid would say another number.
+    found = profiles_of()
+    found.scalars["R_mid_sep"] = 0.9
+    assert tp.separatrix(found, "R_mid") == 0.9
+    # A fit_R_mid that is NaN at rho_pol = 1 says nothing: no separatrix, not a line at NaN.
+    ds = tf.thomson_dataset(scalars=False)
+    ds["fit_R_mid"] = ds["fit_R_mid"].where(~((ds["rho_pol"] > 0.9) & (ds["rho_pol"] < 1.05)))
+    nan = tp.read(cut(ds))
+    assert tp.separatrix(nan, "R_mid") is None
+    assert not tp.figure(nan, "R_mid").layout.shapes
+    assert tp.notes(nan, FITS_WINDOW, "R_mid")[2].endswith("The file gives no separatrix.")
 
 
 def test_a_file_without_a_fit_draws_the_points_and_no_fit():
     fig = figure_of(fit=False)
     for n in (1, 2, 3):  # p_e is still drawn: e n_e T_e of the points
-        assert [name for name in names_in_row(fig, n) if name != "separatrix"] == ["edge TS", "core TS"]
+        assert names_in_row(fig, n) == ["edge TS", "core TS"]
     assert not [trace for trace in fig.data if trace.name.startswith("fit")]
 
 
@@ -359,14 +406,15 @@ def test_a_fit_without_a_pressure_fit_leaves_the_pressure_row_to_the_points():
 
 
 def test_a_file_with_no_core_draws_the_edge_alone():
-    assert {trace.name for trace in figure_of(core=False).data} == {"edge TS", FIT, "separatrix"}
-    assert {trace.name for trace in figure_of(edge=False, fit=False).data} == {"core TS", "separatrix"}
+    assert {trace.name for trace in figure_of(core=False).data} == {"edge TS", FIT}
+    assert {trace.name for trace in figure_of(edge=False, fit=False).data} == {"core TS"}
 
 
 def test_a_window_with_no_pulse_still_draws_the_fit_and_a_file_with_nothing_says_so():
     empty = profiles_of(window=(5.0, 6.0))
     assert empty.pulses == 0 and all(p.drawn == 0 for p in empty.points.values())
-    assert {trace.name for trace in tp.figure(empty).data} == {FIT, "separatrix"}
+    fig = tp.figure(empty)
+    assert {trace.name for trace in fig.data} == {FIT} and len(fig.layout.shapes) == 3
 
     fig = tp.figure(profiles_of(window=(5.0, 6.0), fit=False))
     assert not fig.data and "No Thomson scattering measurement" in fig.layout.annotations[0].text
@@ -425,6 +473,7 @@ def test_points_without_a_flux_mapping_are_not_placed_and_the_notes_count_them()
     fig = tp.figure(found)  # still builds
     assert np.isnan(in_row(fig, 1)[0].x).sum() == int(np.isnan(found.points["edge"].rho_pol).sum())
     assert f"{expected} of the points have no ρ_pol" in tp.notes(found, FITS_WINDOW, "rho_pol")[0]
+    assert f"{expected} of the points have no R_mid" in tp.notes(found, FITS_WINDOW, "R_mid")[0]  # named for the axis
     assert "no ρ_pol" not in tp.notes(profiles_of(), FITS_WINDOW, "rho_pol")[0]
 
 
@@ -437,6 +486,34 @@ def test_a_hover_text_says_which_system_when_where_and_what_the_value_is():
     assert first.startswith("edge TS · t = ") and f"channel {int(points.channel[0])}" in first
     assert f"ρ_pol = {points.rho_pol[0]:.3f}" in first and "T_e = " in first and " eV" in first
     assert " ± " in first
+    # Where the channel looks: R, then Z (and not the other way round).
+    assert f"R = {points.R[0]:.4f} m, Z = {points.Z[0]:+.4f} m" in first
+
+
+@pytest.mark.parametrize(
+    "value, digits, text",
+    [
+        (2140.0, 3, "2140"),  # not 2.14e+03
+        (234.0, 2, "234"),  # not 2.3e+02
+        (51517.3, 3, "51517"),
+        (0.512, 3, "0.512"),
+        (1.234, 3, "1.23"),
+        (0.00012, 2, "0.00012"),
+        (2.5e7, 3, "2.5e+07"),  # a million and up keeps its exponent
+    ],
+)
+def test_hover_numbers_have_no_exponent_below_a_million(value, digits, text):
+    assert tp._number(value, digits) == text
+
+
+def test_no_hover_text_of_a_real_looking_core_temperature_carries_an_exponent():
+    """The core T_e of a shot is above 1 keV, and its error 100 eV or more: the numbers the hover is read for."""
+    found = profiles_of()
+    core_te = in_row(tp.figure(found), 2)[1].hovertext
+    assert any(float(re.search(r"T_e = (\d+)", text).group(1)) >= 1000 for text in core_te)  # the fixture has some
+    for row in (1, 2, 3):
+        for trace in in_row(tp.figure(found), row)[:2]:
+            assert not [text for text in trace.hovertext if "e+" in text], trace.name
 
 
 # ---------------------------------------------------------------------------
@@ -445,37 +522,126 @@ def test_a_hover_text_says_which_system_when_where_and_what_the_value_is():
 
 
 @pytest.mark.parametrize(
-    "text, reasons",
+    "text, outcome",
     [
-        (tf.PASSED, None),
-        (tf.FAILED, "Te on axis is 134 eV"),
-        (
-            f"{tf.CHECK_TEXT}: failed: Te at rho_pol 1.10 is 140 eV; ne on axis is 3e+19 m^-3",
-            "Te at rho_pol 1.10 is 140 eV; ne on axis is 3e+19 m^-3",
-        ),
-        (f"{tf.CHECK_TEXT}: failed:", "no reason given"),
-        ("no fit", None),
-        ("", None),
-        (None, None),
-        # The description itself says "silently failed'", which is no verdict.
-        (tf.CHECK_TEXT, None),
+        (tf.PASSED, "passed"),
+        (tf.FAILED, "failed: Te on axis is 134 eV"),
+        (tf.FAILED_OUTER, "failed: Te at rho_pol 1.10 is 140 eV"),
+        (f"{tf.CHECK_TEXT}: FAILED: Te on axis is 134 eV", "FAILED: Te on axis is 134 eV"),  # spelt another way
+        (f"{tf.CHECK_TEXT}: PASSED", "PASSED"),  # which is not the outcome "passed" either
+        (f"{tf.CHECK_TEXT}: failed:", "failed:"),
+        (f"{tf.CHECK_TEXT}:   passed \n", "passed"),
+        ("passed", "passed"),  # an outcome without the rule's description
+        ("no fit", ""),
+        ("   ", ""),
+        ("", ""),
+        (None, ""),
+        # The description alone records no outcome: it reads as one, which no rule knows.
+        (tf.CHECK_TEXT, tf.CHECK_TEXT),
     ],
 )
-def test_the_check_attribute_gives_its_reasons_only_when_the_fit_failed_it(text, reasons):
-    assert tp.check_failure(text) == reasons
+def test_the_checks_outcome_is_what_follows_the_rules_description(text, outcome):
+    assert tp.check_outcome(text) == outcome
 
 
-def test_a_fit_that_fails_its_check_gets_a_warning_that_quotes_it():
+def test_a_fit_that_fails_on_axis_is_warned_about_as_an_extrapolated_core_and_the_check_is_quoted():
     text = tp.warning(profiles_of(check=tf.FAILED))
-    assert text.startswith("**This fit fails run_db.py's own check: Te on axis is 134 eV.**")
-    assert "extrapolation" in text and "read the points there, not the curve" in text
-    assert f"“{tf.FAILED}”" in text  # the attribute itself, word for word
+    assert text.startswith("**This fit fails run_db.py's own check: “failed: Te on axis is 134 eV”.** ")
+    assert (
+        "Its core is an extrapolation, not a description of the core points: read the points there, not the curve."
+        in text
+    )
+    assert "Its outer end is not credible" not in text  # (the quoted rule says "outer end" as well)
+    assert text.endswith(f"The file's `fit_check`: “{tf.FAILED}”")  # the attribute itself, word for word
 
 
-def test_there_is_no_warning_for_a_fit_that_passed_a_file_with_no_fit_or_one_that_does_not_say():
+def test_a_fit_that_fails_at_its_outer_end_is_warned_about_there_and_its_core_is_not_called_an_extrapolation():
+    text = tp.warning(profiles_of(check=tf.FAILED_OUTER))
+    assert text.startswith("**This fit fails run_db.py's own check: “failed: Te at rho_pol 1.10 is 140 eV”.** ")
+    assert "Its outer end is not credible: its T_e there can lie several times above the points" in text
+    assert "extrapolation" not in text
+    assert text.endswith(f"The file's `fit_check`: “{tf.FAILED_OUTER}”")
+
+
+def test_a_fit_that_fails_both_clauses_gets_both_pieces_of_advice():
+    text = tp.warning(profiles_of(check=tf.FAILED_BOTH))
+    assert "Its core is an extrapolation" in text and "Its outer end is not credible" in text
+    assert text.index("Its core is an extrapolation") < text.index("Its outer end is not credible")
+
+
+CORE = "Its core is an extrapolation, not a description of the core points"
+SILENT = "It may have failed silently: read the points, not the curve."
+
+
+@pytest.mark.parametrize(
+    "check, shown, verb, advice",
+    [
+        # A verdict spelt another way is still a verdict, and its clause still says what it says.
+        (f"{tf.CHECK_TEXT}: FAILED: Te on axis is 134 eV", "FAILED: Te on axis is 134 eV", "fails", CORE),
+        # An outcome nobody wrote a rule for, even one that reads well, is not "passed", and names no clause.
+        (f"{tf.CHECK_TEXT}: PASSED", "PASSED", "does not pass", SILENT),
+        (f"{tf.CHECK_TEXT}: ok", "ok", "does not pass", SILENT),
+        # The rule's description alone says "on axis" as well, and is no verdict that something failed there.
+        (tf.CHECK_TEXT, tf.CHECK_TEXT, "does not pass", SILENT),
+    ],
+)
+def test_a_fit_whose_outcome_is_anything_but_passed_is_warned_about(check, shown, verb, advice):
+    text = tp.warning(profiles_of(check=check))
+    assert text.startswith(f"**This fit {verb} run_db.py's own check: “{shown}”.** ")
+    assert advice in text
+    assert text.endswith(f"The file's `fit_check`: “{check}”")
+    assert (CORE in text) == (advice == CORE)  # the other advice is not given as well
+
+
+@pytest.mark.parametrize(
+    "check, ending",
+    [
+        ("", "The file's `fit_check` is empty."),
+        ("   ", "The file's `fit_check` is empty."),
+        (None, "The file has no `fit_check`."),
+        ("no fit", "The file's `fit_check`: “no fit”"),  # the words of a file with no fit, on a file that has one
+    ],
+)
+def test_a_fit_with_no_recorded_outcome_is_warned_about_and_does_not_pass(check, ending):
+    text = tp.warning(profiles_of(check=check))
+    assert text.startswith("**This fit does not pass run_db.py's own check: the file records no result.** ")
+    assert "It may have failed silently: read the points, not the curve." in text
+    assert text.endswith(ending)
+
+
+def test_there_is_no_warning_for_a_fit_that_passed_or_for_a_file_with_no_fit_to_warn_about():
     assert tp.warning(profiles_of(check=tf.PASSED)) is None
-    assert tp.warning(profiles_of(fit=False)) is None
-    assert tp.warning(profiles_of(check=None)) is None
+    assert tp.warning(profiles_of(check="passed")) is None
+    assert tp.warning(profiles_of(fit=False)) is None  # fit_check reads "no fit": nothing is drawn to warn about
+    assert not tp.check_failed(profiles_of(fit=False))
+    assert tp.check_failed(profiles_of(check=tf.FAILED)) and not tp.check_failed(profiles_of(check=tf.PASSED))
+
+
+def test_the_sentence_of_the_note_that_calls_the_core_an_extrapolation_is_found_among_decimals():
+    assert tp.extrapolation({"fit_note": f"{tf.FIT_NOTE} {tf.EXTRAPOLATION}"}) == tf.EXTRAPOLATION
+    assert tp.extrapolation({"fit_note": f"{tf.FIT_NOTE} {tf.WINDOW_NOTE}"}) == ""
+    assert tp.extrapolation({}) == "" and tp.extrapolation({"fit_note": None}) == ""
+
+
+def test_a_note_that_calls_the_core_an_extrapolation_gets_a_caption_even_when_the_check_passed():
+    found = profiles_of(extrapolation=True)
+    assert tp.warning(found) is None  # the check passed
+    notes = tp.notes(found, FITS_WINDOW, "rho_pol")
+    assert notes[1].startswith("Fit: ") and notes[3].startswith("ρ_pol = ")
+    assert notes[2] == (
+        f"The fit's core is an extrapolation: the file's `fit_note` says “{tf.EXTRAPOLATION}” "
+        "Read the points there, not the curve."
+    )
+    # None for a note that does not say so, and none for a file with no fit to be an extrapolation of.
+    assert not [n for n in tp.notes(profiles_of(), FITS_WINDOW, "rho_pol") if "extrapolation" in n]
+    nothing = tp.notes(profiles_of(fit=False, extrapolation=True), FITS_WINDOW, "rho_pol")
+    assert not [n for n in nothing if "extrapolation" in n]
+
+
+def test_a_fit_that_failed_at_its_outer_end_and_whose_core_is_an_extrapolation_hears_both():
+    found = profiles_of(check=tf.FAILED_OUTER, extrapolation=True)
+    assert "Its outer end is not credible" in tp.warning(found)
+    assert any(n.startswith("The fit's core is an extrapolation") for n in tp.notes(found, FITS_WINDOW, "rho_pol"))
 
 
 def test_the_points_note_counts_what_each_system_read_and_says_a_zero_is_no_measurement():
@@ -510,6 +676,19 @@ def test_the_caption_says_when_the_pages_window_is_not_the_one_the_fit_was_made_
     assert "The page's window is 1.1–1.3 s, so the points and the fit are not over the same pulses." in other
     for same in (Target(1.0, 1.4), Target(1.0 + 5e-8, 1.4), None, Target(float("nan"), float("nan"))):
         assert "page's window" not in tp.notes(found, same, "rho_pol")[1]
+
+
+def test_the_text_of_an_exception_in_the_file_is_escaped_for_markdown_in_the_captions():
+    """``fit_status`` and ``efit`` are exceptions' texts, which can hold brackets, asterisks, dollars and backticks."""
+    status = "failed: KeyError: 'rho_pol' $a$ and $b$ *x* `y`"
+    note = tp.notes(profiles_of(fit=False, fit_status=status), FITS_WINDOW, "rho_pol")[1]
+    assert note == f"No fit in this file ({tp._escape(status)})."
+    assert all(f"\\{char}" in note for char in "$*`_")
+
+    found = profiles_of(efit=False, fit=False)
+    found.attrs["efit"] = "no EFIT tree could be opened (TreeNODATA [*] $x$)"
+    first = tp.notes(found, FITS_WINDOW, "rho_pol")[0]
+    assert "since no EFIT tree could be opened (TreeNODATA \\[\\*\\] \\$x\\$): they are not drawn" in first
 
 
 def test_a_file_with_no_fit_says_why_in_the_files_words():
@@ -674,7 +853,8 @@ def test_the_page_offers_only_this_plot_for_the_file_and_draws_it_with_its_notes
     assert not app.warning  # the fit passed its check
 
     (fig,) = charts(app)
-    assert [t.name for t in fig.data if t.showlegend is not False] == ["edge TS", "core TS", FIT, "separatrix"]
+    assert [t.name for t in fig.data if t.showlegend is not False] == ["edge TS", "core TS", FIT]
+    assert [s.name for s in fig.layout.shapes if s.showlegend] == ["separatrix"]  # and the line of every row is hers
 
     shown = captions(app)
     assert any(c.startswith("Window 1.0000–1.4000 s") for c in shown)
@@ -699,10 +879,43 @@ def test_the_page_says_when_its_window_is_not_the_fits_and_cuts_the_points_to_it
 def test_a_fit_that_fails_its_check_is_drawn_under_a_warning_that_quotes_the_check(tree):
     app = open_view(tree(window=tf.WINDOW, check=tf.FAILED))
     (warning,) = [w.value for w in app.warning]
-    assert warning.startswith("**This fit fails run_db.py's own check: Te on axis is 134 eV.**")
-    assert tf.FAILED in warning
+    assert warning.startswith("**This fit fails run_db.py's own check: “failed: Te on axis is 134 eV”.** ")
+    assert CORE in warning and tf.FAILED in warning
     (fig,) = charts(app)
     assert FIT in [trace.name for trace in fig.data]
+
+
+def test_a_fit_that_fails_at_its_outer_end_is_warned_about_there_on_the_page(tree):
+    app = open_view(tree(window=tf.WINDOW, check=tf.FAILED_OUTER))
+    (warning,) = [w.value for w in app.warning]
+    assert "Its outer end is not credible" in warning and "extrapolation" not in warning
+    assert tf.FAILED_OUTER in warning
+
+
+def test_a_verdict_spelt_another_way_an_unknown_outcome_and_an_empty_one_are_all_warned_about_on_the_page(tree):
+    """The page does not take what it cannot read for a pass: a file with a fit is warned about unless it says
+    ``passed``."""
+    app = open_view(tree(window=tf.WINDOW, check=f"{tf.CHECK_TEXT}: FAILED: Te on axis is 134 eV"))
+    (warning,) = [w.value for w in app.warning]
+    assert warning.startswith("**This fit fails run_db.py's own check: “FAILED: Te on axis is 134 eV”.** ")
+    assert CORE in warning
+
+    app = open_view(tree(window=tf.WINDOW, check=f"{tf.CHECK_TEXT}: ok"))
+    (warning,) = [w.value for w in app.warning]
+    assert "does not pass run_db.py's own check: “ok”" in warning and SILENT in warning
+
+    app = open_view(tree(window=tf.WINDOW, check=""))  # the attribute is there, and empty
+    (warning,) = [w.value for w in app.warning]
+    assert warning.startswith("**This fit does not pass run_db.py's own check: the file records no result.** ")
+    assert warning.endswith("The file's `fit_check` is empty.")
+
+
+def test_a_fit_that_passed_but_whose_core_is_an_extrapolation_is_captioned_and_not_warned_about(tree):
+    app = open_view(tree(window=tf.WINDOW, extrapolation=True))
+    assert not app.warning
+    assert f"The fit's core is an extrapolation: the file's `fit_note` says “{tf.EXTRAPOLATION}” " in " ".join(
+        captions(app)
+    )
 
 
 def test_the_warning_sits_above_the_figure_and_the_caption_below_it(tree):
@@ -730,7 +943,7 @@ def test_a_shot_whose_fit_failed_draws_the_points_and_says_there_is_no_fit(tree)
     )
     assert not app.warning
     (fig,) = charts(app)
-    assert {trace.name for trace in fig.data} == {"core TS", "separatrix"}
+    assert {trace.name for trace in fig.data} == {"core TS"} and len(fig.layout.shapes) == 3
     assert "No fit in this file (failed: ValueError: No edge Thomson data!)." in captions(app)
     assert any("no edge TS in this file" in c for c in captions(app))
 
@@ -738,7 +951,7 @@ def test_a_shot_whose_fit_failed_draws_the_points_and_says_there_is_no_fit(tree)
 def test_a_file_with_no_core_draws(tree):
     app = open_view(tree(window=tf.WINDOW, core=False))
     (fig,) = charts(app)
-    assert {trace.name for trace in fig.data} == {"edge TS", FIT, "separatrix"}
+    assert {trace.name for trace in fig.data} == {"edge TS", FIT}
     assert any("no core TS in this file" in c for c in captions(app))
 
 
@@ -847,6 +1060,21 @@ def test_the_statistics_page_says_so_when_no_shot_has_a_file_with_traces(tree):
 def test_the_traces_module_names_the_diagnostics_a_trace_can_come_from():
     assert traces.SOURCES == ("apd", "phantom", "asp", "fsp")
     assert set(traces.SOURCES) < set(catalog.DIAGNOSTICS) and "thomson_scattering" not in traces.SOURCES
+
+
+def test_a_diagnostic_without_traces_is_refused_not_answered_with_no_channels():
+    with pytest.raises(ValueError, match="'thomson_scattering' has no traces to take"):
+        traces.channels(tf.thomson_dataset(), "thomson_scattering")
+
+
+def test_the_status_table_lines_up_its_columns_for_the_longest_diagnostic_name(tree, apd_dataset_path, capsys):
+    from fusion_ui import cli
+
+    tree(window=tf.WINDOW)  # a Thomson scattering file beside the fixture's APD one: both are indexed
+    cli.main(["status"])
+    rows = [line for line in capsys.readouterr().out.splitlines() if line.startswith("  cmod ")]
+    assert {line.split()[1] for line in rows} == {"apd", "thomson_scattering"}
+    assert len({line.index(" raw ") for line in rows}) == 1  # the kind column starts in one place
 
 
 # ---------------------------------------------------------------------------

@@ -30,12 +30,29 @@ CHECK_TEXT = (
     "0.5 keV or ne below 0.5e20 m^-3 on axis, means 'something must have silently failed'"
 )
 PASSED = f"{CHECK_TEXT}: passed"
-FAILED = f"{CHECK_TEXT}: failed: Te on axis is 134 eV"
+FAILED = f"{CHECK_TEXT}: failed: Te on axis is 134 eV"  # the clause on axis
+FAILED_OUTER = f"{CHECK_TEXT}: failed: Te at rho_pol 1.10 is 140 eV"  # the clause at the grid's outer end
+FAILED_BOTH = f"{CHECK_TEXT}: failed: Te at rho_pol 1.10 is 140 eV; Te on axis is 134 eV"
 
 CAVEAT = (
     "From the C-Mod_Analysis README: it is highly recommended to talk with the diagnostician who collected the data "
     "before using it in a public forum. The Thomson scattering data were collected by Jerry Hughes "
     "(jwhughes@psfc.mit.edu)."
+)
+
+#: ``fit_note`` as ``tools/mfe/get_thomson_scattering.py`` writes it: what the fit's pre-filter drops, what ``fit_reg``
+#: names, and then a sentence on this file's window, which says the fit's core is an extrapolation when no core T_e
+#: inside rho_pol 0.2 is 1 keV or more.
+FIT_NOTE = (
+    "The fit is C-Mod_Analysis' edge fit: edge and core TS together, after cmod_tools.prefit_filter, which among other "
+    "cuts drops core Te below 1 keV and ne below 0.5e20 m^-3 inside rho_pol 0.2, and Te below 100 eV inside rho_pol "
+    "0.95. fit_reg names the mtanh coefficients set to zero: [8] leaves the profile's outer side linear, [7, 8] makes "
+    "it flat."
+)
+WINDOW_NOTE = "In the window, 12 of the 30 core Te points inside rho_pol 0.2 are 1 keV or more."
+EXTRAPOLATION = (
+    "In the window, 0 of the 30 core Te points inside rho_pol 0.2 are 1 keV or more: the fit has no Te inside rho_pol "
+    "0.2, so its Te and pe there are an extrapolation."
 )
 
 FIT_SETTINGS = {
@@ -85,6 +102,7 @@ def thomson_dataset(
     unmapped=False,
     efit=True,
     fit_r_mid=True,
+    extrapolation=False,
 ):
     """The dataset of one file, over a shot of 2 s.
 
@@ -93,7 +111,8 @@ def thomson_dataset(
     attribute. ``zeros`` plants readings of 0 with junk errors, which a real file has wherever a system measured nothing;
     ``unmapped`` plants pulses with no ρ_pol, outside the EFIT time base. ``efit=False`` is a shot whose EFIT tree could
     not be opened: no point has a ρ_pol or an R_mid, and there is no ``R_mid_sep``. ``fit_r_mid=False`` leaves the
-    fit's ``fit_R_mid`` out.
+    fit's ``fit_R_mid`` out. ``extrapolation`` makes ``fit_note`` call the fit's core an extrapolation, as the files
+    do where no core T_e inside rho_pol 0.2 reaches 1 keV.
     """
     times = np.round(np.arange(0.0, 2.0, PULSE), 6)
     nt = times.size
@@ -176,7 +195,7 @@ def thomson_dataset(
         "fit_function": "cmod_tools.get_cmod_kin_profs",
         "fit_settings": json.dumps(dict(FIT_SETTINGS, frac_err=frac_err)),
         "fit_reg": "ne [7, 8], Te [7, 8], pe [7, 8]" if fit else "no fit",
-        "fit_note": "The fit is C-Mod_Analysis' edge fit: edge and core TS together, after cmod_tools.prefit_filter.",
+        "fit_note": f"{FIT_NOTE} {EXTRAPOLATION if extrapolation else WINDOW_NOTE}",
         "fit_check": check if fit else "no fit",
         "two_point_model": "power_balance.Teu_2pt_model(shot, t_start, t_end, lambdaq_opt=1): ok",
         "cmod_analysis_commit": "d6a646625e92399dd4c8b534e9c93001754a7c91",
