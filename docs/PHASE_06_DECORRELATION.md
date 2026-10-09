@@ -53,10 +53,13 @@ equal on the orchestrator's rerun. Its production run started at 11:29, with
 the user's permission. The user answered open questions 6–8, and both repos
 were pushed (fusion_scripts 382ca37, fusion_ui 3c15d3a).
 
-That fusion_scripts push carried 382ca37, which the orchestrator had not
-reviewed: its message is J9's fusion_scripts work, committed on main rather
-than on J9's branch. The user decides what happens to it. J9, J12b and J12c,
-the density scan's TS profiles as a PDF for the user's PI, are under way.
+That fusion_scripts push carried 382ca37, J9's fusion_scripts work committed
+on main rather than on J9's branch, which the orchestrator had not reviewed.
+The user then allowed reading and writing fusion_scripts' main, and the review
+found the commit correct: seven lines, a README section on `pipeline.py` and
+the TRACK comment, so it stays. J9, J12b and J12c are under way. J12c is the
+TS profiles of the density scan, the nine 1160616 shots, as a PDF for the
+user's PI.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -690,7 +693,7 @@ Built, tested and pushed to main on 2026-10-07, and deployed the same day (JD).
 | J9 | Docs | **Haiku 4.5** | both | J8, J11, J5c | — |
 | J12a | Thomson scattering data: fetch and fit on mfe, one file per shot | **Opus 5.5** | fusion_scripts + mfe | the user's request (2026-10-09) | J8, J9 |
 | J12b | `thomson_scattering` as a diagnostic, and its single-shot plot | **Sonnet 5.5** | fusion_ui + experimental_database | J12a's sample files | J9 |
-| J12c | The density scan's TS profiles as a PDF, for the user's PI | **Sonnet 5.5** | fusion_scripts | J12a | J9, J12b |
+| J12c | The density scan's TS profiles (the nine 1160616 shots) as a PDF, for the user's PI | **Sonnet 5.5** | fusion_scripts | J12a | J9, J12b |
 
 **Why these models.** `PLAN.md` splits work by how expensive a wrong decision
 is to undo, not by how hard it is, and so does this table.
@@ -2106,6 +2109,8 @@ the report lists the shots with no TS.
 
 **The request (the user, 2026-10-09).** A PDF with the TS profiles of every
 shot in the density scan, for their PI, while the user cannot reach the UI.
+**The density scan is the nine shots of run day 1160616.** The first launch
+took the 50 shots of `density_scan/results.json`, and the user stopped it.
 
 **Deliver:**
 
@@ -2113,8 +2118,9 @@ shot in the density scan, for their PI, while the user cannot reach the UI.
   - It runs as `python -m density_scan.thomson_profiles` from the repository
     root, in the paper's venv (`~/Git/fusion_scripts/.venv`). That venv has
     `figure_provenance`, and the app's does not.
-  - **The shots:** the 50 in `config.DENSITY_SCAN_RESULTS`
-    (`density_scan/results.json`).
+  - **The shots:** the nine of run day 1160616 in the discharge DB: 1160616009,
+    011, 016, 017, 018, 022, 025, 026 and 027. Read them from the DB, by run
+    day.
   - **The data:** each shot's file is read from
     `config.DATA_FOLDER / "thomson_scattering"`, in J12a's layout, which the
     module docstring of `tools/mfe/get_thomson_scattering.py` documents.
@@ -2128,19 +2134,15 @@ shot in the density scan, for their PI, while the user cannot reach the UI.
   - Each is saved through `figure_provenance.save`, never `fig.savefig`, into
     `density_scan/figures/thomson_scattering/`.
 
-  There are three kinds:
-  1. **An overview.**
+  There are two kinds:
+  1. **An overview,** the density scan on one page.
      - Every fitted ne, Te and pe profile against ρ_pol, coloured by f_GW, with
-       the separatrix marked.
+       the separatrix marked. The legend gives each shot's f_GW, n̄_e and
+       window.
      - A fit that fails run_db.py's check (`fit_check`) is drawn dashed.
      - A second row is zoomed to the edge, ρ_pol 0.85–1.1.
-  2. **A table.** One row per shot:
-     - f_GW and its source, n̄_e, I_p and the window;
-     - the edge and core channels;
-     - the fit's status and check, and the two-point model's Te_sep.
-
-     A shot without a file reads "no TS".
-  3. **One page per shot,** in f_GW order, with ne, Te and pe against ρ_pol: the
+     - A shot without a file, or without a fit, is named under the figure.
+  2. **One page per shot,** in f_GW order, with ne, Te and pe against ρ_pol: the
      whole profile on top, and the edge (0.85–1.1) below.
      - **The points:** edge and core points in the window
        (`window_t_start..window_t_end`), with error bars, told apart by marker.
@@ -2159,7 +2161,7 @@ shot in the density scan, for their PI, while the user cannot reach the UI.
   Every page has a footer with the file's `caveat` and its C-Mod_Analysis
   commit.
 - **The bundle.** `pdfunite`, which the laptop has from poppler, joins the pages
-  in that order into `thomson_profiles_density_scan.pdf`, in the same folder.
+  in that order into `thomson_profiles_1160616.pdf`, in the same folder.
   It is only a concatenation of figures, each of which has its own
   `provenance.json` entry. The module docstring says so.
 - **Tests,** hermetic, on synthetic files of J12a's layout. Reuse
@@ -2174,19 +2176,21 @@ shot in the density scan, for their PI, while the user cannot reach the UI.
 
 **Rules:**
 
-- Work in `~/Git/fusion_scripts-j12c`, made with
-  `git -C ~/Git/fusion_scripts worktree add ~/Git/fusion_scripts-j12c -b phase06/j12c 18bda52`.
+- Work in `~/Git/fusion_scripts-j12c`, on branch `phase06/j12c`, which is
+  already there at main's 382ca37.
 - The data are read-only, and nothing is written to the server.
 
 **Accept when:**
 
 - both venvs' suites are at their baselines: the new tests pass in the paper's
   venv and are skipped in the app's;
-- the script runs on the 15 samples in `~/Data/alcator/thomson_scattering/`.
-  Two of them are in the scan, 1160616027 and 1140827019. The rest of the
-  scan's files come with the production run, and the orchestrator runs the
-  script on all 50 once they are on the laptop;
-- the bundle opens, with the overview, the table, and one page per scan shot
+- the script runs on what `~/Data/alcator/thomson_scattering/` holds.
+  - At first that is J12a's 15 samples, of which only 1160616027 is in the
+    scan.
+  - The orchestrator copies the other eight in from the server when the
+    production run reaches them, about 12:10.
+  - Use them if they are there before you finish.
+- the bundle opens, with the overview and one page for each of the nine shots
   that has a file;
 - on one shot, the number of points drawn equals the number in the file's
   window with `ne > 0`.
