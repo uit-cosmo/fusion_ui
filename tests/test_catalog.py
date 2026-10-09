@@ -43,7 +43,9 @@ def test_indexes_raw_and_preprocessed(conn, data_folder, discharge_db):
     assert stats.seen == 5  # 4 apd + 1 asp; notes.txt and apd_broken.nc are not
     assert stats.inserted == 5
     assert stats.skipped == 2
-    assert stats.missing_folders == ("phantom",)
+    # The fixture tree has no phantom folder and no thomson_scattering one, and a missing folder is reported, in the
+    # diagnostics' order, not an error.
+    assert stats.missing_folders == ("phantom", "thomson_scattering")
 
     indexed = rows(conn)
     assert (1160616027, "apd", 0) in indexed

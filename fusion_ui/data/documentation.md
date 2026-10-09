@@ -613,3 +613,83 @@ nothing and changes no stored number.
 A pixel the cuts leave out keeps its value in the product and in the ledger, and the Multi shot page's means
 include it. All seven panels share one arrow scale, set by the three 2DCA tracks. The arrows of the TDEs off
 the record are coloured by `cc_tde`, and all others by the pixel's events.
+
+## Thomson scattering profiles
+
+The Single shot page draws the Thomson scattering (TS) profiles of a shot from `thomson_scattering_<shot>.nc`
+(`fusion_ui/plots/thomson_profiles.py: figure`). Nothing is fitted in the app: the file holds the measurements
+and the fit, and the page draws them, working out only the p_e of the points
+(`fusion_ui/plots/thomson_profiles.py: Points.pe`) and where the separatrix is
+(`fusion_ui/plots/thomson_profiles.py: separatrix`). fusion_scripts makes the file on mfe, where the tree and the
+fitting code are (`tools/mfe/get_thomson_scattering.py: make`). This section was read against that script at
+fusion_scripts `30eb16d`, and against what it says of C-Mod_Analysis `d6a6466`, mfe's checkout.
+
+### What is measured
+
+Two systems, the edge and the core, read n_e and T_e at each of their channels (`edge_Z`, `core_Z`) at every laser
+pulse, 10 to 20 ms apart. The file keeps each system's values as the tree has them over the whole shot, with the
+tree's 1σ errors: `edge_ne`, `edge_ne_err`, `edge_Te`, `edge_Te_err`, and the same for the core. Pulses of the
+two systems within 1 ms of each other share one entry of `time`, at the edge's stamp
+(`tools/mfe/get_thomson_scattering.py: align_pulses`).
+
+**A 0 is no measurement.** n_e and T_e are almost always 0 together, and the errors there mean nothing, so the
+page draws only the points with n_e > 0, and a point whose error is missing or not positive without a bar. The
+file holds no p_e of the measurements: the page draws e·n_e·T_e at each point, with the two errors in quadrature.
+
+### What each axis means
+
+Each point has a ρ_pol and an R_mid for its own pulse, from the EFIT tree the attribute `efit_tree` names (EFIT20,
+or ANALYSIS where EFIT20 has none) at the EFIT time nearest the pulse
+(`tools/mfe/get_thomson_scattering.py: map_channels`). A pulse outside that tree's time base has neither, and the
+page leaves its points out and says how many.
+
+- **ρ_pol** is √ψ_N, the normalised poloidal flux coordinate: 0 on the magnetic axis and 1 at the separatrix.
+- **R_mid** is the major radius at which the point's flux surface crosses the outboard midplane, in metres. It is
+  not where the channel looks: `edge_R` and `edge_Z` say that. The fit and the separatrix are at the window's
+  middle time, but each point is at its own pulse, so a plasma that moves within the window shows as scatter
+  against them. The separatrix on this axis is `R_mid_sep`, or the fit's R_mid at ρ_pol = 1 where the file has
+  no scalar.
+
+### What is fitted
+
+`tools/mfe/get_thomson_scattering.py: fit_profiles` calls `cmod_tools.py: get_cmod_kin_profs` of C-Mod_Analysis
+with the settings of that repository's `run_db.py`, which the file keeps as `fit_settings`. It fits Osborne mtanh
+profiles to the edge and core points of the discharge window together: **one profile for the whole window**, not
+one per pulse, on a grid of 1000 values of ρ_pol from 0 to 1.1, with R_mid on it. The window is the discharge
+DB's, in `window_t_start` and `window_t_end`: the legend gives it, and the caption says when the page's window is
+another. A shot whose fit failed has no fit and says why in `fit_status`; every shot with core TS only reads
+"No edge Thomson data!". The page draws the fit over its whole range, with no band.
+
+What to distrust in it:
+
+- **The core is often an extrapolation.** The fit drops core T_e below 1 keV, and n_e below 0.5e20 m⁻³, inside
+  ρ_pol 0.2 (`cmod_tools.py: prefit_filter`), so where the core points are lower the fit has none to rest on.
+  `fit_note` says so when no core T_e inside ρ_pol 0.2 reaches 1 keV, and the page captions it whether or not the
+  check below passed: that is 15 of the 115 files of 2026-10-09, five of which pass the check. On 1160616027 the
+  fit reads 134 eV on axis where the core points read about 900 eV.
+- **`fit_check`** is run_db.py's own test (`tools/mfe/get_thomson_scattering.py: run_db_check`): T_e above 100 eV
+  at the grid's outer end, or T_e below 0.5 keV or n_e below 0.5e20 m⁻³ on axis, means "something must have
+  silently failed". A fit that does not pass is drawn all the same, with a warning above the figure that quotes the
+  check and says what the clause that failed means. **On axis**, the core is an extrapolation (12 of the 115 files).
+  **At the outer end**, the outer end is not credible (8 files): there the fit's T_e at ρ_pol 0.95 to 1.05 was 4
+  to 6 times the median of the points on three of them, and on one it ran on to about 51 keV past the last point.
+  The page takes nothing it cannot read for a pass: a file with a fit is warned about unless its check says
+  `passed`, whether the attribute is empty, missing, spelt another way or an outcome the page does not know.
+- **The errors.** With `frac_err`, which `cmod_tools.py: get_cmod_kin_profs` is given (`fit_settings` keeps it),
+  the fit's n_e and T_e errors are 20% of the fit by construction, and `fit_pe_err` adds a density to a
+  temperature, so it is no error of p_e. That is why the page draws no band.
+- **The pressure fit**, `fit_pe`, is a fit of its own and not e·n_e·T_e of the other two, so compare it with the
+  pressure points drawn from the measurements. At ρ_pol 0.97 to 1 it lay 3.5 times above the median of the edge
+  points on 1160616027, and within 10% of it on 1140827019 and 1091216009 (the samples, read on 2026-10-09).
+- **The scrape-off layer** is flat or linear by construction: `fit_reg` names the mtanh coefficients the fit sets
+  to zero. It is no measurement of the SOL profile.
+- **The two-point model.** `Te_sep_2pm` and `lambda_q_2pm` come from `power_balance.py: Teu_2pt_model`, which falls
+  back silently where the main bolometer has no data, or where B_t and B_p at the outboard midplane cannot be
+  computed; `two_point_model` names the fallback. The page does not draw them: they are in the list under the
+  figure.
+
+### The diagnostician's caveat
+
+The C-Mod_Analysis README asks that the diagnostician be consulted before the data are used in a public forum. The
+Thomson scattering data were collected by Jerry Hughes, and the page repeats the caveat under every figure
+(`caveat`, in the file).

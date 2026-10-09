@@ -57,13 +57,28 @@ def discharge_for_shot(shot):
 
 
 def available_targets(row):
-    """``{diagnostic: (has_raw, has_preprocessed)}`` for one shot_table row."""
+    """``{diagnostic: (has_raw, has_preprocessed)}`` for one shot_table row: the diagnostics a trace can be taken
+    from (``traces.SOURCES``), not every diagnostic the index holds."""
     targets = {}
     for diagnostic in catalog.DIAGNOSTICS:
+        if diagnostic not in traces.SOURCES:
+            continue
         availability = row[diagnostic] if diagnostic in row else ""
         if availability:
             targets[diagnostic] = ("R" in availability, "P" in availability)
     return targets
+
+
+def with_traces(table):
+    """``table`` cut to the shots that have a file a trace can come from (``traces.SOURCES``).
+
+    A shot with only a Thomson scattering file is on the shot browser and the single-shot page, but it has nothing
+    to add here, and the page would open on the lowest shot number, as often as not one of those.
+    """
+    have = [diagnostic for diagnostic in traces.SOURCES if diagnostic in table.columns]
+    if table.empty or not have:
+        return table
+    return table[(table[have] != "").any(axis=1)]
 
 
 def default_picker(table):
@@ -123,7 +138,9 @@ def add_picker(table):
     with st.expander("Add traces", expanded=not basket):
         if table.empty:
             st.warning(
-                "The shot index is empty — run a rescan on the Shot browser page.",
+                "No shot with traces (imaging pixels or probe channels) is indexed. A Thomson scattering file holds "
+                "profiles, not traces: the Single shot page draws it. If files were added, run a rescan on the Shot "
+                "browser page.",
                 icon="⚠️",
             )
             return
@@ -270,7 +287,7 @@ def main():
 
     st.title("Statistics")
 
-    table = ui.cached_shot_table()
+    table = with_traces(ui.cached_shot_table())
 
     # ---- sidebar ---------------------------------------------------------
     specs = statistics.all_specs()

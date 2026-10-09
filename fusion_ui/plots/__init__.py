@@ -14,6 +14,7 @@ from fusion_ui.plots import (  # noqa: F401 - imported to register
     raw,
     dead_pixels,
     stored_mask,
+    thomson_profiles,
     spectra,
     velocity_tde,
     two_dca,
@@ -45,11 +46,15 @@ from fusion_ui.plots import (  # noqa: F401 - imported to register
 # (fusion_ui.plots.<key>.<Key>Params) because a precompute pool worker receives
 # them pickled, and because the class's module and name are part of every cache
 # key -- the three keys and those names are as permanent as any other.
+#
+# thomson_profiles is live, unchained and the only spec on its diagnostic (thomson_scattering), so it sits with
+# the other live specs, before the products that tests hold to the end.
 __all__ = [
     "probe",
     "raw",
     "dead_pixels",
     "stored_mask",
+    "thomson_profiles",
     "spectra",
     "velocity_tde",
     "two_dca",

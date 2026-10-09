@@ -209,6 +209,9 @@ def main():
         key="shot_rows",
         column_config={
             "shot": st.column_config.NumberColumn("shot", format="%d"),
+            "thomson_scattering": st.column_config.TextColumn(
+                "TS", help="Thomson scattering: R = the file is here (raw only)"
+            ),
             "I_p": st.column_config.NumberColumn("I_p [MA]", format="%.2f"),
             "n_e_bar": st.column_config.NumberColumn(
                 "n_e [10²⁰ m⁻³]", format="%.2f", help="line-averaged density"
