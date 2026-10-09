@@ -28,6 +28,20 @@ the analysis code in [`imaging_methods`](https://github.com/Sosnowsky/imaging-me
   window, labelled with magnetic coordinates. Live and uncached; the cached
   Duration time (PSD fit) on the single-shot page stays the scalar-producing
   spectrum.
+- **Fields** — the velocity field of every method for one shot, and the
+  conditional average behind each pixel's number. One panel per method (the 2DCA
+  by its maximum and by its centroid, the 2DCC, and the three- and two-point
+  time delay estimates, off the record and off the conditional average), on one
+  scale, as arrows or as v_R and v_Z maps. Click a pixel for the average at
+  chosen lags, the tracks and the numbers. The page reads what batch jobs stored
+  and never computes: it names what is missing, with the `fusion-ui precompute`
+  command that fills it.
+- **Documentation** — what every quantity means, how it is computed and how the
+  quantities depend on one another: the path from the raw file to the record,
+  the products and their settings, every scalar name with its unit and its
+  sources, the Fields page's cuts, and a diagram of the dependencies. The prose
+  is [`fusion_ui/data/documentation.md`](fusion_ui/data/documentation.md); the
+  tables, the diagram and the numbers it quotes are read from the code.
 
 ## Status
 
@@ -37,9 +51,16 @@ built on — parameter forms generated from a dataclass, a content-addressed
 result cache, and the scalar store. Phase 03 ported the twelve analyses; phase
 04 added the multi-shot scatter (one scalar against shot number, f_GW, density
 or I_p, coloured by confinement mode, click a point to open that shot) and
-`fusion-ui precompute` for overnight cache fills. Phase 05 (hardening) is next.
-See [`docs/PLAN.md`](docs/PLAN.md) for the architecture, the database schema,
-and the phase order.
+`fusion-ui precompute` for overnight cache fills. Phase 05 (hardening) is
+ongoing: multi-pixel mode, the Statistics page and `prune` are in, but the
+process pool for page computes has not landed, so nothing slow may start from a
+page. Phase 06 (decorrelation fields) is done, except that J12b, the Thomson
+scattering profiles on the single-shot page, is merged and not yet deployed. It
+added the Fields and Documentation pages, three products computed in batch (the
+2DCA at every pixel, every method's velocity field, and the blob parameters),
+`precompute` for several plots on several workers, and dead-pixel masks
+estimated at preprocessing. See [`docs/PLAN.md`](docs/PLAN.md) for the
+architecture, the database schema, and the phase order.
 
 ## Adding a run day
 
@@ -224,7 +245,14 @@ cp .env.example .env          # then edit for your machine
 fusion-ui init-db          # create or migrate the app's SQLite database
 fusion-ui rescan           # index the data tree into `shots` (cron this)
 fusion-ui import-results   # seed `scalars` from density_scan/results.json (once)
-fusion-ui precompute PLOT  # run a plot's compute over every shot to warm the cache
+fusion-ui precompute PLOT [PLOT …]  # run plots' compute over the shots that have a file they accept, to warm the cache
+    --shot N               #   only this shot (repeatable; adds to --run-day)
+    --run-day D            #   only the shots of this run day, its first 7 digits (repeatable; adds to --shot)
+    --workers N            #   N processes over the shots, largest file first (default 1, in this process)
+    --stale                #   recompute in place only the results whose input file or upstream changed
+    --params-json PATH     #   other parameters than the defaults: one plot's complete set, or only the fields to change
+    --force                #   recompute even when a result is cached
+    --nice N               #   niceness of the computes (default 10 with --workers above 1)
 fusion-ui prune --plot KEY # count, then (with --yes) delete one plot's stored results
                            # (with --scalar NAME, repeatable: only those names' scalars)
 fusion-ui backfill-dt      # measure phantom frame intervals into `shots.dt`
@@ -233,6 +261,46 @@ fusion-ui status           # resolved paths, index and result counts
 
 New shots appear in the browser only after a rescan; the server runs it on cron
 and the browser page has a button for it.
+
+Several plots named in one `precompute` run in dependency order within each shot,
+so a shot's bank of averages is computed once. `--stale` does not combine with
+`--force` or `--retry-failed`. `--machine`, `--pixel X Y` and `--retry-failed`
+are the other flags: `fusion-ui precompute --help` lists them all.
+
+## Recomputing
+
+A result is computed once per shot and parameter set, and kept. The first fill of
+the decorrelation products of a run day, on the server (8 cores, shared with the
+service, so at most 7 workers):
+
+```bash
+fusion-ui precompute method_fields blob_parameters --run-day 1160616 --workers 7
+```
+
+Both products read the bank of conditional averages, `pixel_averages`, which this
+computes on the way. The bank is **batch only**: no page computes it, because it
+can take most of an hour a shot. The single-shot and Fields pages show it from
+the cache, or name the `fusion-ui precompute` command that fills it. What to run
+when something changes:
+
+| What changed | Run | Cost |
+|---|---|---|
+| A shot was preprocessed | `fusion-ui rescan`, then `fusion-ui precompute method_fields blob_parameters --shot N` | up to about an hour a shot, the bank first |
+| Tracking, TDE or blob code (`pipeline.py`, `velocity_estimation`) | `fusion-ui precompute method_fields blob_parameters --force --workers 7`; the stored banks are reused | minutes a shot |
+| The 2DCA itself (`imaging_methods.find_events_and_2dca`) | `fusion-ui precompute pixel_averages --force --workers 7`, then `fusion-ui precompute method_fields blob_parameters --stale --workers 7` | as a first fill |
+| A setting | Not a recompute: other parameters give new results beside the old ones, through `--params-json` or, for `method_fields` and `blob_parameters`, the single-shot form | — |
+| A shot with faster dynamics needs a shorter 2DCA window | A parameter set with a smaller `averages.window`, for that shot only: `fusion-ui precompute method_fields blob_parameters --shot N --params-json short.json`, with `{"averages": {"window": 30}}` in the file | as a first fill, for that shot |
+| A preprocessed file was rewritten (a corrected mask, say) | `fusion-ui rescan`, then `fusion-ui precompute pixel_averages method_fields blob_parameters --stale` | as a first fill |
+| One result looks wrong | Recompute it on the single-shot page (`method_fields` and `blob_parameters`), or `fusion-ui precompute PLOT --force --shot N` | — |
+
+A shorter window keeps more events, since single counting drops events closer
+than one window apart, and it narrows the lags a view can show. `--stale`
+compares the file modification time each result recorded with the one the index
+holds, so `rescan` comes first where a file changed.
+
+`method_fields` and `blob_parameters` can also be computed from the single-shot
+page, once their bank is cached, so a tracking setting can be tried on one shot
+without the command line.
 
 ## Tests
 
