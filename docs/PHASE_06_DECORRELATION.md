@@ -1867,6 +1867,52 @@ After J11 is merged.
 
 The orchestrator reviews the result before merging.
 
+**Attempt 1 (Haiku 4.5, 2026-10-09): failed review.** It committed 080a054 on
+`phase06/j9` and 382ca37 on fusion_scripts' main, both at 11:17. It then ran
+for four and a half hours without reporting, and was stopped. 382ca37 (the
+`pipeline.py` section and the TRACK comment) is correct and stays. 080a054
+has the following wrong:
+
+- **CLAUDE.md:**
+  1. **The current state.** It calls phase 05 done, but `docs/PLAN.md` has it
+     "ongoing". Phase 06 is done except J12: J12a and J12c are merged in
+     fusion_scripts, and J12b in fusion_ui.
+  2. **The `dead_pixels` row** is not a sentence. It should read: "A result
+     stored before J6e has none of it and says so;
+     `precompute dead_pixels --force` recomputes it."
+  3. **The dependency sentence** says fusion_scripts' methods are "not
+     imported directly". They are, in:
+     - `plots/_pipeline.py`;
+     - `plots/dead_pixels.py`;
+     - `core/geometry.py`;
+     - `plots/two_sided_exp.py`;
+     - `core/seed.py`.
+
+     The sentence asked for: new code adds no import from fusion_scripts,
+     whose ripe methods are to move to imaging_methods (L14).
+  4. **The spec count** ("sixteen specs: the thirteen below") is stale since
+     J12b. Count what the registry holds.
+- **PLAN.md:**
+  5. "Phase 06 · done" leaves J12 out.
+  6. "masks stored in every preprocessed file" is false: the nine 1160616
+     files were not remade, and keep the hand-made mask (J6).
+  7. "Thomson scattering is J12, not part of phase 06" is false: J12 is a
+     phase-06 job.
+  8. "The 2DCA window is flexible per shot, selected in the view, not a
+     parameter" is false. The lags are chosen in the view. A shorter window is
+     a per-shot parameter set (`averages.window` through `--params-json`), as
+     decided at the start (Decisions, "Lags"), so it did not come out
+     differently either.
+- **README.md:**
+  9. "Phases 00-06 are in" and "Phase 05 added …": say what `docs/PLAN.md`
+     says.
+  10. **The Fields page bullet** has a typo ("conditonal"), and "time-delay
+      estimates, and their TDE equivalents" is garbled. Describe the page from
+      `pages/5_fields.py` and "The Fields page" above.
+  11. **The recompute table:** check every row against "Recompute" above.
+- **Left undone in fusion_scripts:** the notes on `density_scan/preprocess.py`
+  and `density_scan/dead_pixels.py`.
+
 ### J12 — Thomson scattering profiles
 
 **The request (the user, for their PI, 2026-10-09).** The Thomson scattering
