@@ -11,7 +11,7 @@ this file and the files its job lists. `docs/PLAN.md` and `CLAUDE.md` still
 hold the app's architecture and conventions; this file adds to them and does
 not repeat them.
 
-Status, 2026-10-08: JD done. The dead-pixel view is deployed and cached for all
+Status, 2026-10-09: JD done. The dead-pixel view is deployed and cached for all
 111 raw shots ([Dead pixels](#dead-pixels-done-2026-10-07)), and G1, the user's
 check of the masks, is open. J0 done at 828 files: the user left the `_ca`
 group out of phase 06 (Decisions). J2a merged (e8d87f8): schema v4, `lookup`,
@@ -44,10 +44,15 @@ dead-pixel view on the puff window, the Documentation page, and the seed's
 `lx_f`, `ly_f`, `theta_f` pruned (none on the server, which never imported the
 seed; 11,640 rows from the laptop's ledger). The forced `dead_pixels`
 recompute is done: all 115 shots ok, each equal to its file's mask. The
-superseded 1140827 files were deleted on 2026-10-09. J8: the screenshots of the
-edge pixels and the new views are with the user, who is working away from the
-UI. J12, the Thomson scattering profiles the user's PI asked for, is under way:
-J12a first. Still to come: J8's answer, J9 and J12b.
+superseded 1140827 files were deleted on 2026-10-09. J8 closed on 2026-10-09:
+the edge pixels misbehave where the estimation is not usually run, as expected,
+and the tracks and the Documentation page read well. The user wants the app off
+fusion_scripts, the plan for which is in fusion_scripts (L14). J12a merged into
+fusion_scripts (30eb16d): 15 sample files of Thomson scattering, every check
+equal on the orchestrator's rerun. Its production run waits for the user, since
+the permission classifier stopped the orchestrator's write to the server. J9 is
+under way. Still to come: J9, J12a's production run, and J12b, once the user
+has answered open questions 6–8.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -1656,6 +1661,21 @@ websocket check must return `101`).
   quantity (J11).
 - Open: the edge pixels ((8, 6) reads −103 m/s by the centroid, (8, 3) 46).
 
+**The user's answers, 2026-10-09, from screenshots.** J8 is closed.
+
+- **The edge pixels.** They are garbage, as expected: the estimation is not
+  usually run there, so a method misbehaving there is not a finding. Nothing
+  changes. "Interior pixels only" and the paper's `reliable()` remove them
+  already.
+  - At (8, 6), the 2DCA maximum reads 543 m/s and the centroid −103.
+  - At (8, 3), the 2DCA maximum stays on the reference pixel and reads 0.
+- **The tracks in R and Z (J8a)** look good.
+- **The Documentation page (J11)** "looks amazing".
+- **The dependencies.** The page shows the app mixing imaging_methods with
+  fusion_scripts, which is the user's exploration repository. The app should
+  not depend on it, so the ripe methods move to imaging_methods. Not now: the
+  plan is fusion_scripts' `MIGRATION_TO_IMAGING_METHODS.md` (18bda52), L14.
+
 ### J8a — The trajectory on the lag strip · Sonnet 5.5 · fusion_ui
 
 The user wants each track's path in the R–Z plane. Today only the Tracks view
@@ -1823,7 +1843,10 @@ After J11 is merged.
   conventions. The `dead_pixels` row still says that 111 stored results
   predate the puff window. The server's were all recomputed on 2026-10-08, so
   say only that a result stored before J6e says so, and that
-  `precompute dead_pixels --force` recomputes it.
+  `precompute dead_pixels --force` recomputes it. Add one sentence where the
+  dependencies are listed: new code adds no import from fusion_scripts, whose
+  ripe methods are to move to imaging_methods
+  (`fusion_scripts/MIGRATION_TO_IMAGING_METHODS.md`, L14).
 - `PLAN.md`: phase 06 marked done, with the decisions that came out
   differently.
 - In fusion_scripts: `decorrelation/README.md` (the `pipeline.py` API, with
@@ -1963,6 +1986,74 @@ server go in their own folder, `thomson_scattering/`, beside `apd/`,
 0664 for the files, like `apd/`. It covers every shot in the discharge DB, and
 the report lists the shots with no TS.
 
+**Result (2026-10-09).** Merged into fusion_scripts at 30eb16d (efd2fc5 to
+4582ec8).
+
+- **What it added:**
+  - the two scripts;
+  - `tools/mfe/check_thomson_scattering.py`, the acceptance check, which can be
+    rerun on mfe;
+  - 19 hermetic tests.
+- **The samples:** 15 files.
+  - The three named shots.
+  - Twelve shots with core TS but no edge TS: 1120217022, ten of 1140228 and
+    1160929010. Their fit fails with "No edge Thomson data!", and the raw core
+    data are kept.
+  - Three DB shots have no TS at all (1120814028, 1140228024, 1150618033), and
+    get no file.
+- **The orchestrator's rerun:**
+  - all 15 open in the app's venv, every variable with units;
+  - the mfe check gives ALL EQUAL on all 15: raw points, fit and scalars,
+    exactly. With `frac_err=True` there is no Monte Carlo, so equality is the
+    test;
+  - the retriever, on 1140827019 and 1150618033 into a scratch folder, gives the
+    same report lines, and a file identical to the sample except for `created`
+    and `script_commit`;
+  - fusion_scripts' suite in the app's venv: 206 passed, with the same three
+    known gaps (`figure_provenance`, `seaborn`).
+- **The layout,** as J12b needs it.
+  - The module docstring of `tools/mfe/get_thomson_scattering.py` is the
+    reference.
+  - netCDF3, read with `engine="scipy"`. `time` is in seconds and is not
+    decoded.
+  - **The raw data:**
+    - `<sys>_ne`, `<sys>_Te` and their `_err`, each by `(time, <sys>_channel)`;
+    - `<sys>_rho_pol`, `<sys>_R_mid`, `<sys>_time`, `<sys>_R`, `<sys>_Z`.
+
+    **A 0 means no measurement.** Mask `ne > 0`: where it is 0, the errors are
+    junk.
+  - **Edge and core pulses** within 1 ms of each other share a `time` entry, at
+    the edge's stamp.
+  - **The fit,** only where it worked: `fit_ne`, `fit_Te`, `fit_pe` and their
+    `_err`, and `fit_R_mid`, on `rho_pol` (1000 points, 0 to 1.1).
+  - **The scalars:** `Te_sep_2pm`, `lambda_q_2pm` and `R_mid_sep`.
+  - **The attributes** `fit_status`, `fit_check` (run_db.py's own test),
+    `fit_note`, `fit_reg`, `two_point_model` and `caveat`.
+- **What the fits get wrong** (the agent's findings, not hidden in the files):
+  - **The core is often an extrapolation.** `prefit_filter` drops core Te below
+    1 keV inside ρ 0.2. So 1160616027's fit reads 134 eV on axis where the
+    points read 921 eV, and 1091216009's reads 180 eV. run_db.py's check flags
+    both.
+  - **1091216009's innermost core channel** reads half of its neighbour's Te,
+    steadily. That looks like calibration.
+  - **The errors.** The ne and Te errors are 20% of the fit by construction, and
+    `fit_pe_err` adds a density to a temperature, so it is not an error of pe.
+  - **The pe fit overshoots the edge pe points** by 2–4 times near the
+    separatrix: d6a6466's `create_pe` mixes units.
+  - **The SOL side is flat or linear by construction.**
+  - **The two-point model has silent fallbacks.** The `two_point_model`
+    attribute now names them.
+- **C-Mod_Analysis d6a6466,** mfe's checkout, not GitHub's head 24e1499.
+  - Head moves Te_sep by up to 20% and the profiles by up to 0.007 in ρ.
+  - It fixes `create_pe`.
+  - It finds the separatrix with unversioned code in another user's home.
+
+  Which one to use is the user's call (open question 6).
+- **The production run has not been made.** The permission classifier stopped
+  the orchestrator's write to `/hdd1/fusion_data/thomson_scattering/`, so it
+  waits for the user. The command, from `~/Git/fusion_scripts` (about an hour):
+  `~/Git/fusion_ui/.venv/bin/python -u tools/get_thomson_scattering.py --dest fusion:/hdd1/fusion_data/thomson_scattering`.
+
 #### J12b — The view · Sonnet 5.5 · fusion_ui + experimental_database
 
 **Deliver:**
@@ -1992,6 +2083,11 @@ the report lists the shots with no TS.
   - the single-shot page smoke-tests on it.
 
   Check the figures on J12a's real samples by eye as well.
+- **No import from fusion_scripts** (L14). The spec reads the file, and nothing
+  else.
+- **Before launch,** the user answers open questions 7 and 8: the band, and how
+  much of the fit to draw. J12a's result lists what the files hold, and what
+  the fits get wrong.
 
 **Accept when:** the suite passes, and the single-shot page draws all three
 samples on the laptop.
@@ -2118,6 +2214,7 @@ is reached.
 | L11 | **The app's entry script outside the package.** `streamlit run fusion_ui/app.py` puts `fusion_ui/` on `sys.path`, where every module there shadows a top-level one of the same name. J3b covers `config`, the only collision found. Moving `app.py` and `pages/` into a directory of their own, or to `st.navigation`, removes the cause, and changes the systemd unit | Sonnet 5.5, user (systemd) |
 | L12 | **The FWHM off by one** (J11). Fix `imaging_methods.estimate_fwhm_sizes` to interpolate over the whole falling stretch (`values[:idx + 1]`), with tests. Report which pixels' `lr` and `lz` change, and by how much, on the 17 shots, then ask the user before `blob_parameters` is recomputed (`--force`), since the paper's numbers change too | Sonnet 5.5; the user decides |
 | L13 | **TS on the multi-shot axis.** A cached spec on `thomson_scattering` files that stores the fit's shot-level numbers as scalars: ne and Te at the separatrix and at the pedestal top, and their gradients. Blob quantities can then be plotted against the profiles (J12) | Sonnet 5.5 |
+| L14 | **The app off fusion_scripts.** Move the ripe methods the app imports from the user's exploration repository into imaging_methods: the decorrelation pipeline, the dead-pixel estimate and puff window, the LCFS spline and the two-sided fit. The products stay bit-equal and the cache keys unchanged, and fusion_scripts keeps shims for the paper. The survey, the decisions and the steps are in `fusion_scripts/MIGRATION_TO_IMAGING_METHODS.md` (18bda52). The user launches it after phase 06 | Opus 5.5 (imaging_methods, fusion_scripts), Sonnet 5.5 (fusion_ui), orchestrator (server), user (the PR, the restart) |
 | L9 | **The CA TDE** (velocity_estimation's `TDEMethod.CA`, the paper's `_ca` group) as its own product, once the user chooses its event selector: fc5e59a's in-package `cond_av`, which the paper used, or PlasmaPy's `ConditionalEvents` in b3b6945. On 1160616027 they differ by a median of 0.2–0.7%, at most 12% in v_R, and about 2% in events (2026-10-07). The paper's nine files are kept in `~/Data/reference/tde_ca_fc5e59a_laptop/` | Opus 5.5 |
 
 ## Open questions for the user
@@ -2133,3 +2230,10 @@ is reached.
    parameter sets enough?
 5. Which CA-TDE event selector is the right one (L9)? And should the paper's
    venv be aligned with the app's ([Environments](#facts-every-agent-needs))?
+6. Which C-Mod_Analysis should make the TS files: mfe's d6a6466, as now, or
+   GitHub's head 24e1499 (J12a's result)?
+7. Should J12b draw a ±1σ band around the TS fit? Its ne and Te errors are 20%
+   by construction, and `fit_pe_err` is not an error of pe.
+8. Should J12b draw the fit over its whole range, with run_db.py's check shown
+   when it fails, or only at the edge (say ρ > 0.8)? The fit's core is often an
+   extrapolation.
