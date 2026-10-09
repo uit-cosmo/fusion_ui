@@ -63,8 +63,15 @@ the TRACK comment, so it stays. J12c merged into fusion_scripts (017eff7): the
 TS profiles of the density scan, the nine 1160616 shots, as a PDF for the
 user's PI, which has been sent. J12b merged into fusion_ui (0e1cbf0), and its
 diagnostic into experimental_database (0ca9f81). Neither is pushed or
-deployed. J9's first attempt failed review, and its second, again Haiku, is
-under way.
+deployed. J9 merged (2b999d2) on its third attempt, on Sonnet 5.5, after two
+on Haiku that failed review.
+
+Still to come:
+
+- J12b's deploy: push the three repos, pull on the server, the user restarts,
+  then rescan;
+- the user's call on J12b's runaway fits;
+- the cleanup of worktrees and scratch clones, after asking.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -616,6 +623,10 @@ Neither is in the cache key, on purpose.
 3. Add a builder in `fusion_ui/views/` and an entry in `SHOT_VIEWS` or
    `PIXEL_VIEWS`.
 4. Run `fusion-ui precompute <key> --workers 7`. The banks are reused.
+
+Step 1 changes with L14. Once the pipeline has moved to `imaging_methods`, the
+new function goes there instead, and until then it adds no new import from
+fusion_scripts to the app: `plots/_pipeline.py` stays the only importer.
 
 ### Dead pixels (done, 2026-10-07)
 
@@ -1937,6 +1948,30 @@ has the following wrong:
 - **It skipped the fusion_scripts notes,** finding that the module docstrings
   of `preprocess.py` and `dead_pixels.py` already cover them. That may be
   fair, but say where a reader finds them.
+
+**Attempt 3 (Sonnet 5.5, 2026-10-09): passed review, and merged at 2b999d2**
+(eedd10a).
+
+- **Its base** was local main f87e905. Docs only: `README.md`, `CLAUDE.md`
+  and `docs/PLAN.md`. The suite ran 1107 passed before and after, and no test
+  reads those files.
+- **Every item of both failure lists is settled,** each with its file:line in
+  the agent's report.
+- **The orchestrator checked:**
+  - the schema history against `db.py`;
+  - `test_the_default_keys_are_stable`;
+  - the six pages;
+  - every precompute flag against `cli.py`;
+  - the phase-06 record against this plan.
+- **It also corrected:**
+  - "schema v2" in CLAUDE.md, which is now v4;
+  - the twelve phase-03 names, now eight since J10;
+  - the recompute row for a rewritten file, which needs `rescan` first.
+- **It found three things outside J9:**
+  - the start page (`app.py`) lists four pages, not six;
+  - `docs/PLAN.md`'s phase-05 paragraph reads as if the process pool had
+    landed;
+  - this plan's product recipe (above) predated L14, and now has a note.
 
 ### J12 — Thomson scattering profiles
 
