@@ -1916,6 +1916,28 @@ has the following wrong:
 - **Left undone in fusion_scripts:** the notes on `density_scan/preprocess.py`
   and `density_scan/dead_pixels.py`.
 
+**Attempt 2 (Haiku 4.5, 2026-10-09): failed review.** It left 93dff09 on
+`phase06/j9b`.
+
+- **Its worktree started from `origin/main`** (3c15d3a, before J12b), not
+  local main. Every agent worktree does: see Orchestration.
+  - It merged `phase06/j9`, then copied J12b's new files in by hand. That left
+    five of J12b's changed files at their old versions: `app.py`, `cli.py`,
+    `core/traces.py`, `pages/4_statistics.py` and `tests/test_catalog.py`.
+    So a docs-only job changed code.
+  - Its baseline ran on that tree: "996 passed, 1 failed", which it called a
+    success.
+- **Item 1 is not fixed.** It still calls phases 0–6 done, and phase 05 is
+  "ongoing" in `docs/PLAN.md`.
+- **Item 3 is not as asked.** Its sentence ("Phase 06 adds imports from
+  fusion_scripts …") is wrong as well: the imports in `core/geometry.py`,
+  `plots/two_sided_exp.py` and `core/seed.py` came before phase 06. What was
+  asked for is the rule for new code.
+- **Items 5, 9 and 11 are not addressed.**
+- **It skipped the fusion_scripts notes,** finding that the module docstrings
+  of `preprocess.py` and `dead_pixels.py` already cover them. That may be
+  fair, but say where a reader finds them.
+
 ### J12 — Thomson scattering profiles
 
 **The request (the user, for their PI, 2026-10-09).** The Thomson scattering
@@ -2375,6 +2397,11 @@ Agent(subagent_type="general-purpose", model="opus" | "sonnet" | "haiku",
       description="J3 product specs", prompt=<brief>)
 ```
 
+- **A worktree starts from `origin/main`, not local main.** Learnt on
+  2026-10-09, when J9's second attempt worked on a tree without J12b. Until
+  main is pushed, a fusion_ui brief has the agent branch from local main
+  (`git switch -c phase06/<id> main`), and check that its base holds the
+  latest merge.
 - **fusion_scripts jobs.** Worktree isolation would give a fusion_ui tree, so
   the brief tells the agent to make its own:
   `git -C ~/Git/fusion_scripts worktree add ~/Git/fusion_scripts-<job> -b phase06/<job>`.
