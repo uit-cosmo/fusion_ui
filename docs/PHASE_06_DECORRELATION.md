@@ -59,9 +59,9 @@ That fusion_scripts push carried 382ca37, J9's fusion_scripts work committed
 on main rather than on J9's branch, which the orchestrator had not reviewed.
 The user then allowed reading and writing fusion_scripts' main, and the review
 found the commit correct: seven lines, a README section on `pipeline.py` and
-the TRACK comment, so it stays. J9, J12b and J12c are under way. J12c is the
+the TRACK comment, so it stays. J12c merged into fusion_scripts (017eff7): the
 TS profiles of the density scan, the nine 1160616 shots, as a PDF for the
-user's PI.
+user's PI, which has been sent. J9 and J12b are under way.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -2217,6 +2217,29 @@ took the 50 shots of `density_scan/results.json`, and the user stopped it.
   that has a file;
 - on one shot, the number of points drawn equals the number in the file's
   window with `ne > 0`.
+
+**Result (2026-10-09).** Merged into fusion_scripts at 017eff7 (258053b).
+
+- **What it added:** `density_scan/thomson_profiles.py` and 29 tests.
+- **The orchestrator's rerun:**
+  - the suites: 237 passed and 8 skipped in the paper's venv, and 206 passed and
+    2 skipped in the app's, with the three known gaps;
+  - the PDF regenerated from main with `python -m density_scan.thomson_profiles`:
+    10 A4 pages, with every `provenance.json` entry at 017eff7 and nothing
+    uncommitted;
+  - the point counts of 1160616027 (72 edge, 135 core) and 1160616011 (359,
+    305), counted again outside the script, equal the pages'.
+- **Sent to the user.** The PDFs and `provenance.json` stay untracked, as in
+  `decorrelation/manuscript/figures/`.
+- **Added beyond the plan:**
+  - a status line comparing the p_e fit with e·ne·Te of the ne and Te fits at
+    the edge: 1.0 to 3.7 times on 017, and up to 33.5 on 026;
+  - y-limits that a wild fit cannot set;
+  - a style pinned against what other scripts leave in rcParams.
+- **In the data:** on 009 and 011, the core system's outermost channels read
+  about twice the edge system's Te at the same ρ_pol. On 011 that is 397 eV at
+  ρ 0.944 against 160 eV at 0.952. It is one more question for the
+  diagnostician.
 
 ## Orchestration
 
