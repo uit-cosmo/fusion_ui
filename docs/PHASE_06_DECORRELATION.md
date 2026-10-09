@@ -43,8 +43,11 @@ is done, with all eight shots ok in 42 min. J6e (003ecf2), J11 (77b73db) and J5c
 dead-pixel view on the puff window, the Documentation page, and the seed's
 `lx_f`, `ly_f`, `theta_f` pruned (none on the server, which never imported the
 seed; 11,640 rows from the laptop's ledger). The forced `dead_pixels`
-recompute is done: all 115 shots ok, each equal to its file's mask. Still to
-come: J8's edge pixels, and J9.
+recompute is done: all 115 shots ok, each equal to its file's mask. The
+superseded 1140827 files were deleted on 2026-10-09. J8: the screenshots of the
+edge pixels and the new views are with the user, who is working away from the
+UI. J12, the Thomson scattering profiles the user's PI asked for, is under way:
+J12a first. Still to come: J8's answer, J9 and J12b.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -676,6 +679,8 @@ Built, tested and pushed to main on 2026-10-07, and deployed the same day (JD).
 | J11 | The Documentation page: every quantity, how it is computed, what depends on what | **Opus 5.5** | fusion_ui | J8's labels; J6's code merged | J6's production run, J6e |
 | J5c | Prune the seed's mislabelled ellipse (`lx_f`, `ly_f`, `theta_f`) | **Sonnet 5.5** | fusion_ui | J11 | — |
 | J9 | Docs | **Haiku 4.5** | both | J8, J11, J5c | — |
+| J12a | Thomson scattering data: fetch and fit on mfe, one file per shot | **Opus 5.5** | fusion_scripts + mfe | the user's request (2026-10-09) | J8, J9 |
+| J12b | `thomson_scattering` as a diagnostic, and its single-shot plot | **Sonnet 5.5** | fusion_ui + experimental_database | J12a's sample files | J9 |
 
 **Why these models.** `PLAN.md` splits work by how expensive a wrong decision
 is to undo, not by how hard it is, and so does this table.
@@ -1829,6 +1834,175 @@ After J11 is merged.
 
 The orchestrator reviews the result before merging.
 
+### J12 — Thomson scattering profiles
+
+**The request (the user, for their PI, 2026-10-09).** The Thomson scattering
+(TS) profiles of these shots, as a new single-shot plot, for every shot that
+has them. The code is https://github.com/mmiller04/C-Mod_Analysis, run on the
+mfe server with the same access as the data retriever. Data brought to the
+server go in their own folder, `thomson_scattering/`, beside `apd/`,
+`phantom/` and the rest.
+
+**Facts (the orchestrator, 2026-10-09).**
+
+- **mfe.** `ssh mfe` from the laptop is mferws02-public.psfc.mit.edu, the
+  user's account, key login. Python there:
+  - its anaconda `python3` is 3.8.20, with MDSplus
+    (`/usr/local/mdsplus/python`), numpy 1.24.4, xarray 2023.1.0, netCDF4 1.6.4
+    and scipy 1.10.1;
+  - `~/C-Mod_Analysis` is a clone at d6a6466, with a poetry venv in `.venv`
+    (Python 3.8) and the user's own local changes (`pyproject.toml`,
+    untracked `get_data.py`, `data_file.*`, `ptx.npy`, `pty.npy`).
+- **The retriever.** The mfe-side scripts (`get_apd.py`, `get_asp.py`, …) sit
+  unversioned in mfe's home. `fusion_scripts/tools/get_discharge_raw_data.py`:
+  1. runs `ssh mfe "python3 <script> <shot>"`;
+  2. copies `<prefix>_<shot>.nc` from mfe to the laptop;
+  3. copies it on to `fusion:/hdd1/fusion_data/<prefix>/`, skipping a file
+     that is already there.
+- **The fit.** `cmod_tools.get_cmod_kin_profs(shot, tmin, tmax, …)`:
+  - **The data.** It needs edge TS, and raises "No edge Thomson data!"
+    without it. Core TS is added when present. Both come through
+    `data_access.ne`/`Te` (`include=['ETS']`, `['CTS']`), mapped to
+    `sqrtpsinorm` with EFIT20, or ANALYSIS where EFIT20 is missing.
+  - **The fit itself.** It drops the time axis and fits Osborne mtanh
+    profiles, with Monte Carlo errors.
+  - **The separatrix.** It always calls `power_balance.Teu_2pt_model`, which
+    finds it from the two-point model and can fail on its own.
+  - **The author's settings.** The database run, `run_db.py`, uses
+    `fit_type='osborne'`, `apply_final_sep_stretch=False`, `frac_err=True`,
+    `num_mc=5` and `force_to_zero` per shot.
+- **The raw nodes.**
+  - **Edge:** `\ELECTRONS::TOP.YAG_EDGETS.RESULTS:NE` and `:TE`, each with
+    `:ERROR`; `YAG_EDGETS.DATA:FIBER_Z`; `YAG.RESULTS.PARAM:R`.
+  - **Core:** `YAG_NEW.RESULTS.PROFILES:NE_RZ`, `TE_RZ`, `NE_ERR`, `TE_ERR` and
+    `Z_SORTED`. Older shots have them under `YAG.RESULTS.GLOBAL.PROFILE`
+    instead (`data_access.neCTS`, `TeCTS`).
+- **A diagnostic in fusion_ui** is a member of `experimental_database`'s
+  `Diagnostic` enum:
+  - `catalog.DIAGNOSTICS` is built from it, and `loader.dataset_path` goes
+    through `Diagnostic[name]`;
+  - the file is `<name>/<name>_<shot>.nc`;
+  - on the server, `experimental_database` is an editable checkout at
+    `~/experimental_database`, pushed to `uit-cosmo/experimental_database`.
+- **The C-Mod_Analysis README asks** that the diagnostician (Jerry Hughes, for
+  TS) be consulted before the data are used in a public forum.
+
+#### J12a — The data · Opus 5.5 · fusion_scripts + mfe
+
+**Deliver:**
+
+1. **`tools/mfe/get_thomson_scattering.py`** in fusion_scripts: the mfe-side
+   script, versioned. For one shot and a window given on the command line, it
+   writes `thomson_scattering_<shot>.nc` in the directory it runs in.
+2. **A laptop-side retriever**, `tools/get_thomson_scattering.py` or a
+   function in `get_discharge_raw_data.py`, after its pattern:
+   - it copies the mfe script into `~/fusion_ts/` on mfe and runs it there,
+     at nice 10, one shot at a time;
+   - it takes each shot's window from the discharge DB (fusion_scripts'
+     `config`), which mfe does not have;
+   - it brings the file back and copies it to `--dest`, a host:folder;
+   - it skips a file that is already there, unless `--force`;
+   - **shots:** those given, or every shot in the discharge DB.
+
+   It prints one line a shot: edge and core found, fit ok or why not, and the
+   seconds.
+3. **The file,** one per shot. Every variable has a `units` attribute, in SI
+   units: m, s, m⁻³, eV and Pa.
+   - **The raw TS over the whole shot,** edge and core apart:
+     - the R and Z of each channel;
+     - ne and Te with their errors, by time and channel;
+     - per time and channel, ρ_pol = √ψ_N and R_mid, the outboard midplane
+       radius of the flux surface, from the EFIT tree named in the attributes.
+
+     **The time dimension is `time`, in seconds**, which the single-shot page
+     cuts to the discharge window. Check whether edge and core share their
+     laser times. If they do not, say how the file aligns them.
+   - **The fit over the discharge DB's window,** made by
+     `get_cmod_kin_profs` with `run_db.py`'s settings:
+     - ne, Te and pe with their errors, on a ρ_pol grid, with R_mid on it;
+     - the two-point model's Te_sep and λ_q;
+     - the separatrix R_mid.
+
+     **A fit that fails never drops the file:** the raw data are kept, and an
+     attribute says why.
+   - **Attributes:**
+     - the shot, the window and its source;
+     - the EFIT tree;
+     - the fit settings;
+     - the C-Mod_Analysis commit, saying whether it had local changes;
+     - this script's commit;
+     - the creation time;
+     - the diagnostician's caveat.
+4. **Samples.** Make 1160616027, 1140827019 and 1091216009, and any shot found
+   without edge TS. Put them in the laptop's `~/Data/alcator/thomson_scattering/`
+   for J12b, and **stop there**. The orchestrator reviews the format and the
+   fits before the production run.
+
+**Rules:**
+
+- **On mfe, work only in `~/fusion_ts/`.** Leave `~/C-Mod_Analysis` as it is:
+  no pull, no edits, no new files.
+  - Import its code from there, read-only, with its own `.venv`.
+  - If GitHub's head differs from d6a6466 in a way that matters, clone it into
+    `~/fusion_ts/` and say which commit you used.
+  - Install nothing on mfe. If something is missing, stop and ask.
+- **Nothing is written to the fusion server in J12a.**
+
+**Accept when:**
+
+- the three samples open with xarray in the app's venv on the laptop;
+- the raw points in each sample's window equal a fresh `data_access` read on
+  mfe, value for value;
+- the fit equals a fresh `get_cmod_kin_profs` call with the same settings,
+  within its Monte Carlo spread, where the call is not deterministic;
+- a shot without edge TS, or with a failed fit, gives the report line the
+  retriever promises.
+
+**The production run (the orchestrator, after review).** It writes to
+`fusion:/hdd1/fusion_data/thomson_scattering/`, mode 0775 for the folder and
+0664 for the files, like `apd/`. It covers every shot in the discharge DB, and
+the report lists the shots with no TS.
+
+#### J12b — The view · Sonnet 5.5 · fusion_ui + experimental_database
+
+**Deliver:**
+
+- **`experimental_database`:** a `thomson_scattering` member of `Diagnostic`,
+  on a branch of that repo.
+- **fusion_ui:**
+  - **The catalog.** It indexes `thomson_scattering/`, which has raw files
+    only. The shot browser, the single-shot page and the Statistics page take
+    the new diagnostic without breaking.
+  - **A live spec, `thomson_profiles`,** "Thomson scattering profiles", with
+    diagnostics `("thomson_scattering",)` and `preprocessed=False`. It draws:
+    - ne and Te, and pe if it is in the file, against ρ_pol or R_mid (a
+      choice), sharing that axis;
+    - the edge and core points in the page's window, with their error bars,
+      told apart by marker;
+    - the stored fit with its ±1σ band, labelled with its window, and a
+      caption when the page's window differs;
+    - the separatrix: ρ_pol = 1, or the fit's R_mid on the R_mid axis.
+  - **The caption** carries the diagnostician's caveat.
+  - **The words.** A row in CLAUDE.md's spec table, and a short section on
+    the Documentation page: what is measured, what is fitted, and what each
+    axis means.
+- **Tests**, hermetic, on a synthetic file of J12a's layout:
+  - the catalog indexes the file;
+  - the spec registers, and draws with and without a fit, and with no core;
+  - the single-shot page smoke-tests on it.
+
+  Check the figures on J12a's real samples by eye as well.
+
+**Accept when:** the suite passes, and the single-shot page draws all three
+samples on the laptop.
+
+**Deploy (the orchestrator, after asking the user):**
+
+1. Push all three repos.
+2. Pull `~/experimental_database` and `~/fusion_ui` on the server.
+3. The user restarts the service.
+4. Run `rescan`, which should show the `thomson_scattering` files.
+
 ## Orchestration
 
 **The session.** Run the orchestrator as Opus 5.5 in `~/Git/fusion_ui`. It does
@@ -1943,6 +2117,7 @@ is reached.
 | L10 | **Record the discharge window on each run.** The products are computed over the discharge DB's `t_start..t_end`, which no run records: if the window is edited after a bank is computed, the products on it, or a bank computed afterwards, disagree silently, and `stale_runs` cannot see it (J3) | Opus 5.5 |
 | L11 | **The app's entry script outside the package.** `streamlit run fusion_ui/app.py` puts `fusion_ui/` on `sys.path`, where every module there shadows a top-level one of the same name. J3b covers `config`, the only collision found. Moving `app.py` and `pages/` into a directory of their own, or to `st.navigation`, removes the cause, and changes the systemd unit | Sonnet 5.5, user (systemd) |
 | L12 | **The FWHM off by one** (J11). Fix `imaging_methods.estimate_fwhm_sizes` to interpolate over the whole falling stretch (`values[:idx + 1]`), with tests. Report which pixels' `lr` and `lz` change, and by how much, on the 17 shots, then ask the user before `blob_parameters` is recomputed (`--force`), since the paper's numbers change too | Sonnet 5.5; the user decides |
+| L13 | **TS on the multi-shot axis.** A cached spec on `thomson_scattering` files that stores the fit's shot-level numbers as scalars: ne and Te at the separatrix and at the pedestal top, and their gradients. Blob quantities can then be plotted against the profiles (J12) | Sonnet 5.5 |
 | L9 | **The CA TDE** (velocity_estimation's `TDEMethod.CA`, the paper's `_ca` group) as its own product, once the user chooses its event selector: fc5e59a's in-package `cond_av`, which the paper used, or PlasmaPy's `ConditionalEvents` in b3b6945. On 1160616027 they differ by a median of 0.2–0.7%, at most 12% in v_R, and about 2% in events (2026-10-07). The paper's nine files are kept in `~/Data/reference/tde_ca_fc5e59a_laptop/` | Opus 5.5 |
 
 ## Open questions for the user
@@ -1951,8 +2126,9 @@ is reached.
    [Products](#products-three-plotspecs-and-their-blob-schemas).
 2. Whether the masks look right in the UI, above all for 2009–2011, which have
    no reference (G1).
-3. When J6 has run, can the superseded 1140827 files in
-   `/hdd1/fusion_data/apd/superseded/` be deleted?
+3. ~~When J6 has run, can the superseded 1140827 files in
+   `/hdd1/fusion_data/apd/superseded/` be deleted?~~ Yes. They were deleted on
+   2026-10-09, after batch 2.
 4. Should the 2DCA window adapt to each shot by itself (L7), or are per-shot
    parameter sets enough?
 5. Which CA-TDE event selector is the right one (L9)? And should the paper's
