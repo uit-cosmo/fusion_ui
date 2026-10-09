@@ -49,8 +49,10 @@ the edge pixels misbehave where the estimation is not usually run, as expected,
 and the tracks and the Documentation page read well. The user wants the app off
 fusion_scripts, the plan for which is in fusion_scripts (L14). J12a merged into
 fusion_scripts (30eb16d): 15 sample files of Thomson scattering, every check
-equal on the orchestrator's rerun. Its production run started at 11:29, with
-the user's permission. The user answered open questions 6–8, and both repos
+equal on the orchestrator's rerun. Its production run, made with the user's
+permission, wrote 115 files to `/hdd1/fusion_data/thomson_scattering/` between
+11:29 and 12:18. Three shots have no TS, and 1140619014 failed on its edge time
+base. The user answered open questions 6–8, and both repos
 were pushed (fusion_scripts 382ca37, fusion_ui 3c15d3a).
 
 That fusion_scripts push carried 382ca37, J9's fusion_scripts work committed
@@ -2063,7 +2065,18 @@ the report lists the shots with no TS.
   - With the user's permission it started at 11:29, from `~/Git/fusion_scripts`
     at 382ca37:
     `~/Git/fusion_ui/.venv/bin/python -u tools/get_thomson_scattering.py --dest fusion:/hdd1/fusion_data/thomson_scattering`.
-  - It takes about 25 s a shot. Its log is in the orchestrator's scratchpad.
+  - It took about 25 s a shot. Its log is in the orchestrator's scratchpad.
+  - **Done at 12:18.** It ran on all 119 DB shots and wrote 115 files, 39 MB in
+    all, with the folder at 0775, the files at 0664, and no `.part` left
+    behind.
+    - Three shots have no TS (1120814028, 1140228024, 1150618033).
+    - Twelve have core TS only, so their fit fails.
+    - Twenty fits fail run_db.py's check, among them 1160616025, 026 and 027.
+  - **One error, 1140619014:** "edge stamps are not increasing". The pulse
+    alignment rejects this shot's edge time base, so it has no file. Fixing
+    this is a small job for later, and it is the only reason the run exited 1.
+  - The 115 files are also in the laptop's `~/Data/alcator/thomson_scattering/`,
+    in place of the samples.
 
 #### J12b — The view · Sonnet 5.5 · fusion_ui + experimental_database
 
