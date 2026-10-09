@@ -49,10 +49,14 @@ the edge pixels misbehave where the estimation is not usually run, as expected,
 and the tracks and the Documentation page read well. The user wants the app off
 fusion_scripts, the plan for which is in fusion_scripts (L14). J12a merged into
 fusion_scripts (30eb16d): 15 sample files of Thomson scattering, every check
-equal on the orchestrator's rerun. Its production run waits for the user, since
-the permission classifier stopped the orchestrator's write to the server. J9 is
-under way. Still to come: J9, J12a's production run, and J12b, once the user
-has answered open questions 6–8.
+equal on the orchestrator's rerun. Its production run started at 11:29, with
+the user's permission. The user answered open questions 6–8, and both repos
+were pushed (fusion_scripts 382ca37, fusion_ui 3c15d3a).
+
+That fusion_scripts push carried 382ca37, which the orchestrator had not
+reviewed: its message is J9's fusion_scripts work, committed on main rather
+than on J9's branch. The user decides what happens to it. J9, J12b and J12c,
+the density scan's TS profiles as a PDF for the user's PI, are under way.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -686,6 +690,7 @@ Built, tested and pushed to main on 2026-10-07, and deployed the same day (JD).
 | J9 | Docs | **Haiku 4.5** | both | J8, J11, J5c | — |
 | J12a | Thomson scattering data: fetch and fit on mfe, one file per shot | **Opus 5.5** | fusion_scripts + mfe | the user's request (2026-10-09) | J8, J9 |
 | J12b | `thomson_scattering` as a diagnostic, and its single-shot plot | **Sonnet 5.5** | fusion_ui + experimental_database | J12a's sample files | J9 |
+| J12c | The density scan's TS profiles as a PDF, for the user's PI | **Sonnet 5.5** | fusion_scripts | J12a | J9, J12b |
 
 **Why these models.** `PLAN.md` splits work by how expensive a wrong decision
 is to undo, not by how hard it is, and so does this table.
@@ -2049,10 +2054,13 @@ the report lists the shots with no TS.
   - It finds the separatrix with unversioned code in another user's home.
 
   Which one to use is the user's call (open question 6).
-- **The production run has not been made.** The permission classifier stopped
-  the orchestrator's write to `/hdd1/fusion_data/thomson_scattering/`, so it
-  waits for the user. The command, from `~/Git/fusion_scripts` (about an hour):
-  `~/Git/fusion_ui/.venv/bin/python -u tools/get_thomson_scattering.py --dest fusion:/hdd1/fusion_data/thomson_scattering`.
+- **The production run.**
+  - The permission classifier stopped the orchestrator's first try at writing
+    to `/hdd1/fusion_data/thomson_scattering/`.
+  - With the user's permission it started at 11:29, from `~/Git/fusion_scripts`
+    at 382ca37:
+    `~/Git/fusion_ui/.venv/bin/python -u tools/get_thomson_scattering.py --dest fusion:/hdd1/fusion_data/thomson_scattering`.
+  - It takes about 25 s a shot. Its log is in the orchestrator's scratchpad.
 
 #### J12b — The view · Sonnet 5.5 · fusion_ui + experimental_database
 
@@ -2070,8 +2078,13 @@ the report lists the shots with no TS.
       choice), sharing that axis;
     - the edge and core points in the page's window, with their error bars,
       told apart by marker;
-    - the stored fit with its ±1σ band, labelled with its window, and a
-      caption when the page's window differs;
+    - the stored fit over its whole range, without a band, labelled with its
+      window, and a caption when the page's window differs. Its ne and Te
+      errors are 20% by construction, and `fit_pe_err` is not an error of pe,
+      so the caption says why there is no band (the user, 2026-10-09);
+    - when `fit_check` fails, a warning above the figure that quotes it: the
+      fit's core is then an extrapolation;
+    - only the points with `ne > 0`: a 0 is no measurement;
     - the separatrix: ρ_pol = 1, or the fit's R_mid on the R_mid axis.
   - **The caption** carries the diagnostician's caveat.
   - **The words.** A row in CLAUDE.md's spec table, and a short section on
@@ -2085,9 +2098,98 @@ the report lists the shots with no TS.
   Check the figures on J12a's real samples by eye as well.
 - **No import from fusion_scripts** (L14). The spec reads the file, and nothing
   else.
-- **Before launch,** the user answers open questions 7 and 8: the band, and how
-  much of the fit to draw. J12a's result lists what the files hold, and what
-  the fits get wrong.
+- **The user's answers (2026-10-09):** no band, which the user looks at again
+  on Monday, and the whole profile. J12a's result lists what the files hold,
+  and what the fits get wrong.
+
+#### J12c — The density scan's TS profiles, as a PDF · Sonnet 5.5 · fusion_scripts
+
+**The request (the user, 2026-10-09).** A PDF with the TS profiles of every
+shot in the density scan, for their PI, while the user cannot reach the UI.
+
+**Deliver:**
+
+- **`density_scan/thomson_profiles.py`** in fusion_scripts.
+  - It runs as `python -m density_scan.thomson_profiles` from the repository
+    root, in the paper's venv (`~/Git/fusion_scripts/.venv`). That venv has
+    `figure_provenance`, and the app's does not.
+  - **The shots:** the 50 in `config.DENSITY_SCAN_RESULTS`
+    (`density_scan/results.json`).
+  - **The data:** each shot's file is read from
+    `config.DATA_FOLDER / "thomson_scattering"`, in J12a's layout, which the
+    module docstring of `tools/mfe/get_thomson_scattering.py` documents.
+  - **The order:** by Greenwald fraction, with fusion_ui's rule
+    (`fusion_ui/core/catalog.py`, `greenwald_fraction`): the DB's value, else
+    derived from I_p and n̄_e, with the source shown. Copy the rule; do not
+    import fusion_ui.
+- **The figures,** in matplotlib.
+  - Each is a function returning one figure, decorated with `@provenance`, with
+    a docstring that says what it shows and why it is drawn that way.
+  - Each is saved through `figure_provenance.save`, never `fig.savefig`, into
+    `density_scan/figures/thomson_scattering/`.
+
+  There are three kinds:
+  1. **An overview.**
+     - Every fitted ne, Te and pe profile against ρ_pol, coloured by f_GW, with
+       the separatrix marked.
+     - A fit that fails run_db.py's check (`fit_check`) is drawn dashed.
+     - A second row is zoomed to the edge, ρ_pol 0.85–1.1.
+  2. **A table.** One row per shot:
+     - f_GW and its source, n̄_e, I_p and the window;
+     - the edge and core channels;
+     - the fit's status and check, and the two-point model's Te_sep.
+
+     A shot without a file reads "no TS".
+  3. **One page per shot,** in f_GW order, with ne, Te and pe against ρ_pol: the
+     whole profile on top, and the edge (0.85–1.1) below.
+     - **The points:** edge and core points in the window
+       (`window_t_start..window_t_end`), with error bars, told apart by marker.
+       - Only where `ne > 0`: a 0 is no measurement, and its error is junk.
+       - The raw pe is e·ne·Te, with its error propagated.
+     - **The fit:** over its whole range, without a band. Its errors are 20% by
+       construction, and `fit_pe_err` is not an error of pe.
+     - **The separatrix:** ρ_pol = 1.
+     - **The title:** the shot, f_GW, n̄_e, I_p and the window.
+     - **The status line:**
+       - the fit's status;
+       - `fit_check` when it fails;
+       - the two-point model's Te_sep and λ_q;
+       - "no fit: no edge TS" for a shot with core TS only.
+
+  Every page has a footer with the file's `caveat` and its C-Mod_Analysis
+  commit.
+- **The bundle.** `pdfunite`, which the laptop has from poppler, joins the pages
+  in that order into `thomson_profiles_density_scan.pdf`, in the same folder.
+  It is only a concatenation of figures, each of which has its own
+  `provenance.json` entry. The module docstring says so.
+- **Tests,** hermetic, on synthetic files of J12a's layout. Reuse
+  `tests/test_thomson_scattering.py`'s builders where they fit. They cover:
+  - the order by f_GW, with a derived value among them;
+  - a page with a fit, a page for a core-only shot, and a missing file;
+  - the bundle's page count.
+
+  Use `pytest.importorskip("figure_provenance")`, so that the app's venv gains
+  a skip, not a fourth known gap.
+- **Commit** the code and the tests, but not the PDFs or `provenance.json`.
+
+**Rules:**
+
+- Work in `~/Git/fusion_scripts-j12c`, made with
+  `git -C ~/Git/fusion_scripts worktree add ~/Git/fusion_scripts-j12c -b phase06/j12c 18bda52`.
+- The data are read-only, and nothing is written to the server.
+
+**Accept when:**
+
+- both venvs' suites are at their baselines: the new tests pass in the paper's
+  venv and are skipped in the app's;
+- the script runs on the 15 samples in `~/Data/alcator/thomson_scattering/`.
+  Two of them are in the scan, 1160616027 and 1140827019. The rest of the
+  scan's files come with the production run, and the orchestrator runs the
+  script on all 50 once they are on the laptop;
+- the bundle opens, with the overview, the table, and one page per scan shot
+  that has a file;
+- on one shot, the number of points drawn equals the number in the file's
+  window with `ne > 0`.
 
 **Accept when:** the suite passes, and the single-shot page draws all three
 samples on the laptop.
@@ -2230,10 +2332,9 @@ is reached.
    parameter sets enough?
 5. Which CA-TDE event selector is the right one (L9)? And should the paper's
    venv be aligned with the app's ([Environments](#facts-every-agent-needs))?
-6. Which C-Mod_Analysis should make the TS files: mfe's d6a6466, as now, or
-   GitHub's head 24e1499 (J12a's result)?
-7. Should J12b draw a ±1σ band around the TS fit? Its ne and Te errors are 20%
-   by construction, and `fit_pe_err` is not an error of pe.
-8. Should J12b draw the fit over its whole range, with run_db.py's check shown
-   when it fails, or only at the edge (say ρ > 0.8)? The fit's core is often an
-   extrapolation.
+6. ~~Which C-Mod_Analysis should make the TS files?~~ mfe's d6a6466, for now
+   (2026-10-09).
+7. ~~Should J12b draw a ±1σ band around the TS fit?~~ No; the user looks at it
+   again on Monday (2026-10-09).
+8. ~~The fit over its whole range, or only at the edge?~~ The whole range
+   (2026-10-09).
