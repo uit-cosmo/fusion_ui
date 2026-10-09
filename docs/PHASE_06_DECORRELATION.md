@@ -2118,6 +2118,16 @@ the report lists the shots with no TS.
   on Monday, and the whole profile. J12a's result lists what the files hold,
   and what the fits get wrong.
 
+**Accept when:** the suite passes, and the single-shot page draws all three
+samples on the laptop.
+
+**Deploy (the orchestrator, after asking the user):**
+
+1. Push all three repos.
+2. Pull `~/experimental_database` and `~/fusion_ui` on the server.
+3. The user restarts the service.
+4. Run `rescan`, which should show the `thomson_scattering` files.
+
 #### J12c — The density scan's TS profiles, as a PDF · Sonnet 5.5 · fusion_scripts
 
 **The request (the user, 2026-10-09).** A PDF with the TS profiles of every
@@ -2207,16 +2217,6 @@ took the 50 shots of `density_scan/results.json`, and the user stopped it.
   that has a file;
 - on one shot, the number of points drawn equals the number in the file's
   window with `ne > 0`.
-
-**Accept when:** the suite passes, and the single-shot page draws all three
-samples on the laptop.
-
-**Deploy (the orchestrator, after asking the user):**
-
-1. Push all three repos.
-2. Pull `~/experimental_database` and `~/fusion_ui` on the server.
-3. The user restarts the service.
-4. Run `rescan`, which should show the `thomson_scattering` files.
 
 ## Orchestration
 
