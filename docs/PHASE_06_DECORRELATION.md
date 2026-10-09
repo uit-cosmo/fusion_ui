@@ -61,7 +61,10 @@ The user then allowed reading and writing fusion_scripts' main, and the review
 found the commit correct: seven lines, a README section on `pipeline.py` and
 the TRACK comment, so it stays. J12c merged into fusion_scripts (017eff7): the
 TS profiles of the density scan, the nine 1160616 shots, as a PDF for the
-user's PI, which has been sent. J9 and J12b are under way.
+user's PI, which has been sent. J12b merged into fusion_ui (0e1cbf0), and its
+diagnostic into experimental_database (0ca9f81). Neither is pushed or
+deployed. J9's first attempt failed review, and its second, again Haiku, is
+under way.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -2173,6 +2176,47 @@ samples on the laptop.
 2. Pull `~/experimental_database` and `~/fusion_ui` on the server.
 3. The user restarts the service.
 4. Run `rescan`, which should show the `thomson_scattering` files.
+
+**Result (2026-10-09).** Merged locally, and neither is pushed:
+
+- fusion_ui at 0e1cbf0 (840f880 and ab25c66);
+- the `thomson_scattering` member into experimental_database at 0ca9f81 (23e9010).
+
+What happened along the way:
+
+- **The agent ran a self-review that launched about 25 verifier agents,**
+  against the three-agent rule. They used up the session's usage limit, and
+  the agent was cut off at 12:2x. It was resumed with two of their verified
+  findings, and with no more agents allowed:
+  - the warning's advice now follows the clause that failed. 8 of the 20
+    failing fits fail at the outer end, not on axis;
+  - an unreadable or missing check now warns instead of passing.
+- **Added beyond the plan:**
+  - p_e points (e·n_e·T_e, with the errors propagated);
+  - an "About this file" expander;
+  - a caption whenever `fit_note` calls the core an extrapolation, which
+    happens on five fits that pass the check;
+  - a "TS" column in the shot browser;
+  - the Statistics page now refuses TS-only shots, since a TS file holds
+    profiles, not traces.
+- **The orchestrator's rerun:**
+  - the suite: 1107 passed, with the branch's experimental_database first on
+    the path (997 before);
+  - the single-shot page on the three samples, both axes, against a scratch
+    ledger: one chart each, the on-axis warning on 1160616027 and 1091216009,
+    none on 1140827019;
+  - a screenshot checked by eye;
+  - after both merges, main's suite on its own checkouts: 1107 passed.
+- **Open:**
+  - **Runaway fits set the y-range and squash the points:** 1091216034
+    (fit_ne 1.3e23 m⁻³), 1110201014 (51 keV), 1120814020 (about 6 keV). All
+    three carry the warning. Robust limits like J12c's would fix this.
+  - **TS-only shots now enter the Single shot page's default and the Start
+    page's counts.** On the server only two shots are TS-only (1140827026 and
+    1140827028), so this changes almost nothing there.
+- **Left for J9:** CLAUDE.md's spec count.
+- **Left for later:** the Documentation page's "Checked against" line.
+- **The deploy waits for the user,** who restarts the service.
 
 #### J12c — The density scan's TS profiles, as a PDF · Sonnet 5.5 · fusion_scripts
 
