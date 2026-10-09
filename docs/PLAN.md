@@ -308,7 +308,8 @@ The physics payload, ported as `PlotSpec`s:
 - ✅ trajectory plots from `plotting_scripts/twodca_plots.py:plot_trajectories`
   — `plots/trajectories.py`
 - ✅ the quiver, as the whole-array velocity field — `plots/velocity_field.py`,
-  ported from `twodca_manuscript/velocity_field.py`
+  ported from `twodca_manuscript/velocity_field.py`. Removed in phase 06 (J10);
+  the Fields page draws the velocity fields now
 - ✅ two-sided exponential fits from `waveform_analysis/fitting.py`, applied to
   the temporal and radial cuts of the conditional average —
   `plots/two_sided_exp.py`
@@ -321,7 +322,8 @@ physicist, not a model:
   (`trajectories`), `vx_field`/`vy_field`/`number_events_field`/`nlags_field`
   (`velocity_field`), and `tau_prime`/`sigma_t`/`l_prime`/`sigma_sp`
   (`two_sided_exp`). Confirm they are the right quantities under the right
-  names before phase 04 puts them on an axis.
+  names before phase 04 puts them on an axis. Four of the twelve,
+  `velocity_field`'s, went when phase 06 removed that spec (J10); eight remain.
 - **`two_sided_exp`'s four scalars are not comparable across parameter sets.**
   The fitted scale depends on how far out the cut extends, and the two cuts do
   not extend equally far: the radial one spans the pixel array, the temporal
@@ -338,8 +340,11 @@ physicist, not a model:
   +400, and x = 1 and x = 7 do it resting on 40 lags — past any `min_lags`
   worth setting, so they draw as ordinary well-supported arrows. Reproduced
   directly through `velocity_contour`'s own reduction, so it is the shared
-  estimator near a truncated blob, not a porting error. It is the main thing
-  `velocity_field` is worth looking at for.
+  estimator near a truncated blob, not a porting error. It was found through
+  `velocity_field`, which is gone. On the Fields page the user took the
+  misbehaviour of the edge pixels as expected (J8, 2026-10-09): the estimation is
+  not usually run there, and "Interior pixels only" and the paper's `reliable()`
+  leave those pixels out.
 - **`velocity_tde` returns NaN on purely radial motion at upstream's own
   default.** Every estimate pairs one neighbour from each axis, and
   `ccf_min_lag=1` rejects a poloidal neighbour whose cross-correlation peaks at
@@ -465,20 +470,77 @@ exploratory, cross-diagnostic cousin. Labels are magnetic coordinates from
 distance to the separatrix, not a flux coordinate) and window-mean rho for
 probe channels. The basket is view state, never a parameter.
 
-### Phase 06 — Decorrelation fields — planned
+### Phase 06 — Decorrelation fields — **done**
+
+Done except that J12b, the Thomson scattering profiles on the single-shot page,
+is merged and not yet deployed (2026-10-09). The user's checks of the masks (G1)
+and of the physics (J8) are closed.
 
 Every method's velocity field (2DCA by maximum and by centroid, 2DCC, the TDEs)
-and every pixel's conditional average at several lags, for every shot. The
-2DCA at every pixel is computed once per shot in batch, and the methods are
-derived from it. The physics stays in `fusion_scripts` behind a pure API, and a
-new Fields page browses the results. The plan, written for an orchestrator that
-launches one agent per job, is
-[`docs/PHASE_06_DECORRELATION.md`](PHASE_06_DECORRELATION.md).
+and every pixel's conditional average at several lags. The 2DCA at every pixel
+is computed once per shot in batch, and the methods are derived from it. The
+physics stays in `fusion_scripts` behind a pure API, and a Fields page browses
+the results. The plan, written for an orchestrator that launches one agent per
+job, with a record of each job, is
+[`docs/PHASE_06_DECORRELATION.md`](PHASE_06_DECORRELATION.md). The batch has run
+on the 17 preprocessed shots the plan named, the nine of 1160616 and the eight
+of 1140827. The other shots wait for a fill (L5 in the plan).
 
-Its first piece is built, though not yet deployed: a dead-pixel mask estimated
-from each raw shot (`density_scan/dead_pixels.py` in fusion_scripts), and the
-`dead_pixels` view, which draws every pixel's PDF and spectrum against it. That
-piece also added `PlotSpec.preprocessed`.
+What landed:
+
+- **The physics API,** `decorrelation/pipeline.py` in `fusion_scripts`, which the
+  paper's `cmod_scan.py` calls too (J1). On the server the products of the nine
+  1160616 shots equal the paper's own results, frozen before the refactor, bit
+  for bit (J0, J7).
+- **The store** (J2a): `PlotSpec.batch_only`, `store.lookup` and
+  `store.missing_batch_upstreams`; schema v4, with `runs.input_mtime` and
+  `runs.upstream_run_id`, and `store.stale_runs`; and `code_version` over four
+  repositories.
+- **`fusion-ui precompute`** for several plots, with `--workers`, `--run-day`,
+  `--stale`, `--params-json` and `--nice` (J2b), and `fusion-ui prune --plot KEY`,
+  with `--scalar NAME` (J10, J5c).
+- **Three products** (J3): `pixel_averages`, batch only, and `method_fields` and
+  `blob_parameters`, with 32 scalar names and their labels (J5).
+- **The Fields page,** `pages/5_fields.py`, with its builders in
+  `fusion_ui/views/` (J4), and the jump to it from the multi-shot page (J5).
+- **The Documentation page,** `pages/6_documentation.py` (J11).
+- **Dead pixels.** A mask is estimated from each raw shot, and a run day's mask
+  is the pixels dead in at least a third of its shots
+  (`density_scan/dead_pixels.py` in fusion_scripts). `density_scan/preprocess.py`
+  stores the run day's mask, the shot's own verdict and the analysis window in
+  the preprocessed files it makes, and cuts their frames to the gas-puff window
+  (`density_scan/puff.py`). The nine 1160616 files were not made again, and keep
+  the hand-made mask (J6). The views are `dead_pixels`, on the raw file, and
+  `stored_mask` (J6d), on the preprocessed one. The method is in the module
+  docstrings of `density_scan/dead_pixels.py` and `density_scan/preprocess.py`.
+  The phase also added `PlotSpec.preprocessed` and, in J6e,
+  `PlotSpec.whole_record`.
+- **Thomson scattering profiles** (J12). J12a fetches and fits them on the mfe
+  server, one file a shot (`tools/get_thomson_scattering.py` in fusion_scripts).
+  J12b is the `thomson_profiles` view, on a new `thomson_scattering` diagnostic.
+  J12c is a PDF of the profiles of the nine 1160616 shots.
+- **Removed:** the old `velocity_field` spec, and its stored results (J10, J7).
+
+What came out differently from the plan:
+
+- **The `_ca` TDE group is left out.** The paper's code for it needs
+  velocity-estimation fc5e59a, which the server lacks (J0, and L9 in the plan).
+- **Three scalars take the store's own names** (`number_events`, `taud_psd` and
+  `lambda_psd`), so that the seed and the older specs line up with the products
+  on one axis, and **the paper's `reliable()` is a checkbox on the Fields page**
+  (G2, J4b).
+- **The dead-pixel mask is judged over the gas-puff window,** not the whole
+  discharge window as first built. At G1 the user asked for the dark time before
+  the puff to be cut out at preprocessing, and for the logic in plain words
+  (J6, J6d, J6e).
+- **Three pieces came after the plan.** The trajectory on the lag strip (J8a)
+  and the Documentation page (J11) were asked for at J8, and the Thomson
+  scattering profiles (J12) on 2026-10-09.
+- **The app is to come off `fusion_scripts`.** After J8 the user asked that it
+  not depend on it, so the ripe methods are to move to `imaging_methods`: L14,
+  planned in `fusion_scripts/MIGRATION_TO_IMAGING_METHODS.md` and not started.
+
+What was left for later is the plan's "Later" table.
 
 ## Who builds what
 

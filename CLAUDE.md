@@ -19,33 +19,44 @@ This file holds only the conventions that apply while writing code.
 Phases 00 (skeleton, deployed), 01 (raw data browser), 02 (registry,
 parameter forms, result store), 03 (velocity and conditional averaging) and
 04 (multi-shot view and precompute CLI) — **done**. Phase 05 (hardening) is
-next.
+**ongoing**, as `docs/PLAN.md` has it. Multi-pixel mode, the Statistics page and
+`prune` are in, but the process pool for page computes has not landed (the
+Facts in `docs/PHASE_06_DECORRELATION.md`). Anything a page computes runs inside
+the Streamlit process, so a slow compute must never start from a page. That is
+what `batch_only` is for (see the contract below).
 
 Phase 06 (decorrelation fields: every method's velocity field and every
-pixel's average, computed in batch from a `fusion_scripts` API) is planned in
-`docs/PHASE_06_DECORRELATION.md`, as jobs for an orchestrator. Read it before
-touching `pixel_averages`, `method_fields`, `blob_parameters`, `dead_pixels`,
-the Fields page or `precompute --workers`. Its dead-pixel view is deployed (job
-JD, 2026-10-07).
+pixel's average, computed in batch through `fusion_scripts`'
+`decorrelation/pipeline.py`) is **done**, except that J12b, the Thomson
+scattering profiles (`plots/thomson_profiles.py`), is merged and not yet
+deployed. The plan, with a record of each job, is
+`docs/PHASE_06_DECORRELATION.md`, written as jobs for an orchestrator. Read it
+before touching `pixel_averages`, `method_fields`, `blob_parameters`,
+`dead_pixels`, the Fields page or `precompute --workers`. What it left as
+conventions is under "The decorrelation products and the Fields page", below.
 
 `docs/PLAN.md` closes phase 03 with the five things that need a physicist
 rather than a model — twelve new scalar names to confirm, and four estimator
 behaviours worth knowing before any of it goes on a multi-shot axis. They
-remain open: the multi-shot view now puts these quantities on an axis, so the
-twelve names and four behaviours decide what people will see there.
+remain open, except that four of the twelve names went with `velocity_field`
+(phase 06, J10), so eight are left, those of `trajectories` and
+`two_sided_exp`. The multi-shot view now puts these quantities on an axis, so
+the eight names and four behaviours decide what people will see there.
 
 `core/registry.py`, `core/params_ui.py`, `core/store.py`, `core/seed.py`,
 `core/multishot.py` and `core/precompute.py` are in,
 `pages/2_single_shot.py` is a thin dispatcher over the registry,
 `pages/3_multi_shot.py` draws the scalar scatter (its pure logic lives in
-`core/multishot.py`), and `fusion_ui/plots/` holds sixteen specs: the thirteen
-below and the three phase-06 products (`pixel_averages`, `method_fields`,
-`blob_parameters`; see `docs/PHASE_06_DECORRELATION.md`):
+`core/multishot.py`), `pages/5_fields.py` is the Fields page (its builders are
+in `fusion_ui/views/`), `pages/6_documentation.py` the Documentation page, and
+`fusion_ui/plots/` holds seventeen specs: the fourteen below and the three
+phase-06 products (`pixel_averages`, `method_fields`, `blob_parameters`; see
+`docs/PHASE_06_DECORRELATION.md`):
 
 | module | spec | |
 |---|---|---|
 | `raw.py` | `raw_frames` | live: frames, click-a-pixel trace, mp4 export |
-| `dead_pixels.py` | `dead_pixels` | cached, raw files only, **`whole_record`**: the dead-pixel mask preprocessing uses, judged over the analysis window (the discharge window cut to the gas puff, `density_scan.puff`, found on the whole record), with every pixel's PDF and spectrum to check it by eye and, above them, the array mean with both windows, the baseline, threshold and level marked, so the cut can be checked too. A result stored before the puff window (111 of them, until `precompute dead_pixels --force`) has none of it and says so. **The dead-pixel words**, which both dead-pixel views show through `explain()`: a plain summary, hand-written Markdown in `fusion_ui/data/dead_pixels_in_plain_words.md` beside `run_days.md` and read at every rerun, and `METHOD`, the technical text, in this module's expander |
+| `dead_pixels.py` | `dead_pixels` | cached, raw files only, **`whole_record`**: the dead-pixel mask preprocessing uses, judged over the analysis window (the discharge window cut to the gas puff, `density_scan.puff`, found on the whole record), with every pixel's PDF and spectrum to check it by eye and, above them, the array mean with both windows, the baseline, threshold and level marked, so the cut can be checked too. A result stored before J6e has none of it and says so; `precompute dead_pixels --force` recomputes it. **The dead-pixel words**, which both dead-pixel views show through `explain()`: a plain summary, hand-written Markdown in `fusion_ui/data/dead_pixels_in_plain_words.md` beside `run_days.md` and read at every rerun, and `METHOD`, the technical text, in this module's expander |
 | `stored_mask.py` | `stored_mask` | live, preprocessed files only: the mask the file was made with (`dead`, `dead_shot`, `dead_evidence`, `dead_psd_ratio`), where the run day's mask overrides the shot's own verdict, its source, and the window preprocessing cropped to |
 | `probe.py` | `probe_trace` | live: the ragged ASP/FSP trace |
 | `thomson_profiles.py` | `thomson_profiles` | live, `thomson_scattering` files only (raw): n_e, T_e and p_e against ρ_pol or R_mid, with the edge and core points in the window (only n_e > 0: a 0 is no measurement), the stored fit over its whole range **without a band**, and the separatrix. A fit with anything but the outcome `passed` in its `fit_check` gets a warning quoting it, that advises by the clause that failed (the core on axis, the outer end at ρ_pol 1.10); a `fit_note` that calls the core an extrapolation gets a caption; and the file's caveat is under the figure. It reads the file and imports nothing from fusion_scripts |
@@ -68,7 +79,8 @@ instead is right only for something computed straight off the raw frames.
 The old `velocity_field` spec, a different estimator from the paper's, is gone
 (phase 06). Runs stored under its key stay in the ledger, unregistered, until
 `fusion-ui prune --plot velocity_field --yes`, which works on a plot key that is
-no longer registered and counts what it would delete before it deletes.
+no longer registered and counts what it would delete before it deletes. The
+server's were pruned on 2026-10-08 (J7).
 
 The `density_scan/results.json` seed is imported with `fusion-ui
 import-results`: 50 shots, 3880 pixels, 46 560 scalars (twelve names) under the
@@ -95,6 +107,11 @@ cp .env.example .env        # then edit for this machine
 .venv/bin/fusion-ui init-db && .venv/bin/fusion-ui rescan
 .venv/bin/streamlit run fusion_ui/app.py
 ```
+
+New code adds no import from `fusion_scripts`, whose ripe methods are to move to
+`imaging_methods` (L14 in `docs/PHASE_06_DECORRELATION.md`; the plan, with a
+survey of the imports the app has, is
+`fusion_scripts/MIGRATION_TO_IMAGING_METHODS.md`).
 
 On the dev machine the checkouts are under `/home/sosno/Git` and the data is
 `~/Data/alcator` (45 APD shots, raw + preprocessed, and one ASP shot).
@@ -131,9 +148,11 @@ source is always shown next to the value.
 documented in `docs/PLAN.md`. Open it with `db.open_db()`; never with bare
 `sqlite3.connect`. Schema changes append a function to `db.MIGRATIONS` — the
 list index is the version it produces — and never edit `db.SCHEMA` in place.
-Currently at **v2**, which added `runs.preprocessed`: the raw and preprocessed
+Currently at **v4**. v2 added `runs.preprocessed`: the raw and preprocessed
 files are different data and give different answers, so they must not share a
-ledger row.
+ledger row. v3 added `shots.dt`. v4 added `runs.input_mtime` and
+`runs.upstream_run_id`, which record what a result was computed from (see "The
+decorrelation products and the Fields page").
 
 `presets` is the only table nothing writes yet. Never write `runs`, `scalars`
 or `param_sets` with raw SQL — go through `core/store.py`, which is what keeps
@@ -142,7 +161,9 @@ the hash, the blob path and the ledger consistent.
 `runs.code_version` is stored but deliberately **not** part of any cache key:
 hashing it would invalidate every result on every commit. It is shown under the
 figure with a Recompute button, and the person looking at the plot decides
-whether the version matters.
+whether the version matters. It holds the commit of four repositories:
+`fusion_ui`, `imaging_methods`, `fusion_scripts` and `velocity_estimation`
+(`core/versions.py`).
 
 ## The catalog
 
@@ -225,6 +246,7 @@ class PlotSpec:
     upstream_params: Callable | None = None   # (params) -> the upstream's params
     description: str = ""
     preprocessed: bool | None = None      # False raw only, True preprocessed only
+    batch_only: bool = False              # computed only by `fusion-ui precompute`, never from a page
     whole_record: bool = False            # compute gets the whole record, not the discharge window's cut
 ```
 
@@ -260,6 +282,22 @@ class PlotSpec:
   version. `dead_pixels` is raw-only, because preprocessing interpolates dead
   pixels away; `stored_mask` is preprocessed-only, because the mask it draws is
   stored in that file.
+- **`batch_only` keeps a slow spec off the pages.** The 2DCA at every pixel of a
+  shot (`pixel_averages`) can take most of an hour, and a page runs inside the
+  process that serves the group. `store.result` and `store.compute_and_store`
+  raise `BatchOnlyError` unless called with `batch=True`, which only
+  `fusion-ui precompute` passes. That holds for a batch-only spec reached as an
+  upstream through `requires` too, and a refusal writes no `runs` row.
+  `register()` refuses a live spec that sets it. **The single-shot page reads
+  such a spec with `store.lookup(conn, spec, target, params)`**, which never
+  computes, never resolves an upstream and writes nothing, not even the
+  `param_sets` row: `(None, None)` means nothing is stored, `(None, run)` a
+  recorded failure or an `ok` row whose blob is gone, `(result, run)` the loaded
+  result. What is missing it shows as the `fusion-ui precompute` command that
+  fills it (`precompute.command`). A spec built on a batch-only one is computed
+  from the page only when `store.missing_batch_upstreams` returns `[]`, and
+  many-pixel mode leaves out any spec with a batch-only link in its chain
+  (`multipixel.supported`).
 - **`whole_record` hands `compute` the whole record**, not the file cut to the
   discharge window — **the one exception to "Never load a full time axis"**
   (see Analysis conventions). It is for a spec that finds something against the
@@ -331,6 +369,80 @@ the widget panel, the canonical dict and the sha1 that keys `param_sets`.
 - `params_ui.CHOICES`, `OPTIONAL` and `HELP` hold what upstream does not carry:
   the allowed values for its string fields and help text for the seven leaves
   whose docstrings say nothing. Add there rather than patching a dependency.
+
+## The decorrelation products and the Fields page
+
+**Three products, one of them expensive.** `plots/pixel_averages.py` is the 2DCA
+at every live reference pixel of a preprocessed shot, stored as one blob per
+shot, and is `batch_only`. `plots/method_fields.py` and `plots/blob_parameters.py`
+declare `requires="pixel_averages"` and read the stored averages back, in
+minutes a shot, so a change of tracking or TDE settings does not pay for the
+2DCA again. All three set `preprocessed=True` and are thin adapters over
+`decorrelation.pipeline` in `fusion_scripts`. **Their keys, and the module and
+class names of their params, are permanent**, since they are part of the cache
+key: `test_the_default_keys_are_stable` in `tests/test_products.py` pins the
+three default hashes. `plots/_pipeline.py` is the only module that imports the
+API (a test fails on a second one). It imports `fusion_ui.config` first, because
+fusion_scripts' `config` fills any `FUSION_*` variable still unset from its own
+`.env`, and calls `core.fusion_scripts.import_config()` before the API, because
+under Streamlit the bare name `config` finds `fusion_ui/config.py`.
+
+**Scalars.** `method_fields` writes 20 names and `blob_parameters` 12, per live
+pixel as `(x, y, name)`: each module's `SCALARS` maps a name to its blob
+variable. A dead pixel gets no row, and a NaN at a live one is stored as NULL,
+"tried and failed". `number_events`, `taud_psd` and `lambda_psd` are the names
+the seed and the older specs (`two_dca`, `taud_psd`) already write for the same
+numbers, which the blobs call `nevents`, `taud` and `lam`; sharing them lets
+those sources line up on one multi-shot axis. A name a spec writes needs an
+entry in `fusion_ui/data/documentation.md` and, for a spec that is not a
+product, a line in `documentation.OLDER_SOURCES`: `tests/test_documentation.py`
+fails without them. `core/scalar_labels.py` labels the 32 product names, each
+with a unit or `[no unit]`, and `tests/test_scalar_labels.py` holds it to
+exactly those names.
+
+**The Fields page never computes.** `pages/5_fields.py` reads the ledger with
+`store.find_run` and loads each blob through a `st.cache_data` keyed on (path,
+mtime), because `lookup` loads the blob on every call. What is missing it names,
+with the `fusion-ui precompute` command that fills it (`views/products.py`). Its
+*settings* are a `method_fields` parameter set, the default or any other the
+ledger holds, and `views.products.related_params` derives the other products'
+parameters from it: `averages` and the contour's `neighbour_step` carry over,
+everything else is the product's own default. A `blob_parameters` run made with
+other `blobs` settings is therefore not found by the page.
+
+**`fusion_ui/views/` draws the Fields page, as pure builders.** A builder is
+`build(bundle, **controls)` and returns a figure, a table, a sentence or a list
+of them. It never touches Streamlit, the store, the database or the filesystem
+(`views/products.py` is the one module that reads, and only the ledger). The page
+is two lists in `views/__init__.py`, `SHOT_VIEWS` and `PIXEL_VIEWS`, of `View`
+entries (`views/base.py`): the products a view reads, its controls and its
+builder. **A new figure is one builder with a test and one entry; the page does
+not change.** The cuts, the lags and the pixel are view state in
+`st.session_state`, never parameters. A multi-shot point from `method_fields` or
+`blob_parameters` opens the Fields page when settings go with it
+(`fusion_ui/jump.py`): the multi-shot page sets `st.session_state["fields.open"]`
+to `{"shot", "settings", "pixel"}` and switches page, and the Fields page reads
+that once and removes it.
+
+**What a result was computed from** (schema v4). `runs.input_mtime` is the input
+file's mtime as `shots` has it, and `runs.upstream_run_id` the run a chained
+result was built on. Neither is in the cache key. `store.stale_runs` lists a run
+when its input changed (only a `rescan` refreshes `shots.mtime`), when its
+upstream row was deleted or recomputed in place, or when its upstream is stale
+itself. A run with no `input_mtime`, written before v4, is unknown and never
+listed, so legacy results are not recomputed wholesale. The Fields page badges a
+stale result, and one made under another `fusion_scripts` commit than the
+checkout's; both are information, and nothing recomputes by itself.
+`fusion-ui precompute … --stale` recomputes the stale ones in place, upstream
+first, each with the parameters it was stored with.
+
+**`fusion-ui precompute`** takes several plots and runs them in dependency order
+within each shot, so a bank is computed once. `--workers N` runs a pool of
+spawned processes over the shots, largest file first, and is the only process
+pool in the app. `--run-day D` and `--shot N` add up. `--params-json PATH` takes
+one plot's complete parameter set, when only that plot is named, or only the
+fields to change, such as `{"averages": {"window": 30}}`, which apply to every
+plot named. The README's recompute table says which command a change calls for.
 
 ## Traces and the statistics page
 
