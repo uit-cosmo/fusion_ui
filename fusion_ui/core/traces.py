@@ -24,6 +24,10 @@ IMAGING = ("apd", "phantom")
 #: Diagnostics whose files carry one ragged time axis per (quantity, position).
 PROBE = ("asp", "fsp")
 
+#: Every diagnostic a trace can be taken from. The others have none to take: a Thomson scattering file holds profiles,
+#: one reading per laser pulse and channel, which the Statistics page's time-trace statistics do not describe.
+SOURCES = IMAGING + PROBE
+
 
 @dataclass(frozen=True)
 class TraceRef:
