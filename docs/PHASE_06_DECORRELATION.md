@@ -747,6 +747,8 @@ Built, tested and pushed to main on 2026-10-07, and deployed the same day (JD).
 | J12f | The TS view on 24e1499's files, and the retriever's defaults | **Opus 5.5** | fusion_ui + fusion_scripts | J12e; the user's decision (2026-10-12) | J12g |
 | J12g | The production TS files remade with 24e1499, and swapped in on the server | orchestrator | mfe + server | J12e; swap after J12f's deploy | J12f |
 | J12h | The mfe script keeps every file: mapping errors, J12e's point check, 1140619014's stamps | **Opus 5.5** | fusion_scripts + mfe | J12g's step 1 | J12f |
+| J13a | MLP profiles as a single-shot plot, checked against the density-scan paper | **Opus 5.5** | fusion_ui | the user's request (2026-10-12) | J12h, J12g |
+| J13b | MLP profiles on the TS plots, where the probe scans: a spec's companion diagnostics | **Opus 5.5** | fusion_ui | J13a, J12f | — |
 
 **Why these models.** `PLAN.md` splits work by how expensive a wrong decision
 is to undo, not by how hard it is, and so does this table.
@@ -2937,6 +2939,142 @@ alone.
   `~/fusion_ts/`; leave `~/C-Mod_Analysis` and the 24e1499 clone as they are;
   install nothing.
 - **Nothing is written to the server.**
+
+### J13 — MLP profiles
+
+**The request (the user, 2026-10-12).**
+
+- For each shot, the profiles of every quantity of the Mirror Langmuir Probe
+  (MLP), as a single-shot plot.
+- Reproduce the results of O E Garcia, J M Losada et al., "Velocity scaling
+  regimes for blob-like filaments in the Alcator C-Mod scrape-off layer",
+  Plasma Phys. Control. Fusion 68 (2026), doi 10.1088/1361-6587/ae6bbb, to
+  check them. The user is an author.
+- Then the option to add the MLP profiles to the TS plots, where the MLP probe
+  is sweeping.
+
+**Facts (the orchestrator, 2026-10-12).**
+
+- **The files are `asp/asp_<shot>.nc`,** with the attribute `probe_type`
+  "Mirror Langmuir Probe (MLP)".
+  - Six quantities: `ne`, `Te`, `Is`, `Js`, `Vp` and `Vf`.
+  - Each comes at four positions, `_0` to `_3`, each on its own ragged time
+    axis `time_<q>_<i>`.
+  - The companions `rho_<q>_<i>` sit on `rho_time_<q>_<i>`, at 10 kHz over
+    the whole shot.
+  - The attributes `probe_origin`, which is (R, Z, φ) = (0.976, 0.111, 3.12),
+    and `plunge_time` and `plunge_depth`, which are stored as strings.
+  - **No variable has a units attribute.**
+    - On 1150618021 the values run: n_e 7·10¹⁷–5·10¹⁹, T_e 2–23, J_s
+      10³–1.7·10⁵ and V_p 5–61.
+    - ρ runs 0–0.18. It is probably metres from the separatrix at the
+      outboard midplane, but nothing in the file says so.
+- **The code that reads them:**
+  - `plots/probe.py`, the live `probe_trace`;
+  - `core/traces.py`, the probe channels on their ragged axes;
+  - `core/loader.py`, which does the cut.
+- **The data:**
+  - The server holds 114 ASP files, among them all nine 1160616 shots, at
+    0.46–1.1 GB each.
+  - The laptop's `~/Data/alcator/asp/` holds 1150618021, and since
+    2026-10-12 also 1160616009, 011, 016, 017, 018, 022 and 025.
+  - FSP: the laptop has none.
+- **The discharge DB's `mlp_mode` is free text.**
+  - Across the DB: 'scan' 12 times, 'dwell' once, 'none' 29 times, '-' 40
+    times, '' 43 times, and three notes.
+  - For 1160616: 'scan' on 009, 011, 016, 017 and 022; 'dwell' on 018; '-'
+    on 025, 026 and 027.
+- **The paper.**
+  - **The data:**
+    - six 1160616 discharges, f_GW 0.24 to 0.80;
+    - the MLP is on the horizontal scanning probe, 11 cm above the outboard
+      midplane, with up to three SOL scans a discharge;
+    - there are no MLP data at f_GW 0.80.
+  - **The method:**
+    - the time series is cut into 1 ms windows, and the mean of each is
+      taken;
+    - ρ is the distance to the separatrix, mapped along field lines to the
+      outboard midplane with EFIT;
+    - the profiles are adjusted so that T_e is consistent at the last closed
+      flux surface.
+  - **The results:**
+    - Fig. 2 shows n_e, T_e, the connection length and the collisionality
+      against ρ;
+    - the far-SOL e-folding lengths are L_n = 2.8 cm at f_GW 0.24 to 5.6 cm
+      at 0.65, and L_T = 1.8 cm at 0.24 to 2.5 cm;
+    - ν* is about 20 at the separatrix and 100 in the far SOL at low density,
+      and about 10³ at the highest.
+  - **Its data cannot be made public** (its data-availability statement).
+- **The single-shot page hands a plot one diagnostic's file.** Putting the
+  probe's profiles on the TS plot is therefore a change to the `PlotSpec`
+  contract (J13b), not to the TS view alone.
+
+#### J13a — MLP profiles, a single-shot plot · Opus 5.5 · fusion_ui
+
+**Deliver:**
+
+- **A live spec, `mlp_profiles`,** "MLP profiles", on `("asp",)`.
+  - **What it draws:** the six quantities against ρ, one row each, over the
+    probe's plunges in the page's window, reduced as the paper does (1 ms
+    windows, the mean of each).
+  - **The positions:** the four are told apart, or combined as the paper
+    combines them. Say which, and why.
+  - **The plunges:** each plunge, in and out, is told apart.
+  - **ρ:** as the paper defines it. Where its adjustment needs something the
+    file does not hold, say so, and leave the adjustment out or offer it.
+  - **The e-folding lengths:** the far-SOL L_n and L_T, fitted as the paper
+    fits them, in a caption.
+  - **No plunge in the window,** as with 'dwell' or '-', is said in words and
+    not drawn as an empty profile.
+  - **Units and ρ's meaning,** established and written down with how they
+    were established. The files hold neither.
+- **No import from fusion_scripts** (L14).
+- **The words:**
+  - a section on the Documentation page;
+  - CLAUDE.md's spec table;
+  - for any number the page quotes from code, the `documentation.facts()`
+    placeholder.
+- **Tests,** hermetic, on a synthetic file of the real layout.
+
+**Accept when:**
+
+- the suite passes;
+- **the page draws the laptop's eight ASP files,** through AppTest on a
+  scratch ledger, with one chart each and no exception. The shots without a
+  scan say so;
+- **the paper is reproduced, for the 1160616 shots with MLP data:**
+  - n_e and T_e against ρ, overlaid by f_GW as in its Fig. 2(a, b), as a
+    scratch figure read by eye beside the paper's;
+  - a table of L_n and L_T, the paper's against the page's, with any
+    difference explained;
+- screenshots, read by eye.
+
+#### J13b — MLP profiles on the TS plots · Opus 5.5 · fusion_ui
+
+**Deliver:**
+
+- **A spec's companion diagnostics,** generic and documented in CLAUDE.md's
+  contract.
+  - A live spec may name other diagnostics of the same shot. The single-shot
+    page opens their files, cut to the same window, and hands them to
+    `render`, with `None` where a file is missing.
+  - `render` stays pure, and `register()` checks the declaration.
+- **The TS view offers the MLP profiles**
+  - only where the shot's ASP file has the probe plunging within the window.
+    Judge that from the data, and show the DB's `mlp_mode` as a hint;
+  - drawn on the n_e, T_e and p_e rows (p_e = e·n_e·T_e);
+  - mapped to the TS axes: R_mid = R_mid,sep + ρ, if ρ is what J13a
+    establishes, and ρ_pol through the file's own `fit_R_mid`. A caption says
+    how;
+  - with J13a's reduction, reused and not copied.
+
+**Accept when:**
+
+- the suite passes;
+- the overlay draws on 009, 011, 016, 017 and 022, on both axes, and is not
+  offered on 018 and 025;
+- a TS plot without the overlay is drawn exactly as before, on every TS file;
+- screenshots, read by eye.
 
 ## Orchestration
 
