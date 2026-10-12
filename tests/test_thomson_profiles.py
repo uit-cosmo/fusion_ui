@@ -17,6 +17,7 @@ What these tests hold the view to, each on a synthetic file in the layout fusion
 
 import ast
 import base64
+import dataclasses
 import inspect
 import json
 import re
@@ -984,6 +985,396 @@ def test_attribute_text_is_escaped_for_markdown():
 
 
 # ---------------------------------------------------------------------------
+# A file made with C-Mod_Analysis 24e1499, whose fit may have been moved to a separatrix
+# ---------------------------------------------------------------------------
+
+
+def head_of(window=tf.WINDOW, shift=tf.SHIFT, **options):
+    """The profiles of a file made with C-Mod_Analysis 24e1499 whose fit was moved by ``shift`` (0: not moved)."""
+    return profiles_of(window=window, commit="24e1499", shift=shift, **options)
+
+
+def kept(ds, name, system="edge"):
+    """The file's ``<system>_<name>`` at the points the view keeps (n_e > 0), in the order it keeps them."""
+    return ds[f"{system}_{name}"].values[ds[f"{system}_ne"].values > 0]
+
+
+def test_a_24e1499_file_gives_its_fits_shift_and_its_points_move_with_a_fit_that_moved():
+    moved = head_of()
+    assert moved.fit.rho_shift == tf.SHIFT and moved.fit.moved
+    assert moved.fit.rho_pol[0] == tf.SHIFT and moved.fit.rho_pol[-1] == pytest.approx(1.1 + tf.SHIFT)  # the moved grid
+    assert moved.scalars["Te_sep_fit"] == np.interp(1.0, moved.fit.rho_pol, moved.fit.Te)
+    assert all(points.moved and points.rho_shift == tf.SHIFT for points in moved.points.values())
+    # The finder failed: the file says the fit was not moved, and its points stay where EFIT puts them.
+    still = head_of(shift=0.0)
+    assert still.fit.rho_shift == 0.0 and not still.fit.moved and "Te_sep_fit" not in still.scalars
+    assert not any(points.moved for points in still.points.values())
+    # A d6a6466 file has no shift at all.
+    old = profiles_of()
+    assert old.fit.rho_shift is None and not old.fit.moved
+    assert not any(points.moved for points in old.points.values())
+
+
+@pytest.mark.parametrize("shift", [tf.SHIFT, -0.006])
+def test_on_rho_pol_the_points_of_a_moved_fit_are_drawn_at_their_rho_pol_plus_the_shift(shift):
+    ds = cut(tf.thomson_dataset(commit="24e1499", shift=shift))
+    found = tp.read(ds)
+    fig = tp.figure(found, "rho_pol")
+    for n in (1, 2, 3):
+        edge, core, fit = in_row(fig, n)
+        np.testing.assert_array_equal(edge.x, kept(ds, "rho_pol", "edge") + shift)
+        np.testing.assert_array_equal(core.x, kept(ds, "rho_pol", "core") + shift)
+        np.testing.assert_array_equal(fit.x, ds["rho_pol"].values)  # the fit on its own grid, which is the moved one
+    # What the file says of each point stays as EFIT puts it: only where it is drawn moves.
+    np.testing.assert_array_equal(found.points["edge"].rho_pol, kept(ds, "rho_pol", "edge"))
+    np.testing.assert_array_equal(found.points["edge"].R_mid, kept(ds, "R_mid", "edge"))
+
+
+@pytest.mark.parametrize("shift", [tf.SHIFT, -0.006])
+def test_on_r_mid_the_moved_points_are_at_the_fits_own_r_mid_of_their_moved_rho_pol(shift):
+    ds = cut(tf.thomson_dataset(commit="24e1499", shift=shift))
+    fig = tp.figure(tp.read(ds), "R_mid")
+    grid, fit_r_mid = ds["rho_pol"].values, ds["fit_R_mid"].values
+    for i, system in enumerate(("edge", "core")):
+        x = np.asarray(in_row(fig, 1)[i].x, dtype=float)
+        moved = kept(ds, "rho_pol", system) + shift
+        np.testing.assert_array_equal(x, np.interp(moved, grid, fit_r_mid, left=np.nan, right=np.nan))
+        # Not at their own pulse's R_mid, from which the fixture's straight-line map puts them 0.21 m per unit of ρ_pol.
+        np.testing.assert_allclose(x - kept(ds, "R_mid", system), 0.21 * shift, rtol=0, atol=1e-12)
+    np.testing.assert_array_equal(in_row(fig, 1)[2].x, fit_r_mid)
+
+
+@pytest.mark.parametrize("shift", [tf.SHIFT, -0.006])
+def test_the_separatrix_of_a_moved_fit_is_its_own_rho_pol_1_where_its_t_e_is_te_sep_fit(shift):
+    found = head_of(shift=shift)
+    te_sep = found.scalars["Te_sep_fit"]
+    for axis in ("rho_pol", "R_mid"):
+        fig = tp.figure(found, axis)
+        (x,) = {shape.x0 for shape in fig.layout.shapes}  # the same line in every row
+        fit = in_row(fig, 2)[2]  # the T_e row's fit, on the axis drawn
+        assert np.interp(x, fit.x, fit.y) == pytest.approx(te_sep, rel=1e-12), axis
+    assert tp.separatrix(found, "rho_pol") == 1.0
+    assert tp.separatrix(found, "R_mid") == np.interp(1.0, found.fit.rho_pol, found.fit.R_mid)
+
+
+def test_the_separatrix_of_a_moved_fit_on_r_mid_is_its_own_before_the_files_scalar():
+    found = head_of()
+    found.scalars["R_mid_sep"] = 0.95  # another number than the fit's own R_mid at its ρ_pol 1
+    assert tp.separatrix(found, "R_mid") == pytest.approx(tf.r_mid(1.0), rel=0, abs=1e-12)
+    # Without the fit's R_mid, the scalar stands in: fit_R_mid maps the moved ρ_pol through EFIT, so R_mid_sep is the
+    # same place, to the grid's interpolation.
+    assert tp.separatrix(head_of(fit_r_mid=False), "R_mid") == pytest.approx(tf.r_mid(1.0))
+    # A fit that was not moved keeps the rule of every other file: the scalar first.
+    still = head_of(shift=0.0)
+    still.scalars["R_mid_sep"] = 0.95
+    assert tp.separatrix(still, "R_mid") == 0.95
+
+
+def test_the_points_of_a_moved_fit_sit_on_it_drawn_moved_and_beside_it_where_efit_puts_them():
+    """The fixture's fit is made on the points as EFIT maps them and then moved, as 24e1499 does it. Drawn moved with
+    it, near the separatrix the points sit on it; drawn where EFIT puts them, they would sit beside it by the shift."""
+    found = head_of()
+    fig = tp.figure(found)
+    for n in (1, 2):  # n_e and T_e
+        edge, _, fit = in_row(fig, n)
+        drawn, y = np.asarray(edge.x, dtype=float), np.asarray(edge.y, dtype=float)
+
+        def residual(at):
+            near = (at >= 0.95) & (at <= 1.0) & np.isfinite(y)
+            return np.median(np.abs(y[near] - np.interp(at[near], fit.x, fit.y)))
+
+        assert residual(drawn) < residual(found.points["edge"].rho_pol), n
+
+
+@pytest.mark.parametrize("axis", ["rho_pol", "R_mid"])
+def test_the_range_of_a_row_is_set_by_the_points_as_drawn(axis):
+    """J12d's rule judges the fit against the points beside it on the axis drawn: a moved fit against its points as they
+    are drawn, moved with it. Points that sit, unmoved, where the moved ones are drawn give the same tops and counts."""
+    found = head_of(runaway=True)
+    in_place = {
+        system: dataclasses.replace(points, rho_pol=points.on("rho_pol"), R_mid=points.on("R_mid"), rho_shift=0.0)
+        for system, points in found.points.items()
+    }
+    drawn = tp.Profiles(points=in_place, fit=found.fit, pulses=found.pulses, scalars=found.scalars, attrs=found.attrs)
+    fig = tp.figure(found, axis)
+    for key, (name, _label, _title, scale, _unit) in zip(YAXES, tp.QUANTITIES):
+        limits = tp.y_limits(found, name, axis, scale)
+        assert limits == tp.y_limits(drawn, name, axis, scale) and tuple(fig.layout[key].range) == limits
+        top = limits[1]
+        assert tp.points_above(found, name, axis, top, scale) == tp.points_above(drawn, name, axis, top, scale)
+
+
+def test_a_moved_point_judges_the_fit_where_it_is_drawn_and_not_where_efit_puts_it():
+    x = np.r_[np.linspace(0.5, 0.6, 20), np.linspace(0.9, 1.0, 20)]
+    value = np.r_[np.full(20, 100.0), np.full(20, 1000.0)]
+    found = toy(x, value, fit=([0.7], [2000.0]))
+    # Beside the points of 100, which are the nearest where EFIT puts them, the fit is not plausible.
+    assert tp.y_limits(found, "Te", "rho_pol")[1] == pytest.approx(1.1 * 1000)
+    found.points["edge"].rho_shift = -0.15  # drawn at 0.35-0.45 and 0.75-0.85: now the points of 1000 are beside it
+    assert tp.y_limits(found, "Te", "rho_pol")[1] == pytest.approx(1.1 * 2000)
+
+
+def test_a_moved_point_beyond_the_fits_grid_has_no_r_mid_and_the_notes_count_it():
+    ds = cut(tf.thomson_dataset(commit="24e1499", shift=tf.SHIFT))
+    rows, channels = np.nonzero(ds["edge_ne"].values > 0)
+    ds["edge_rho_pol"][int(rows[0]), int(channels[0])] = 1.15  # 1.16 moved, beyond the moved grid's end at 1.11
+    found = tp.read(ds)
+    edge = found.points["edge"]
+    assert np.isnan(edge.on("R_mid")[0]) and edge.on("rho_pol")[0] == 1.15 + tf.SHIFT
+    note = tp.notes(found, FITS_WINDOW, "R_mid")[0]
+    assert note.endswith(
+        " 1 of the points moved with the fit lie beyond its grid, where `fit_R_mid` gives them no R_mid, and are not "
+        "drawn."
+    )
+    assert "have no R_mid" not in note  # EFIT gave it a place: it is the fit's R_mid that does not reach it
+    assert "beyond its grid" not in tp.notes(found, FITS_WINDOW, "rho_pol")[0]
+
+
+def test_a_moved_point_with_no_rho_pol_from_efit_is_counted_as_every_other_file_counts_it():
+    found = head_of(unmapped=True)
+    expected = sum(int(np.isnan(p.rho_pol).sum()) for p in found.points.values())
+    assert expected > 0
+    for axis in ("rho_pol", "R_mid"):
+        note = tp.notes(found, FITS_WINDOW, axis)[0]
+        assert f"{expected} of the points have no {tp.AXES[axis][1]} (the pulse is outside the EFIT time base)" in note
+        assert "beyond its grid" not in note
+
+
+def test_a_moved_fit_without_an_r_mid_places_neither_itself_nor_its_points_on_r_mid():
+    found = head_of(fit_r_mid=False)
+    fig = tp.figure(found, "R_mid")
+    assert not fig.data and "None of the" in fig.layout.annotations[0].text
+    fit_note = tp.notes(found, FITS_WINDOW, "R_mid")[1]
+    assert "so neither it nor the points moved with it are drawn on this axis." in fit_note
+    assert names_in_row(tp.figure(found, "rho_pol"), 1) == ["edge TS", "core TS", FIT]
+
+
+def test_a_moved_fit_is_captioned_with_the_move_the_te_sep_and_the_files_own_words():
+    found = head_of()
+    te_sep = found.scalars["Te_sep_fit"]
+    lines = tp.notes(found, FITS_WINDOW, "rho_pol")
+    assert [line.split(" ")[0] for line in lines] == ["Points:", "Fit:", "The", "Fictitious", "ρ_pol", "From"]
+    move = lines[2]
+    assert move == (
+        "The fit was moved to a separatrix, and the points are drawn moved with it, where the fit saw them: "
+        f"C-Mod_Analysis moved the fit, and its own copy of the points, by +0.0100 in ρ_pol, so that its T_e is "
+        f"T_e,sep = {te_sep:.1f} eV (`Te_sep_fit`) at ρ_pol = 1. "
+        f"The file's `fit_separatrix`: “{tp._escape(tf.fit_separatrix(tf.SHIFT, te_sep))}”"
+    )
+    assert lines[4] == (
+        "ρ_pol = √ψ_N of each point's channel at its own pulse, from the EFIT tree `ANALYSIS`, moved by +0.0100 with the "
+        "fit. The separatrix is the fit's ρ_pol = 1."
+    )
+    r_mid = tp.notes(found, FITS_WINDOW, "R_mid")
+    assert r_mid[2] == move  # the same move on either axis
+    assert r_mid[4] == (
+        "R_mid is the major radius at which a flux surface crosses the outboard midplane. The points are moved with the "
+        "fit, so each is drawn at the fit's own R_mid of its moved ρ_pol (`fit_R_mid`, from EFIT at the window's middle "
+        f"time), and not at its own pulse. The separatrix, the fit's ρ_pol = 1, is at R_mid = {tf.r_mid(1.0):.4f} m."
+    )
+    # A fit moved inward says so with its sign.
+    assert "by -0.0060 in ρ_pol" in tp.move_note(head_of(shift=-0.006))
+    # A file that records no T_e,sep says that too, rather than leave the sentence without one.
+    found.scalars.pop("Te_sep_fit")
+    assert "though the file records no T_e,sep that it was moved to." in tp.move_note(found)
+
+
+def test_a_fit_that_was_not_moved_and_a_d6a6466_one_have_no_caption_of_a_move():
+    for found in (head_of(shift=0.0), profiles_of()):
+        assert tp.move_note(found) == ""
+        for axis in ("rho_pol", "R_mid"):
+            assert not [line for line in tp.notes(found, FITS_WINDOW, axis) if "moved" in line]
+
+
+def test_a_fit_held_by_fictitious_points_says_so_and_that_the_p_e_fit_is_not():
+    for found in (head_of(), head_of(shift=0.0)):
+        (held,) = [line for line in tp.notes(found, FITS_WINDOW, "rho_pol") if line.startswith("Fictitious points")]
+        assert held == (
+            "Fictitious points hold the outer side of the n_e and T_e fits (`force_to_zero`), so there the fit says "
+            "nothing measured. The p_e fit is not held, and can run away in the SOL. "
+            f"The file's `fit_note` says “{tp._escape(tf.FORCE_TO_ZERO_NOTE)}”"
+        )
+    assert tp.held_note(profiles_of().attrs) == ""  # d6a6466's settings have force_to_zero off
+    # With no fit, nothing is held.
+    no_fit = head_of(fit=False, fit_status="failed: ValueError: No edge Thomson data!")
+    assert not [line for line in tp.notes(no_fit, FITS_WINDOW, "rho_pol") if line.startswith("Fictitious")]
+    # A note that does not say how leaves the caption without the quote.
+    bare = tp.held_note(dict(head_of().attrs, fit_note=tf.FIT_NOTE))
+    assert bare.endswith("can run away in the SOL.")
+
+
+def test_a_moved_point_says_in_its_hover_where_it_is_drawn_and_where_efit_puts_it():
+    found = head_of()
+    points = found.points["edge"]
+    first = in_row(tp.figure(found), 2)[0].hovertext[0]
+    assert (
+        f"ρ_pol = {points.rho_pol[0] + tf.SHIFT:.3f} · R_mid = {points.on('R_mid')[0]:.4f} m, moved with the fit "
+        "(+0.0100)<br>"
+    ) in first
+    assert f"<br>EFIT: ρ_pol = {points.rho_pol[0]:.3f} · R_mid = {points.R_mid[0]:.4f} m<br>" in first
+    assert "moved" not in in_row(tp.figure(head_of(shift=0.0)), 2)[0].hovertext[0]
+
+
+def test_the_about_list_gives_te_sep_fit_beside_te_sep_2pm_the_move_and_where_the_separatrix_code_is():
+    found = head_of()
+    rows = tp.about(found)
+    names = [name for name, _ in rows]
+    assert names[names.index("Te_sep_2pm") + 1] == "Te_sep_fit"
+    text = dict(rows)
+    assert text["Te_sep_fit"] == f"{found.scalars['Te_sep_fit']:.4g} eV"
+    assert text["fit_separatrix"] == tf.fit_separatrix(tf.SHIFT, found.scalars["Te_sep_fit"])
+    assert text["separatrix_code"] == (
+        f"{tf.SEPARATRIX_CODE}: outside C-Mod_Analysis' repository, so no commit pins it; the file keeps the sha256 of "
+        "each of the 2 files of it that were loaded, in separatrix_code_sha256."
+    )
+    assert text["fit_rho_shift"] == "+0.01 in ρ_pol"
+    assert not [name for name in (*tp.ABOUT, *tp.SEPARATRIX_ABOUT) if name not in text]  # each is one the files have
+    still = dict(tp.about(head_of(shift=0.0)))
+    assert still["fit_rho_shift"] == "0: the fit was not moved" and "Te_sep_fit" not in still
+    assert "found no separatrix Te" in still["fit_separatrix"]
+    assert tp.separatrix_code({"separatrix_code": "/x"}) == (
+        "/x: outside C-Mod_Analysis' repository, so no commit pins it; the file records no sha256 of it."
+    )
+    old = dict(tp.about(profiles_of()))
+    assert not {"Te_sep_fit", "fit_rho_shift", *tp.SEPARATRIX_ABOUT} & set(old)
+
+
+def test_a_d6a6466_file_is_drawn_as_before():
+    """A file made with d6a6466 has no ``fit_rho_shift``: each point is drawn where EFIT put it at its own pulse, value for
+    value, the separatrix is at 1 and at ``R_mid_sep``, and nothing speaks of a move or of fictitious points. The real
+    files gave the same figure, notes, warning and list before and after (J12f's check, on all 115)."""
+    ds = cut(tf.thomson_dataset())
+    assert "fit_rho_shift" not in ds and json.loads(ds.attrs["fit_settings"])["force_to_zero"] is False
+    found = tp.read(ds)
+    for axis, fit_x, sep in (
+        ("rho_pol", ds["rho_pol"].values, 1.0),
+        ("R_mid", ds["fit_R_mid"].values, float(ds["R_mid_sep"])),
+    ):
+        fig = tp.figure(found, axis)
+        for n in (1, 2, 3):
+            edge, core, fit = in_row(fig, n)
+            np.testing.assert_array_equal(edge.x, kept(ds, axis, "edge"))
+            np.testing.assert_array_equal(core.x, kept(ds, axis, "core"))
+            np.testing.assert_array_equal(fit.x, fit_x)
+        assert {shape.x0 for shape in fig.layout.shapes} == {sep}
+        hovers = [text for trace in fig.data for text in (trace.hovertext or ())]  # the fit's is a template
+        assert hovers and not [text for text in hovers if "moved" in text or "EFIT:" in text]
+        lines = tp.notes(found, FITS_WINDOW, axis)
+        assert [line.split(" ")[0] for line in lines] == ["Points:", "Fit:", tp.AXES[axis][1], "From"]
+        assert not [line for line in lines if "moved" in line or "Fictitious" in line]
+    # A 24e1499 file whose fit was not moved draws the same figure: only a move changes where anything goes.
+    for axis in ("rho_pol", "R_mid"):
+        assert tp.figure(head_of(shift=0.0), axis).to_json() == tp.figure(found, axis).to_json()
+
+
+# ---------------------------------------------------------------------------
+# What the script's later versions add: the check of the fit's own points, and a mapping that failed
+# ---------------------------------------------------------------------------
+
+POINTS_WARNING = (
+    "**The points drawn may not be where the fit saw them.** The file's `fit_points_check`, which compares the edge "
+    "points the fit was made on with this file's, "
+)
+
+
+@pytest.mark.parametrize("commit, shift", [("24e1499", tf.SHIFT), ("24e1499", 0.0), ("d6a6466", 0.0)])
+def test_a_fit_whose_own_points_differ_from_the_files_is_warned_about_quoting_the_check(commit, shift):
+    found = profiles_of(commit=commit, shift=shift, points_check=tf.POINTS_DIFFER)
+    assert tp.points_warning(found) == f"{POINTS_WARNING}says “{tp._escape(tf.POINTS_DIFFER)}”."
+    assert tp.warning(found) is None  # the fit's own check passed: that is another warning
+
+
+@pytest.mark.parametrize(
+    "said, shown",
+    [
+        ("EQUAL", "says “EQUAL”"),  # not the word the file writes
+        (" differ: by up to 0.7 in rho_pol, the points in another order", None),
+        ("the check could not run", None),
+        ("", "is empty"),
+        ("   ", "is empty"),
+    ],
+)
+def test_anything_but_equal_is_warned_about(said, shown):
+    text = tp.points_warning(head_of(points_check=said))
+    assert text.startswith(POINTS_WARNING)
+    assert text.endswith(f"{shown}." if shown else f"says “{tp._escape(said.strip())}”.")
+
+
+def test_there_is_no_points_warning_when_the_check_says_equal_or_is_absent_or_there_is_no_fit():
+    assert tp.points_warning(head_of(points_check="equal")) is None
+    assert tp.points_warning(head_of(points_check="equal: the fit's edge points are this file's")) is None
+    assert tp.points_warning(head_of()) is None  # an older file, without the attribute
+    assert tp.points_warning(profiles_of()) is None  # and a d6a6466 one
+    no_fit = head_of(fit=False, fit_status="failed: ValueError: No edge Thomson data!", points_check=tf.POINTS_DIFFER)
+    assert tp.points_warning(no_fit) is None  # no fit to have seen the points anywhere
+
+
+def edge_lost(**options):
+    """Profiles whose edge points have no ρ_pol and no R_mid at any pulse, as where mapping them failed."""
+    return profiles_of(failed=(("edge", "rho_pol"), ("edge", "R_mid")), **options)
+
+
+@pytest.mark.parametrize("commit, shift", [("d6a6466", 0.0), ("24e1499", 0.0), ("24e1499", tf.SHIFT)])
+@pytest.mark.parametrize("axis", ["rho_pol", "R_mid"])
+def test_a_system_whose_mapping_failed_at_every_pulse_is_left_out_and_counted(commit, shift, axis):
+    found = edge_lost(commit=commit, shift=shift, mapping_failure=tf.MAPPING_FAILURE)
+    edge = found.points["edge"]
+    assert edge.drawn and np.isnan(edge.on(axis)).all()
+    fig = tp.figure(found, axis)
+    for n in (1, 2, 3):  # the edge is left out of every row, and the core and the fit are drawn
+        assert names_in_row(fig, n) == ["core TS", FIT]
+    note = tp.notes(found, FITS_WINDOW, axis)[0]
+    assert note.endswith(
+        f" {edge.drawn} of the points have no {tp.AXES[axis][1]} and are not drawn: the file's `mapping_failure` "
+        f"says “{tp._escape(tf.MAPPING_FAILURE)}”."
+    )
+    assert "EFIT time base" not in note
+    # The range is the core's and the fit's alone, as without the edge.
+    no_edge = tp.Profiles(
+        points={"core": found.points["core"]}, fit=found.fit, pulses=found.pulses, scalars=found.scalars, attrs={}
+    )
+    for name, _label, _title, scale, _unit in tp.QUANTITIES:
+        assert tp.y_limits(found, name, axis, scale) == tp.y_limits(no_edge, name, axis, scale)
+
+
+def test_a_file_without_mapping_failure_keeps_the_time_base_as_the_reason():
+    found = edge_lost()
+    note = tp.notes(found, FITS_WINDOW, "rho_pol")[0]
+    expected = found.points["edge"].drawn
+    assert note.endswith(
+        f" {expected} of the points have no ρ_pol (the pulse is outside the EFIT time base) and are not drawn."
+    )
+    assert "mapping_failure" not in note
+
+
+def test_a_failed_r_mid_leaves_the_points_on_rho_pol_and_off_r_mid_unless_the_fit_moved_them():
+    """``_getRmidSpline``'s failure: every point has its ρ_pol and none an R_mid. On ρ_pol all are drawn; on R_mid they are
+    left out and counted, unless the fit was moved, whose own R_mid then places them."""
+    lost = (("edge", "R_mid"), ("core", "R_mid"))
+    still = profiles_of(commit="24e1499", failed=lost, mapping_failure=tf.MAPPING_FAILURE)
+    assert names_in_row(tp.figure(still, "rho_pol"), 1) == ["edge TS", "core TS", FIT]
+    assert "have no ρ_pol" not in tp.notes(still, FITS_WINDOW, "rho_pol")[0]
+    assert names_in_row(tp.figure(still, "R_mid"), 1) == [FIT]
+    every = sum(points.drawn for points in still.points.values())
+    assert f" {every} of the points have no R_mid and are not drawn: the file's `mapping_failure`" in (
+        tp.notes(still, FITS_WINDOW, "R_mid")[0]
+    )
+    moved = profiles_of(commit="24e1499", shift=tf.SHIFT, failed=lost, mapping_failure=tf.MAPPING_FAILURE)
+    assert names_in_row(tp.figure(moved, "R_mid"), 1) == ["edge TS", "core TS", FIT]
+    assert "of the points have no R_mid" not in tp.notes(moved, FITS_WINDOW, "R_mid")[0]
+
+
+def test_a_moved_point_where_the_fits_r_mid_is_nan_is_counted_as_such():
+    ds = cut(tf.thomson_dataset(commit="24e1499", shift=tf.SHIFT))
+    ds["fit_R_mid"][:] = np.nan
+    found = tp.read(ds)
+    every = sum(points.drawn for points in found.points.values())
+    note = tp.notes(found, FITS_WINDOW, "R_mid")[0]
+    assert note.endswith(f" {every} of the points moved with the fit fall where `fit_R_mid` is NaN, and are not drawn.")
+    assert "beyond its grid" not in note
+
+
+# ---------------------------------------------------------------------------
 # The single-shot page
 # ---------------------------------------------------------------------------
 
@@ -1239,6 +1630,9 @@ def test_the_page_writes_nothing_to_the_ledger(tree):
         (1160616027, dict(window=(1.15, 1.45), check=tf.FAILED)),  # one that failed it
         (1120217022, dict(window=(1.25, 1.55), edge=False, fit=False, fit_status="failed: ValueError: no edge")),
         (1091216009, dict(window=(1.3, 1.55), core=False)),  # a file with one system
+        (1160616017, dict(window=(1.15, 1.45), commit="24e1499", shift=0.0071)),  # a 24e1499 fit, moved
+        (1160616026, dict(window=(1.15, 1.45), commit="24e1499")),  # one whose separatrix finder failed
+        (1110201022, dict(window=(0.9, 1.3), commit="24e1499", shift=-0.0111)),  # one moved inward
     ],
 )
 def test_the_page_draws_each_kind_of_file_it_can_meet(tree, shot, options):
@@ -1263,6 +1657,65 @@ def test_a_runaway_fit_does_not_set_the_range_the_page_draws(tree):
     # Judged on R_mid the rule gives the same tops here: the fixture's R_mid is a straight line of ρ_pol, which keeps
     # the points nearest each sample of the fit the same ones.
     assert all(on_r_mid.layout[key].range == fig.layout[key].range for key in YAXES)
+
+
+def test_the_page_draws_a_moved_24e1499_fit_with_its_points_on_it_and_its_captions_on_both_axes(tree):
+    app = open_view(tree(window=tf.WINDOW, commit="24e1499", shift=tf.SHIFT))
+    assert not app.warning  # the fit passed its check
+    (fig,) = charts(app)
+    file = cut(tf.thomson_dataset(commit="24e1499", shift=tf.SHIFT))
+    np.testing.assert_allclose(in_row(fig, 1)[0].x, kept(file, "rho_pol") + tf.SHIFT, rtol=0, atol=0)
+    assert {shape.x0 for shape in fig.layout.shapes} == {1.0}
+    shown = captions(app)
+    assert any(c.startswith("The fit was moved to a separatrix") and "by +0.0100 in ρ_pol" in c for c in shown)
+    assert any(c.startswith("Fictitious points hold the outer side of the n_e and T_e fits") for c in shown)
+    assert any(c.endswith("moved by +0.0100 with the fit. The separatrix is the fit's ρ_pol = 1.") for c in shown)
+    (expander,) = app.expander
+    text = "\n".join(m.value for m in expander.markdown)
+    assert "- `Te_sep_2pm`: 36 eV\n- `Te_sep_fit`: " in text  # beside the two-point model's
+    assert f"- `separatrix_code`: {tp._escape(tf.SEPARATRIX_CODE)}: outside C-Mod" in text
+    assert "- `fit_rho_shift`: +0.01 in ρ\\_pol" in text
+
+    widget(app, "selectbox", "axis").set_value("R_mid").run()
+    assert not app.exception, [e.value for e in app.exception]
+    (on_r_mid,) = charts(app)
+    (sep,) = {shape.x0 for shape in on_r_mid.layout.shapes}
+    assert sep == pytest.approx(tf.r_mid(1.0), rel=0, abs=1e-12)  # the fit's own R_mid at its ρ_pol 1
+    assert any("each is drawn at the fit's own R_mid of its moved ρ_pol" in c for c in captions(app))
+
+
+def test_the_page_warns_above_the_figure_when_the_fits_own_points_differ_from_the_files(tree):
+    app = open_view(tree(window=tf.WINDOW, commit="24e1499", shift=tf.SHIFT, points_check=tf.POINTS_DIFFER))
+    (warning,) = [w.value for w in app.warning]
+    assert warning == f"{POINTS_WARNING}says “{tp._escape(tf.POINTS_DIFFER)}”."
+    kinds = [element.type for element in app.main.children.values()]
+    assert kinds.index("warning") < kinds.index("plotly_chart")
+    # With a fit that fails its own check as well: both, that one first.
+    app = open_view(tree(window=tf.WINDOW, commit="24e1499", check=tf.FAILED, points_check=tf.POINTS_DIFFER))
+    first, second = [w.value for w in app.warning]
+    assert first.startswith("**This fit fails run_db.py's own check") and second.startswith(POINTS_WARNING)
+    # And none when the check says the points are equal.
+    assert not open_view(tree(window=tf.WINDOW, commit="24e1499", shift=tf.SHIFT, points_check="equal")).warning
+
+
+def test_the_page_draws_a_file_whose_mapping_failed_for_a_system_and_counts_its_points(tree):
+    app = open_view(
+        tree(
+            window=tf.WINDOW,
+            commit="24e1499",
+            shift=tf.SHIFT,
+            failed=(("edge", "rho_pol"), ("edge", "R_mid")),
+            mapping_failure=tf.MAPPING_FAILURE,
+        )
+    )
+    for axis in ("rho_pol", "R_mid"):
+        if axis == "R_mid":
+            widget(app, "selectbox", "axis").set_value("R_mid").run()
+            assert not app.exception, [e.value for e in app.exception]
+        (fig,) = charts(app)
+        assert {trace.name for trace in fig.data} == {"core TS", FIT}
+        (note,) = [c for c in captions(app) if c.startswith("Points: ")]
+        assert f"have no {tp.AXES[axis][1]} and are not drawn: the file's `mapping_failure` says “" in note
 
 
 # ---------------------------------------------------------------------------
@@ -1398,6 +1851,56 @@ def test_every_file_name_the_section_quotes_is_one_the_files_layout_has():
     for name in QUOTED:
         assert f"`{name}`" in text, f"the section no longer names {name}"
         assert name in held, f"{name} is not in the layout of the files"
+
+
+#: What the section quotes by name of the layout of a file made with C-Mod_Analysis 24e1499.
+QUOTED_24E1499 = (
+    "fit_rho_shift",
+    "Te_sep_fit",
+    "fit_separatrix",
+    "separatrix_code",
+    "separatrix_code_sha256",
+    "fit_R_mid",
+)
+
+
+def test_every_name_the_section_quotes_of_a_24e1499_file_is_one_its_layout_has():
+    text = " ".join(b.text for b in section().blocks)
+    ds = tf.thomson_dataset(commit="24e1499", shift=tf.SHIFT)
+    held = set(ds.variables) | set(ds.attrs)
+    for name in QUOTED_24E1499:
+        assert f"`{name}`" in text, f"the section no longer names {name}"
+        assert name in held, f"{name} is not in the layout of a 24e1499 file"
+
+
+def test_the_section_says_what_24e1499_changes_and_what_to_distrust_there():
+    text = " ".join(" ".join(b.text.split()) for b in section().blocks)
+    assert "with C-Mod_Analysis 24e1499, GitHub's head" in text and "C-Mod_Analysis `24e1499` and `d6a6466`" in text
+    # Which EFIT, the settings, the move and where the code that finds the separatrix is.
+    assert "ANALYSIS, which C-Mod_Analysis 24e1499 always maps the points of its fit with" in text
+    assert "**Fictitious points beyond the separatrix** (`force_to_zero`)" in text
+    assert "They do not hold the p_e fit." in text
+    assert "**Where the fit was moved to a separatrix, the points are drawn moved with it**" in text
+    assert "`fusion_ui/plots/thomson_profiles.py: Points.on`" in text
+    assert "`/home/millerma/pysepest_kc/pysepest` (`separatrix_code`), so no C-Mod_Analysis commit pins it" in text
+    # What to distrust: the finder that leaves the fit unmoved, the p_e fit in the SOL, and 026's 5 eV.
+    for said in (
+        "**The separatrix finder often fails, and then leaves the fit unmoved.**",
+        "**The p_e fit in the SOL.**",
+        "**026's separatrix T_e of 5 eV.**",
+        "**A file made with d6a6466**",
+    ):
+        assert said in text
+
+
+def test_the_section_names_the_attributes_of_the_scripts_later_versions_as_the_files_carry_them():
+    text = " ".join(" ".join(b.text.split()) for b in section().blocks)
+    ds = tf.thomson_dataset(commit="24e1499", points_check=tf.POINTS_DIFFER, mapping_failure=tf.MAPPING_FAILURE)
+    for name in ("fit_points_check", "mapping_failure"):
+        assert f"`{name}`" in text and name in ds.attrs
+    assert 'a sentence beginning "mapping failed:"' in text and tf.MAPPING_FAILURE.startswith("mapping failed:")
+    assert 'a sentence beginning "differ:"' in text and tf.POINTS_DIFFER.startswith("differ:")
+    assert "`fusion_ui/plots/thomson_profiles.py: points_warning`" in text
 
 
 def test_the_section_says_what_the_page_draws_as_the_page_does():

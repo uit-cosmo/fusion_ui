@@ -9,6 +9,13 @@ netCDF3 (64-bit offset) through scipy, as the real files are, so that the single
 Nothing here is a measurement: the profiles are tanh pedestals, the points are those profiles plus the planted
 irregularities a real file has (zeros with junk errors, a pulse only one system recorded, a pulse outside the EFIT time
 base). Each option plants or leaves out one thing, so a test can say what it is about.
+
+A file is made with C-Mod_Analysis d6a6466 by default, as the files were until 2026-10-12. ``commit="24e1499"`` makes
+one the way GitHub's head makes them: ANALYSIS, its run_db.py's settings with ``force_to_zero`` on, a ``fit_note`` that
+says so, the separatrix code's attributes, and a ``fit_rho_shift``. With a ``shift`` the fit was moved: it was made on
+the points as EFIT maps them and then moved, with its grid, by the shift, so that its T_e at ρ_pol 1 is ``Te_sep_fit``;
+the raw points stay where EFIT puts them, as in the real files. Without one, the separatrix finder failed and the fit
+was not moved.
 """
 
 import json
@@ -63,6 +70,49 @@ FIT_SETTINGS = {
     "num_mc": 5,
 }
 
+#: C-Mod_Analysis 24e1499, GitHub's head, and what a file made with it says that a d6a6466 one does not, in the words
+#: ``tools/mfe/get_thomson_scattering.py`` writes: its run_db.py's settings, the sentence ``fit_note`` gains when
+#: ``force_to_zero`` is on, and the code outside the repository that looks for the separatrix.
+HEAD = "24e1499f83d398c2bf96bcf2a5d499f68bcf0460"
+FIT_SETTINGS_24E1499 = dict(FIT_SETTINGS, force_to_zero=True, lambdaq_type="profile", sub_type="log_linear")
+FORCE_TO_ZERO_NOTE = (
+    "force_to_zero is on: before each fit get_cmod_kin_profs adds a fictitious Te point of 5 eV at rho_pol 1.05 and an "
+    "ne point of 0.1e20 m^-3 at 1.1, with errors of 1 eV and 1e17 m^-3, which hold the fit's outer side to them."
+)
+SEPARATRIX_CODE = "/home/someone/pysepest_kc/pysepest"
+SEPARATRIX_CODE_SHA256 = json.dumps({"__init__.py": "0" * 64, "finder.py": "1" * 64})
+SEPARATRIX_CODE_NOTE = (
+    "power_balance.find_separatrix, which get_cmod_kin_profs runs with lambdaq_type 'profile', finds the separatrix "
+    "with code power_balance imports from /home/someone (it appends that to sys.path): outside C-Mod_Analysis' "
+    "repository, in another user's home on mfe, so no C-Mod_Analysis commit pins it. These are the 2 files of it that "
+    "were loaded, with the sha256 of each."
+)
+#: The fixture's moved fit: by this much in ρ_pol, a little more than 1160616017's +0.0071.
+SHIFT = 0.01
+
+#: The two global attributes the script's later versions write (J12h), in the form agreed for them: whether the edge
+#: points the fit was made on are the file's, and what failed when mapping the points did.
+POINTS_DIFFER = "differ: the fit's own edge points are not this file's, by up to 0.0145 in rho_pol"
+MAPPING_FAILURE = (
+    "mapping failed: R_mid of the edge and core points at every pulse, data_access._getRmidSpline with ANALYSIS: "
+    "ValueError: x must be increasing if s > 0"
+)
+
+
+def fit_separatrix(shift, te_sep=None):
+    """``fit_separatrix`` as the script writes it, for a fit moved by ``shift`` to ``te_sep``, or for none found."""
+    how = "power_balance.find_separatrix (lambdaq_type 'profile', sub_type 'log_linear')"
+    if te_sep is None:
+        return (
+            f"get_cmod_kin_profs found no separatrix Te with {how} (it printed: 'Separatrix estimation failed "
+            "somewhere'), so it did not move the fit"
+        )
+    return (
+        f"get_cmod_kin_profs found Te_sep = {te_sep:.1f} eV with {how} and moved the fit, and its own copy of the "
+        f"points, by {shift:+.4f} in rho_pol, so that the fit's Te is Te_sep at rho_pol 1"
+    )
+
+
 #: Where the channels of each system look, in ρ_pol, at the first pulse; the plasma then drifts by up to ±0.01.
 EDGE_RHO = np.linspace(0.90, 1.08, 8)
 CORE_RHO = np.linspace(0.02, 0.85, 6)
@@ -104,6 +154,11 @@ def thomson_dataset(
     fit_r_mid=True,
     extrapolation=False,
     runaway=False,
+    commit="d6a6466",
+    shift=0.0,
+    points_check=None,
+    mapping_failure=None,
+    failed=(),
 ):
     """The dataset of one file, over a shot of 2 s.
 
@@ -116,7 +171,20 @@ def thomson_dataset(
     do where no core T_e inside rho_pol 0.2 reaches 1 keV. ``runaway`` makes the fit's outer end run away, as the fits
     that fail run_db.py's outer-end check do (1091216034's n_e reaches 1.3e23 m^-3, 1110201014's T_e 51 keV): the fit
     leaves the profile at rho_pol 1 and is 1000 times it at 1.1, with the points unchanged.
+
+    ``commit="24e1499"`` makes the file as C-Mod_Analysis 24e1499 does (module docstring), and ``shift`` is then how far
+    its fit was moved in ρ_pol: 0 for a fit that was not, whose separatrix finder failed. A d6a6466 file cannot be moved.
+
+    The script's later versions add two global attributes, which ``points_check`` and ``mapping_failure`` set when given:
+    ``fit_points_check`` (``equal``, or a sentence beginning ``differ:``) and ``mapping_failure`` (a sentence beginning
+    ``mapping failed:``). ``failed`` plants the failure itself: ``(system, coordinate)`` pairs, such as
+    ``("edge", "R_mid")``, whose values are NaN at every pulse.
     """
+    if commit not in ("d6a6466", "24e1499"):
+        raise ValueError(f"commit is d6a6466 or 24e1499, not {commit!r}")
+    if shift and commit != "24e1499":
+        raise ValueError("only C-Mod_Analysis 24e1499 moves its fit")
+    head = commit == "24e1499"
     times = np.round(np.arange(0.0, 2.0, PULSE), 6)
     nt = times.size
     rng = np.random.default_rng(3)
@@ -150,6 +218,10 @@ def thomson_dataset(
             mapped[(times > 1.2) & (times < 1.25)] = False
         rho_mapped = np.where(mapped[:, None], rho, np.nan)
         rmid = np.where(mapped[:, None], r_mid(rho), np.nan)
+        if (name, "rho_pol") in failed:  # mapping this system's points failed at every pulse
+            rho_mapped = np.full_like(rho_mapped, np.nan)
+        if (name, "R_mid") in failed:
+            rmid = np.full_like(rmid, np.nan)
 
         data_vars[f"{name}_time"] = ("time", np.where(recorded, times, np.nan), {"units": "s"})
         data_vars[f"{name}_R"] = (chan, np.full(nch, 0.9), {"units": "m"})
@@ -164,9 +236,12 @@ def thomson_dataset(
         ):
             data_vars[f"{name}_{key}"] = (("time", chan), value, {"units": units})
 
+    te_sep_fit = None
     if fit:
         grid = np.linspace(0.0, 1.1, 200)
-        coords["rho_pol"] = ("rho_pol", grid, {"units": "1"})
+        # The fit is made on the points as EFIT maps them, and 24e1499 then moves it, grid and all, by the shift.
+        moved = grid + shift if head else grid
+        coords["rho_pol"] = ("rho_pol", moved, {"units": "1"})
         ne_fit, te_fit = ne_profile(grid), te_profile(grid)
         if runaway:
             blow = 1 + 1e3 * np.clip((grid - 1.0) / 0.1, 0.0, None) ** 2  # 1 up to rho_pol 1, then 1001 at 1.1
@@ -178,8 +253,13 @@ def thomson_dataset(
             pressure = 1.602176634e-19 * ne_fit * te_fit
             data_vars["fit_pe"] = ("rho_pol", pressure, {"units": "Pa"})
             data_vars["fit_pe_err"] = ("rho_pol", 0.28 * pressure, {"units": "Pa"})
-        if fit_r_mid:
-            data_vars["fit_R_mid"] = ("rho_pol", r_mid(grid), {"units": "m"})
+        if fit_r_mid:  # the moved rho_pol through EFIT, as the script maps it
+            data_vars["fit_R_mid"] = ("rho_pol", r_mid(moved), {"units": "m"})
+        if head:
+            data_vars["fit_rho_shift"] = ((), float(shift), {"units": "1"})
+            if shift:  # the T_e it was moved to, which the moved fit reads at rho_pol 1
+                te_sep_fit = float(np.interp(1.0, moved, te_fit))
+                data_vars["Te_sep_fit"] = ((), te_sep_fit, {"units": "eV"})
     if scalars:
         data_vars["Te_sep_2pm"] = ((), 36.0, {"units": "eV"})
         data_vars["lambda_q_2pm"] = ((), 0.002, {"units": "m"})
@@ -193,23 +273,37 @@ def thomson_dataset(
         "window_t_start": float(window[0]),
         "window_t_end": float(window[1]),
         "window_source": "discharge DB t_start, t_end",
-        "efit_tree": "EFIT20" if efit else "none",
-        "efit": "EFIT20, 75 times from 0.0800 to 1.5598 s" if efit else "no EFIT tree could be opened (TreeNODATA)",
+        "efit_tree": ("ANALYSIS" if head else "EFIT20") if efit else "none",
+        "efit": (
+            f"{'ANALYSIS' if head else 'EFIT20'}, 75 times from 0.0800 to 1.5598 s"
+            if efit
+            else "no EFIT tree could be opened (TreeNODATA)"
+        ),
         "edge_ts": "found: 8 channels" if edge else "missing: TreeNODATA",
         "core_ts": "found: 6 channels" if core else "missing: TreeNODATA",
         "fit_status": fit_status,
         "fit_function": "cmod_tools.get_cmod_kin_profs",
-        "fit_settings": json.dumps(dict(FIT_SETTINGS, frac_err=frac_err)),
+        "fit_settings": json.dumps(dict(FIT_SETTINGS_24E1499 if head else FIT_SETTINGS, frac_err=frac_err)),
         "fit_reg": "ne [7, 8], Te [7, 8], pe [7, 8]" if fit else "no fit",
-        "fit_note": f"{FIT_NOTE} {EXTRAPOLATION if extrapolation else WINDOW_NOTE}",
+        "fit_note": f"{FIT_NOTE} {EXTRAPOLATION if extrapolation else WINDOW_NOTE}"
+        + (f" {FORCE_TO_ZERO_NOTE}" if head else ""),
         "fit_check": check if fit else "no fit",
         "two_point_model": "power_balance.Teu_2pt_model(shot, t_start, t_end, lambdaq_opt=1): ok",
-        "cmod_analysis_commit": "d6a646625e92399dd4c8b534e9c93001754a7c91",
-        "cmod_analysis_local_changes": "yes; modified: pyproject.toml",
+        "cmod_analysis_commit": HEAD if head else "d6a646625e92399dd4c8b534e9c93001754a7c91",
+        "cmod_analysis_local_changes": "none" if head else "yes; modified: pyproject.toml",
         "script_commit": "fusion_scripts 8e3df50b63ac74bebd0a6490ba3df0ce02f49670 (the script as committed)",
         "created": "2026-10-09T08:37:26Z",
         "time_alignment": "edge recorded 100 pulses and core 98",
     }
+    if head and fit:  # what the fit did about the separatrix, and the code outside C-Mod_Analysis that looked for it
+        attrs["fit_separatrix"] = fit_separatrix(shift, te_sep_fit)
+        attrs["separatrix_code"] = SEPARATRIX_CODE
+        attrs["separatrix_code_sha256"] = SEPARATRIX_CODE_SHA256
+        attrs["separatrix_code_note"] = SEPARATRIX_CODE_NOTE
+    if points_check is not None:
+        attrs["fit_points_check"] = points_check
+    if mapping_failure is not None:
+        attrs["mapping_failure"] = mapping_failure
     if caveat is not None:
         attrs["caveat"] = caveat
     return xr.Dataset(data_vars, coords=coords, attrs=attrs)
