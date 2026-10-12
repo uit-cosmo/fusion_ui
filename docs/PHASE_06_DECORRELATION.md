@@ -100,8 +100,10 @@ The cleanup is done (2026-10-12, at the user's word):
 
 J12e was stopped by the user at about 11:20, while mfe refused ssh, and then
 redone once the user had fixed the connection. It is merged into fusion_scripts
-at 721c1ad, with both PDFs regenerated from main. Its recommendation is to keep
-d6a6466. The user decides (open question 6).
+at 721c1ad, with both PDFs regenerated from main. Its recommendation was to keep
+d6a6466. The user chose 24e1499 for the app instead (open question 6). J12f
+makes the view and the retriever ready for 24e1499's files, and J12g remakes the
+production files and swaps them in.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -742,6 +744,8 @@ Built, tested and pushed to main on 2026-10-07, and deployed the same day (JD).
 | J12c | The density scan's TS profiles (the nine 1160616 shots) as a PDF, for the user's PI | **Sonnet 5.5** | fusion_scripts | J12a | J9, J12b |
 | J12d | The TS view's y-range: J12c's rule, so a runaway fit leaves through the top | **Sonnet 5.5** | fusion_ui | J12b, J12c | — |
 | J12e | The density scan's TS profiles with C-Mod_Analysis's head, against d6a6466, and a recommendation | **Opus 5.5** | fusion_scripts + mfe | J12c; the user's request (2026-10-12) | — |
+| J12f | The TS view on 24e1499's files, and the retriever's defaults | **Opus 5.5** | fusion_ui + fusion_scripts | J12e; the user's decision (2026-10-12) | J12g |
+| J12g | The production TS files remade with 24e1499, and swapped in on the server | orchestrator | mfe + server | J12e; swap after J12f's deploy | J12f |
 
 **Why these models.** `PLAN.md` splits work by how expensive a wrong decision
 is to undo, not by how hard it is, and so does this table.
@@ -2697,6 +2701,109 @@ through one ssh connection. The branch is merged into fusion_scripts at 721c1ad
   - mfe's `~/fusion_ts/j12e_*` folders, which hold 19 copies of `.nc` files;
   - fusion_scripts' merge, which is not pushed.
 
+#### J12f — The TS view on 24e1499's files · Opus 5.5 · fusion_ui + fusion_scripts
+
+**The decision (the user, 2026-10-12).** "Use this later version of the
+analysis in the fusion_ui": the TS files the app shows are to be made with
+C-Mod_Analysis 24e1499 and its own settings. This overrides J12e's
+recommendation (open question 6). J12g remakes the production files; J12f makes
+the view and the retriever ready for them.
+
+**What a 24e1499 file adds.** The format is J12e's; the docstring of
+`tools/mfe/get_thomson_scattering.py` is the reference.
+
+- **`fit_rho_shift`** (1): how far `get_cmod_kin_profs` moved the fit, and its
+  own copy of the points, in ρ_pol, so that the fit's T_e equals `Te_sep_fit`
+  at ρ_pol 1. It is 0 when the fit was not moved.
+  - The fit's `rho_pol` is the moved one: on 017 it runs from 0.0071 to
+    1.1071.
+  - The raw points are as EFIT maps them. Their ρ_pol plus the shift puts them
+    on the fit's axis.
+- **`Te_sep_fit`** (eV), when a separatrix T_e was found, and the attribute
+  **`fit_separatrix`**, a sentence on what was found and done.
+- **`separatrix_code`, `separatrix_code_sha256` and `separatrix_code_note`:**
+  the code that found it. It is outside C-Mod_Analysis, in another user's home
+  on mfe.
+- **`fit_settings` with `force_to_zero: true`:** fictitious points of 5 eV at
+  ρ_pol 1.05 and 0.1·10²⁰ m⁻³ at 1.1 hold the outer side of the n_e and T_e
+  fits, but not of the p_e fit.
+- **`efit_tree`:** ANALYSIS.
+
+On the nine 1160616 shots:
+- one fit is moved (017, by +0.0071, to 42.9 eV);
+- 026's T_e fit is 5 eV at ρ_pol 1;
+- 022's p_e fit reaches 1213 times e·n_e·T_e of its own fits in the SOL.
+
+**Deliver:**
+
+- **fusion_scripts: the retriever's defaults become 24e1499's.** They are
+  `--cmod-analysis ~/fusion_ts/C-Mod_Analysis-24e1499`, `--settings 24e1499`
+  and `--efit ANALYSIS`. d6a6466 stays reachable by options, and the
+  docstring says so. Work on the branch `phase06/j12f` in
+  `~/Git/fusion_scripts-j12f`.
+- **fusion_ui: `plots/thomson_profiles.py` reads both kinds of file.** A
+  d6a6466 file is drawn exactly as now.
+  - **The points on the fit's axis.** Where `fit_rho_shift` is not 0, draw the
+    points moved by it, so that they sit where the fit saw them:
+    - on ρ_pol, at their ρ_pol plus the shift;
+    - on R_mid, at the fit's own R_mid of that ρ_pol (`fit_R_mid`,
+      interpolated);
+    - the separatrix line at the fit's ρ_pol 1, and at its R_mid there;
+    - a caption saying by how much the points and the fit were moved, and to
+      which T_e,sep, quoting `fit_separatrix`;
+    - J12d's y-limits use the points as drawn.
+  - **`Te_sep_fit`** beside `Te_sep_2pm`, wherever the view shows the file's
+    numbers.
+  - **`force_to_zero`:** a caption saying that fictitious points hold the
+    fit's outer side, so the fit says nothing measured there; and that the p_e
+    fit is not held, and can run away in the SOL.
+  - **The separatrix code** in the "About this file" expander: its folder,
+    and that no commit pins it (the sha256s are in the file).
+- **The words:**
+  - the Documentation page's TS section, rewritten for 24e1499: which EFIT;
+    the settings; the move to a separatrix, and the code outside the
+    repository;
+  - what to distrust there: the p_e fit in the SOL, 026's separatrix T_e of
+    5 eV, and the finder failing on most shots and leaving the fit unmoved.
+    Keep what still holds;
+  - CLAUDE.md's `thomson_profiles` row.
+- **Tests,** hermetic:
+  - a synthetic 24e1499 file, with and without a move, and with
+    `force_to_zero`;
+  - a d6a6466 file, drawn as before.
+
+**Accept when:**
+
+- the suite passes;
+- **both kinds of file draw on both axes,** with one chart each and no
+  exception. Check it with the single-shot page through AppTest, on a scratch
+  ledger and a scratch data folder, using two sets:
+  - the nine 24e1499 files in `~/Data/thomson_scattering_24e1499/`;
+  - the nine d6a6466 files in `~/Data/alcator/thomson_scattering/`, which
+    stays d6a6466 until J12f is merged;
+- **on 017, the points as drawn sit on the fit:**
+  - their median |residual| against the fit over ρ_pol 0.95–1.0 is smaller
+    moved than unmoved;
+  - the fit's T_e at the drawn separatrix equals `Te_sep_fit`;
+- screenshots of 017 and 026, read by eye.
+
+#### J12g — The production TS files with 24e1499 · orchestrator · mfe + server
+
+1. **Remake every DB shot.** Use one ControlMaster connection to mfe, and run
+   the retriever with `--cmod-analysis ~/fusion_ts/C-Mod_Analysis-24e1499
+   --settings 24e1499 --efit ANALYSIS --remote-dir fusion_ts/run_24e1499`,
+   into the laptop's `~/Data/thomson_scattering_24e1499_all/`.
+2. **Compare with d6a6466's production run:** the files made, the fits that
+   worked, the `fit_check` outcomes, and the moved fits.
+3. **Stage them on the server,** in `/hdd1/fusion_data/thomson_scattering_24e1499/`,
+   where the catalog does not look. The folder gets 0775 and the files 0664.
+4. **Swap, after J12f's deploy and the user's restart.**
+   - On the server, `thomson_scattering/` becomes `thomson_scattering_d6a6466/`,
+     and `thomson_scattering_24e1499/` becomes `thomson_scattering/`.
+   - Then run `rescan`.
+   - Do the same with the laptop's mirror.
+   - The d6a6466 folders stay until the user says to delete them.
+
 ## Orchestration
 
 **The session.** Run the orchestrator as Opus 5.5 in `~/Git/fusion_ui`. It does
@@ -2834,7 +2941,8 @@ is reached.
 5. Which CA-TDE event selector is the right one (L9)? And should the paper's
    venv be aligned with the app's ([Environments](#facts-every-agent-needs))?
 6. ~~Which C-Mod_Analysis should make the TS files?~~ mfe's d6a6466, for now
-   (2026-10-09).
+   (2026-10-09). Then 24e1499, for the app, over J12e's recommendation (the user,
+   2026-10-12: "use this later version of the analysis in the fusion_ui").
 7. ~~Should J12b draw a ±1σ band around the TS fit?~~ No; the user looks at it
    again on Monday (2026-10-09).
 8. ~~The fit over its whole range, or only at the edge?~~ The whole range
