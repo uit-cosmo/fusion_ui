@@ -3093,6 +3093,56 @@ J12g's step 1 was rerun with dd4b2d8 into `~/Data/thomson_scattering_24e1499_fin
     difference explained;
 - screenshots, read by eye.
 
+**Result (2026-10-12).** Merged locally at 1d0bdea (dd34d90). It is not pushed
+or deployed, and goes out with J13b.
+
+- **What it added:**
+  - `core/mlp.py`, the pure reduction;
+  - `plots/mlp_profiles.py`, live, with parameters `te_sep`, `fit_from` and
+    `fit_to`;
+  - a probe file's `Target` now carries the DB window
+    (`loader.metadata_window`);
+  - the Documentation section, CLAUDE.md's row, and 50 tests.
+- **Units, established from the data:**
+  - J_s/(e·n_e·c_s) = 0.5 exactly;
+  - I_s/J_s is steady near 1 mm²;
+  - (V_p − V_f)/T_e is 2.7 to 2.8;
+  - ρ is in metres: it moves 0.95–1.09 m per metre of plunge.
+
+  That ρ is mapped to the midplane rests on the paper. The files are made by
+  cmod_functions' `asp_functions.get_asp_dataset` (uit-cosmo, f5cbb5c),
+  which averages the four pins, and so does the page.
+- **The orchestrator's rerun:**
+  - **Suite on the branch:** 1223 passed.
+  - **The page** draws all eight laptop ASP files, with both the MLP profiles
+    and the probe trace. 018 and 025 say they have no plunge.
+  - **The captions' L_n and L_T** (cm): 009 3.20 and 2.52; 011 2.92 and
+    2.12; 016 4.14 and 2.53; 017 4.00 and 2.58; 022 5.39 and 2.59.
+  - **022's L_n, recomputed from the raw file:**
+    - pin by pin it is 3.92, 5.08, 6.39 and 7.06 cm, with a mean of 5.61;
+    - the page averages the pins first, and gets 5.39.
+  - **J_s/(e·n_e·c_s)** is 0.50000 on every sample of pin 0.
+  - **Beside the paper's Fig. 2(a, b),** with the page's points moved by
+    +0.65 cm, the profiles lie on the paper's at all four densities (read by
+    eye).
+- **Against the paper:**
+  - **The shift.** The paper's profiles sit 0.61–0.69 cm outward of the
+    files' ρ, and it does not say how it set that shift. T_e consistency at
+    the last closed flux surface needs P_SOL and λ_q, which the file does not
+    hold. The page offers the shift (`te_sep`) and does not apply it.
+  - **L_n.** The page gets 3.20, 2.92, 4.13 and 5.39 cm. The paper gets 2.8
+    (NF: 2.5), –, 4.2 (NF) and 5.6 (NF: 5.4). That is within 5% at three
+    densities.
+  - **At f_GW 0.24** the profile has two layers, and L_n runs from 1.93 to
+    3.20 cm depending on where the fit starts.
+- **Open, for the user:**
+  - the paper's shift, its T_e,sep per shot, and its plunges;
+  - PPCF's L_n against NF's, and PPCF's L_T "for f_GW = 0.80";
+  - the four pins disagree: L_n runs from 3.9 to 7.1 cm on 022;
+  - opening an ASP file loads about 720 MB on the 1.1 GB files;
+  - MLP profiles as the ASP default;
+  - 1150618021 has `mlp_mode` 'none' but has data.
+
 #### J13b — MLP profiles on the TS plots · Opus 5.5 · fusion_ui
 
 **Deliver:**
@@ -3110,13 +3160,24 @@ J12g's step 1 was rerun with dd4b2d8 into `~/Data/thomson_scattering_24e1499_fin
   - mapped to the TS axes: R_mid = R_mid,sep + ρ, if ρ is what J13a
     establishes, and ρ_pol through the file's own `fit_R_mid`. A caption says
     how;
-  - with J13a's reduction, reused and not copied.
+  - with J13a's reduction (`core/mlp.py`), reused and not copied;
+  - **cheaply.** Opening an ASP file loads every time index, about 720 MB on
+    the 1.1 GB files (J13a).
+    - Judge whether the probe plunges in the window from the file's
+      `plunge_time` and `plunge_depth` attributes, read without loading the
+      variables.
+    - Load the probe data only when the overlay is switched on.
+  - **unshifted by default,** so that both sets are on EFIT's mapping. Offer
+    J13a's `te_sep` shift, with the TS file's `Te_sep_2pm` (and `Te_sep_fit`,
+    where the file has it) as choices.
 
 **Accept when:**
 
 - the suite passes;
 - the overlay draws on 009, 011, 016, 017 and 022, on both axes, and is not
   offered on 018 and 025;
+- a TS plot of a shot with an ASP file does not open the probe data until the
+  overlay is switched on;
 - a TS plot without the overlay is drawn exactly as before, on every TS file;
 - screenshots, read by eye.
 
