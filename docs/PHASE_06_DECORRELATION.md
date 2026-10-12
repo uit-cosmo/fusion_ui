@@ -66,11 +66,15 @@ diagnostic into experimental_database (0ca9f81). Neither is pushed or
 deployed. J9 merged (2b999d2) on its third attempt, on Sonnet 5.5, after two
 on Haiku that failed review.
 
+On 2026-10-12 the user approved the push, the fix for the runaway fits, and
+the deploy. All three repos were pushed: fusion_ui at 42a2d6f, fusion_scripts
+at 017eff7, and experimental_database at 0ca9f81. J12d, the fix, is under way.
+
 Still to come:
 
-- J12b's deploy: push the three repos, pull on the server, the user restarts,
-  then rescan;
-- the user's call on J12b's runaway fits;
+- J12d;
+- J12b's deploy, with J12d: pull `~/experimental_database` and `~/fusion_ui`
+  on the server, the user restarts, then rescan;
 - the cleanup of worktrees and scratch clones, after asking.
 
 ## Decisions (the user, 2026-10-07)
@@ -710,6 +714,7 @@ Built, tested and pushed to main on 2026-10-07, and deployed the same day (JD).
 | J12a | Thomson scattering data: fetch and fit on mfe, one file per shot | **Opus 5.5** | fusion_scripts + mfe | the user's request (2026-10-09) | J8, J9 |
 | J12b | `thomson_scattering` as a diagnostic, and its single-shot plot | **Sonnet 5.5** | fusion_ui + experimental_database | J12a's sample files | J9 |
 | J12c | The density scan's TS profiles (the nine 1160616 shots) as a PDF, for the user's PI | **Sonnet 5.5** | fusion_scripts | J12a | J9, J12b |
+| J12d | The TS view's y-range: J12c's rule, so a runaway fit leaves through the top | **Sonnet 5.5** | fusion_ui | J12b, J12c | — |
 
 **Why these models.** `PLAN.md` splits work by how expensive a wrong decision
 is to undo, not by how hard it is, and so does this table.
@@ -2387,6 +2392,66 @@ took the 50 shots of `density_scan/results.json`, and the user stopped it.
   about twice the edge system's Te at the same ρ_pol. On 011 that is 397 eV at
   ρ 0.944 against 160 eV at 0.952. It is one more question for the
   diagnostician.
+
+#### J12d — The TS view's y-range: a runaway fit leaves through the top · Sonnet 5.5 · fusion_ui
+
+**Why.** J12b's rows autorange over the fit as well as the points. A fit that
+runs away therefore sets the range and squashes the points flat against zero:
+1091216034 (`fit_ne` 1.3e23 m⁻³), 1110201014 (51 keV) and 1120814020 (about
+6 keV). J12c's PDF already solved this with `y_limits`. The user asked for
+the same fix before the deploy (2026-10-12), so that the page and the PDF agree.
+
+**Deliver:**
+
+- **J12c's rule, ported into `fusion_ui/plots/thomson_profiles.py`, not
+  imported** (L14). It lives in fusion_scripts' `density_scan/thomson_profiles.py`
+  (`pool`, `plausible`, `y_limits`, and the constants above them). Port it as a
+  pure function of the view, with the same constants and a comment naming
+  their source. A row's top is `MARGIN` (1.1) times the larger of:
+  - the `WHOLE_PERCENTILE` (98th) percentile of the row's points measured to
+    better than 2σ (error under `WELL_MEASURED`, half the value), or of all its
+    points when fewer than `MIN_WELL` (5) are;
+  - the largest value of the fit where it stays within `FIT_FACTOR` (3) times
+    the median of the `NEAREST` (10) points nearest it. When the row has no
+    points, the whole fit counts.
+- **The bottom stays at zero** (J12b's rule), where the PDF's may go below it.
+- **The rule judges the points and the fit on the axis drawn.** On ρ_pol it
+  gives the PDF's whole-profile top. On R_mid it may differ a little.
+- **The range survives autoscale.** A row opens on [0, top], and Plotly's
+  autoscale (a double-click, or the modebar) comes back to it, not to the
+  runaway fit.
+- **Nothing is hidden silently.** A row with points above its top says how
+  many in its corner, as the PDF does ("▲ 3 points above"). A row with none
+  above says nothing.
+- **Tests**, hermetic, on synthetic data:
+  - a fit that runs away leaves the top where the points put it;
+  - a fit within 3 times the points sets the top;
+  - a row with no points, a row with no fit, and a row with fewer than 5
+    well-measured points;
+  - the count of the points above, and its absence;
+  - the figure's rows open on [0, top], and autoscale keeps that range.
+- **The words:**
+  - `figure()`'s docstring;
+  - one sentence in the Documentation page's TS section
+    (`fusion_ui/data/documentation.md`, "What is fitted") on how the range is
+    set and that a runaway fit leaves through the top;
+  - one clause in CLAUDE.md's `thomson_profiles` row.
+
+**Accept when:**
+
+- the suite passes;
+- the single-shot page draws, on both axes, the three runaway shots and the
+  three samples (1160616027, 1140827019, 1091216009). Check it through
+  AppTest on a scratch ledger, as J12b did, over `~/Data/alcator/
+  thomson_scattering/`, which holds all 115 files. Expect one chart each and
+  no exception. State each row's top before and after the change:
+  - on the runaway shots, the points set it;
+  - on the samples, it moves little;
+- on ρ_pol, each row's top equals the PDF's whole-profile `y_limits` top for
+  the same six shots. Compute the PDF's tops with the paper's venv, from
+  fusion_scripts' main, read-only;
+- screenshots of 1091216034 and 1160616027, taken with Playwright's chromium in
+  the app's venv (J12b's way), read by eye.
 
 ## Orchestration
 
