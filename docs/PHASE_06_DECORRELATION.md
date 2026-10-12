@@ -79,9 +79,24 @@ at 0ca9f81, pulled on the server, and the user restarted the service at
 the single-shot page draws 1091216034 and 1160616027 on both axes with the
 laptop's ranges, and every page opens without an exception.
 
-Still to come:
+The cleanup is done (2026-10-12, at the user's word):
 
-- the cleanup of worktrees and scratch clones, after asking.
+- **Removed:**
+  - the 17 agent worktrees;
+  - the scratch clones `fusion_scripts-j1`, `-j6`, `-j12a`, `-j12c` and
+    `experimental_database-j12b`;
+  - the merged `phase06/*` and `worktree-agent-*` branches;
+  - the server's `~/phase06_j1` and `~/phase06_j6`. They held J1's and J6's
+    review material: bundles, clones of commits now in main, test outputs and
+    logs. The service's venv uses none of them.
+- **Kept:**
+  - `phase06/j9` and `phase06/j9b`, J9's two failed attempts, which are
+    unmerged;
+  - the server's `~/phase06_j0`, J0's checksums and log (92 KB), which was not
+    on the list the user approved;
+  - J0's snapshot in `/hdd1/fusion_ui/reference/decorrelation_8c59f96`, which
+    L14 regresses against;
+  - mfe's `~/fusion_ts/`, which the TS retriever uses.
 
 ## Decisions (the user, 2026-10-07)
 
