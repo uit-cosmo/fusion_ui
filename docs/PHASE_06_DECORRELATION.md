@@ -73,10 +73,14 @@ each row of the TS view is ranged by J12c's rule, so a fit that runs away
 leaves through the top. Its tops equal the PDF's on the six shots checked,
 except where a pulse at the window's edge falls on either side of it.
 
+J12b and J12d are deployed: fusion_ui at a3807eb and experimental_database
+at 0ca9f81, pulled on the server, and the user restarted the service at
+10:11:54 on 2026-10-12. The rescan indexed the 115 TS files. On the server,
+the single-shot page draws 1091216034 and 1160616027 on both axes with the
+laptop's ranges, and every page opens without an exception.
+
 Still to come:
 
-- J12b's deploy, with J12d: pull `~/experimental_database` and `~/fusion_ui`
-  on the server, the user restarts, then rescan;
 - the cleanup of worktrees and scratch clones, after asking.
 
 ## Decisions (the user, 2026-10-07)
@@ -2240,6 +2244,19 @@ samples on the laptop.
 2. Pull `~/experimental_database` and `~/fusion_ui` on the server.
 3. The user restarts the service.
 4. Run `rescan`, which should show the `thomson_scattering` files.
+
+**Deployed (2026-10-12),** with J12d:
+
+- fusion_ui at a3807eb and experimental_database at 0ca9f81, pulled on the
+  server, and the service restarted by the user at 10:11:54;
+- `rescan`: +115 files, and `status` shows `thomson_scattering raw 115 files,
+  115 curated`;
+- the health check answers `ok`, and the websocket handshake `101`;
+- the single-shot page, through AppTest on the server against the live
+  ledger, draws 1091216034 and 1160616027 on both axes, with the laptop's
+  ranges, corner notes and warnings;
+- the start page and the five other pages open with no exception and no
+  error, and the Documentation page has no unresolved placeholder.
 
 **Result (2026-10-09).** Merged locally, and neither is pushed:
 
