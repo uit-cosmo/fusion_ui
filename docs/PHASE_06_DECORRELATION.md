@@ -68,11 +68,13 @@ on Haiku that failed review.
 
 On 2026-10-12 the user approved the push, the fix for the runaway fits, and
 the deploy. All three repos were pushed: fusion_ui at 42a2d6f, fusion_scripts
-at 017eff7, and experimental_database at 0ca9f81. J12d, the fix, is under way.
+at 017eff7, and experimental_database at 0ca9f81. J12d merged (2394190):
+each row of the TS view is ranged by J12c's rule, so a fit that runs away
+leaves through the top. Its tops equal the PDF's on the six shots checked,
+except where a pulse at the window's edge falls on either side of it.
 
 Still to come:
 
-- J12d;
 - J12b's deploy, with J12d: pull `~/experimental_database` and `~/fusion_ui`
   on the server, the user restarts, then rescan;
 - the cleanup of worktrees and scratch clones, after asking.
@@ -2452,6 +2454,46 @@ the same fix before the deploy (2026-10-12), so that the page and the PDF agree.
   fusion_scripts' main, read-only;
 - screenshots of 1091216034 and 1160616027, taken with Playwright's chromium in
   the app's venv (J12b's way), read by eye.
+
+**Result (2026-10-12).** Merged at 2394190 (e21066f).
+
+- **What it changed:**
+  - `pool`, `plausible`, `y_limits` and `points_above` in
+    `plots/thomson_profiles.py`, with J12c's constants;
+  - each row opens on [0, top], with `autorangeoptions` set to the same ends,
+    and a note in its corner counts the points above;
+  - one sentence on the Documentation page, its numbers read from the code
+    (`documentation.facts()`), and a clause in CLAUDE.md;
+  - 18 tests, among them a chromium one marked `slow`.
+- **The orchestrator's rerun:**
+  - the suite on the branch: 1125 passed;
+  - the single-shot page through AppTest, on a scratch ledger over the
+    laptop's 115 files, on the three runaway shots and the three samples, both
+    axes. Each gave one chart and no exception, and each row was on [0, top]
+    with autoscale held to it. The R_mid rows equal the ρ_pol rows;
+  - the PDF's whole-profile tops, computed from fusion_scripts' main in the
+    paper's venv, equal the page's on four shots to 2e-16, with the same
+    corner counts. On 1120814020 and 1140827019 they differ by up to 1.1%,
+    because a core pulse at the window's edge falls on either side of it. The
+    page cuts on the file's `time`, which carries the edge's stamp; the PDF,
+    like the fit, cuts on each system's own stamp. On 1120814020 that is
+    1.32999 s against 1.330001 s, with the window starting at 1.33 s;
+  - screenshots of 1091216034 and 1160616027, read by eye.
+- **The plan was wrong about the samples.** It expected their tops to move
+  little. They fell by up to half: 1140827019's n_e top went from 2.81 to 1.44.
+  The old autorange counted the error bars, and the rule, like the PDF's,
+  counts the values only, so a bar can now leave through the top, as in the
+  PDF.
+- **Left as they are, for the user:**
+  - **Points with n_e > 0 and a tree error of exactly 0.** The PDF counts them
+    as well measured, and the page as having no error. 10 rows of five 2014
+    files (1140228020, 026, 027, 1140613026, 027) differ from the PDF by 0.02
+    to 7%. None of these shots is in the density scan.
+  - **The window's edge.** 30 files differ from the PDF by a boundary pulse,
+    by 0.25% at the median and 2.2% at most. Cutting each system on its own
+    stamp in `read()` would end it.
+  - **A fit that passes its check but leaves through the top** is not noted on
+    the figure, as in the PDF.
 
 ## Orchestration
 
