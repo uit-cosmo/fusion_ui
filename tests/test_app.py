@@ -202,7 +202,8 @@ def test_single_shot_probe_view_renders(single_shot_deployment):
     app.run()
     assert not app.exception
     assert widget(app, "selectbox", "quantity").options == ["Vf", "ne"]
-    # A probe file has no shared time axis, so there is no window to report.
+    # The shot has no discharge-DB entry, and a probe file has no shared time
+    # axis to centre a default window on, so there is no window to report.
     assert not [c for c in captions(app) if c.startswith("Window")]
 
 
@@ -238,7 +239,7 @@ def test_the_plot_picker_offers_only_specs_for_this_diagnostic(single_shot_deplo
         "preprocessed": False,
     }
     app.run()
-    assert widget(app, "selectbox", "Plot").options == ["Probe trace"]
+    assert widget(app, "selectbox", "Plot").options == ["Probe trace", "MLP profiles"]
 
 
 def test_a_cached_spec_does_not_run_until_compute_is_pressed(single_shot_deployment):

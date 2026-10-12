@@ -304,13 +304,13 @@ def facts():
     """``{name: text}``: the numbers the prose quotes, read from the code that uses them.
 
     The fusion_scripts constants of preprocessing, the puff window and the dead-pixel estimate; the
-    Fields page's default cuts; the defaults of the older single-shot specs; and the constants of the rule
-    that sets the range of a Thomson scattering row.
+    Fields page's default cuts; the defaults of the older single-shot specs; the constants of the rule
+    that sets the range of a Thomson scattering row; and those of the MLP profiles' reduction.
     """
     import_config()  # density_scan reads its settings by the bare name `config`
     from density_scan import dead_pixels, preprocess, puff
 
-    from fusion_ui.core import loader
+    from fusion_ui.core import loader, mlp
     from fusion_ui.plots import (
         thomson_profiles,
         two_dca,
@@ -360,6 +360,14 @@ def facts():
         "thomson.min_well": _number(thomson_profiles.MIN_WELL),
         "thomson.fit_factor": _number(thomson_profiles.FIT_FACTOR),
         "thomson.nearest": _number(thomson_profiles.NEAREST),
+        "mlp.window": _ms(mlp.WINDOW),
+        "mlp.min_fill": f"{mlp.MIN_FILL * 100:g}%",
+        "mlp.prominence": f"{mlp.PROMINENCE * 100:g} cm",
+        "mlp.moving": f"{mlp.MOVING * 100:g} cm/s",
+        "mlp.far_sol": f"{mlp.FAR_SOL[0] * 100:g} to {mlp.FAR_SOL[1] * 100:g} cm",
+        "mlp.min_fit": _number(mlp.MIN_FIT),
+        "mlp.band": _number(mlp.BAND),
+        "mlp.min_side": _number(mlp.MIN_SIDE),
     }
 
 

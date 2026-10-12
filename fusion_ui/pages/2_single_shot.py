@@ -155,7 +155,10 @@ def open_target(machine, shot, diagnostic, preprocessed):
     against the start of the record, which declares it (``whole_record``). Probe
     files have no shared time axis to cut -- every quantity x position carries
     its own -- so they are handed over whole and the probe adapter does the
-    indexing.
+    indexing. They still get the discharge DB's window, when it has one, for a
+    view that is about part of the shot (the MLP profiles draw the plunges in
+    it); with no entry there is no window, since there is no record's middle to
+    centre a default on.
     """
     path = loader.dataset_path(machine, shot, diagnostic, preprocessed)
     if not os.path.exists(path):
@@ -170,8 +173,7 @@ def open_target(machine, shot, diagnostic, preprocessed):
     if loader.TIME_DIM in ds.dims:
         t_start, t_end, source = loader.time_window(ds, discharge_for_shot(shot))
     else:
-        t_start = t_end = float("nan")
-        source = "none"
+        t_start, t_end, source = loader.metadata_window(discharge_for_shot(shot))
 
     target = registry.Target(
         machine=machine,
@@ -200,7 +202,8 @@ def window_caption(target, ds):
     A preprocessed file is cropped to its analysis window (the discharge window
     cut to the gas puff) and stores it as ``analysis_window``: that is the
     window of its data, and the caption gives it, with the discharge DB's beside
-    it. Every other file is cut to the discharge window.
+    it. Every other file is cut to the discharge window, but for a probe file,
+    which has no shared time axis to cut and is handed to the plot whole.
     """
     if target.window_source == "none":
         return
@@ -222,6 +225,11 @@ def window_caption(target, ds):
             "from the discharge DB."
             if target.window_source == "metadata"
             else "no discharge-DB entry yet, showing a centred 0.2 s default."
+        )
+        + (
+            ""
+            if loader.TIME_DIM in ds.dims
+            else " A probe file has no shared time axis, so it is not cut to it."
         )
     )
 
