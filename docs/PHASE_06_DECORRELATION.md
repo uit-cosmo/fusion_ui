@@ -2940,6 +2940,50 @@ alone.
   install nothing.
 - **Nothing is written to the server.**
 
+**Result (2026-10-12).** Merged into fusion_scripts at dd4b2d8 (925ea8d and
+779fa4f), after J12f, with the test file merging cleanly.
+
+- **Why each shot lost its file:**
+  - **Mapping.** On 1120217010 and 1140228019 ANALYSIS's last time slice is
+    broken, and one call for all pulses raised. The script now maps pulse by
+    pulse when that call raises, and records `mapping_failure`.
+  - **The point check.** It failed on a count, not on the order or the EFIT
+    tree. The seven windows run past the end of ANALYSIS's time base, which
+    ends between 0.74 and 1.56 s.
+    - data_access maps those pulses at the last EFIT time, and the fit uses
+      them; this file leaves them NaN.
+    - `fit_points_check` now says so, for the edge and the core.
+    - On 1140827029, 800 of the fit's points were mapped with an equilibrium
+      up to 0.56 s away; across the seven, up to 0.59 s.
+  - **1140619014.** The edge time base lost the 1.56 s stamp, and stamps each
+    later row with the next pulse's time. The two lasers' alternation shows it
+    (146 of 150 agree before the gap; 7 of 33 at the stamps and 25 of 33 a
+    pulse earlier after it). The stamps are repaired, and `time_stamps` says
+    so. The window ends before the gap.
+- **The orchestrator's rerun:**
+  - **The ten shots each have a file.** All are fitted but 1140228019, which
+    has no edge TS. The seven carry `differ`, and the other three `equal` or
+    no fit.
+  - **24e1499's nine 1160616 files** equal J12e's in every variable and
+    attribute but `created`, `script_commit` and the new
+    `fit_points_check: equal`.
+  - **Two d6a6466 files remade** equal production in the same way.
+  - **Suites on the branch:**
+    - the paper's venv: 274 passed and 8 skipped;
+    - the app's venv: 225 passed, with the three known gaps.
+  - **The TS tests on the merged main:** 86 passed in the paper's venv; 39
+    passed and 2 skipped in the app's.
+- **Open, for the user:**
+  - the seven fits on equilibria up to 0.59 s away: keep them and flag them,
+    as now, or cut their windows to the EFIT time base;
+  - five more shots lost an edge stamp without raising, two of them inside
+    the window (1120814016 and 1140613027);
+  - J12a's `tools/mfe/check_thomson_scattering.py` has the old point check's
+    flaw;
+  - mfe's `~/fusion_ts/j12h_*` (1.4 MB, no `.nc`).
+
+J12g's step 1 was rerun with dd4b2d8 into `~/Data/thomson_scattering_24e1499_final/`.
+
 ### J13 — MLP profiles
 
 **The request (the user, 2026-10-12).**
