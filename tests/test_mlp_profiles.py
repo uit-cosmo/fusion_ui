@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 import plotly.graph_objects as go
 import pytest
+import xarray as xr
 from streamlit.testing.v1 import AppTest
 
 import fusion_ui.plots  # noqa: F401 - registers the specs the page offers
@@ -328,6 +329,56 @@ def test_the_shift_never_extrapolates_and_says_why_not():
     sparse = mlp.shift_to(np.array([0.0, 0.001, 0.002, 0.003]), np.array([40.0, 35.0, 25.0, 20.0]), 30.0)
     assert not sparse.ok and "too few" in sparse.reason
     assert not mlp.shift_to(drawn["rho"].values, te, 0.0).ok
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# What another view needs of the reduction: whether the probe plunges in a window, from the track alone, and the same
+# profiles from a file opened lazily (the Thomson scattering view draws them over its own)
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+def test_the_strokes_in_a_window_are_those_the_means_label_judged_from_the_track_alone():
+    ds = mf.asp_dataset()
+    for window in (WINDOW, (0.6, 1.45), (1.305, 1.45), (1.33, 1.36)):
+        assert mlp.strokes_in(ds, *window) == mlp.strokes(mlp.means(ds, *window)), window
+    assert mlp.strokes_in(ds, *WINDOW) == [(3, "in"), (3, "out")]
+    assert mlp.strokes_in(ds, 1.305, 1.45) == [(3, "out")]  # 1160616009's window begins after the tip
+    # The attributes are all it reads: a dataset that holds nothing else gives the same answer.
+    track_only = xr.Dataset(attrs=ds.attrs)
+    assert mlp.strokes_in(track_only, *WINDOW) == [(3, "in"), (3, "out")]
+
+
+def test_no_stroke_is_found_where_the_probe_holds_still_or_the_file_has_no_track():
+    assert mlp.strokes_in(mf.asp_dataset(dwell=True), *WINDOW) == []
+    assert mlp.strokes_in(mf.asp_dataset(track=False), *WINDOW) == []
+    assert mlp.strokes_in(mf.asp_dataset(), 0.05, 0.25) == []  # parked, before the first plunge
+    assert mlp.strokes_in(mf.asp_dataset(), 1.0, 1.0005) == []  # no whole millisecond
+
+
+def test_without_a_window_the_strokes_of_the_whole_track_are_found():
+    ways = [(n, way) for n in (1, 2, 3) for way in ("in", "out")]
+    assert mlp.strokes_in(mf.asp_dataset()) == ways
+    assert mlp.strokes_in(mf.asp_dataset(), float("nan"), 1.0) == ways
+
+
+def test_a_file_opened_lazily_gives_the_profiles_one_opened_whole_gives(tmp_path):
+    """Its axes are not indexed (``loader.lazily``), so the reduction reads each one to find the window in it, and then
+    only the window of the values: what it finds must be what the index would have found."""
+    path = mf.write(tmp_path, mf.asp_dataset())
+    lazy = loader.lazily(str(path))
+    assert not lazy.indexes
+    with xr.open_dataset(path) as whole:
+        assert whole.indexes  # every axis indexed, as the single-shot page opens a probe file of its own
+        for window in (WINDOW, (1.305, 1.45)):
+            ours, theirs = mlp.read(lazy, *window, te_sep=30.0), mlp.read(whole, *window, te_sep=30.0)
+            assert ours.means.identical(theirs.means)
+            assert ours.combined.identical(theirs.combined)
+            assert ours.shift == theirs.shift and ours.shift.ok
+        for name in ("ne_0", "rho_ne_0"):
+            assert [a.tolist() for a in mlp._series(lazy, name, *WINDOW)] == [
+                a.tolist() for a in mlp._series(whole, name, *WINDOW)
+            ]
+    lazy.close()
 
 
 # ---------------------------------------------------------------------------------------------------------------------

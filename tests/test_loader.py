@@ -162,3 +162,67 @@ def test_a_cropped_file_says_its_window_by_its_analysis_window(apd_dataset_path)
     assert loader.stored_window(ds.assign_attrs(analysis_window="the puff")) is None
     # The discharge window is not what the file was cropped to.
     assert loader.stored_window(ds.assign_attrs(discharge_window=[0.9, 1.4])) is None
+
+
+# ---------------------------------------------------------------------------
+# A companion, another diagnostic's file a view draws beside its own, is opened
+# without reading anything but its attributes: a probe file's time axes, which
+# open_dataset reads whole to index them, are most of a gigabyte.
+# ---------------------------------------------------------------------------
+
+
+def test_a_lazy_open_indexes_no_ragged_axis_and_reads_no_variable(asp_dataset_path):
+    ds = loader.lazily(str(asp_dataset_path))
+    assert dict(ds.indexes) == {}
+    assert not [name for name, variable in ds.variables.items() if variable._in_memory]
+    assert ds.attrs["probe_type"] == "Mirror Langmuir Probe (MLP)"
+    ds.close()
+
+
+def test_a_lazy_open_holds_what_open_dataset_holds(asp_dataset_path, apd_dataset_path):
+    """The same variables, coordinates, attributes and values, decoded the same way: only the indexes differ."""
+    import numpy as np
+    import xarray as xr
+
+    for path in (asp_dataset_path, apd_dataset_path):
+        lazy = loader.lazily(str(path))
+        with xr.open_dataset(path) as whole:
+            assert set(lazy.variables) == set(whole.variables)
+            assert set(lazy.coords) == set(whole.coords)
+            assert lazy.attrs.keys() == whole.attrs.keys()
+            for name in lazy.attrs:
+                assert np.array_equal(
+                    np.asarray(lazy.attrs[name]), np.asarray(whole.attrs[name])
+                )
+            for name, variable in whole.variables.items():
+                assert lazy[name].dtype == variable.dtype
+                assert np.array_equal(
+                    lazy[name].values, variable.values, equal_nan=True
+                )
+        lazy.close()
+
+
+def test_a_lazy_open_indexes_the_shared_time_axis_so_the_window_cuts_it_as_before(
+    apd_dataset_path,
+):
+    lazy = loader.lazily(str(apd_dataset_path))
+    assert list(lazy.indexes) == [loader.TIME_DIM]
+    assert [
+        name for name, variable in lazy.variables.items() if variable._in_memory
+    ] == [loader.TIME_DIM]
+    cut = loader.input_for(lazy, 1.005, 1.01)
+    expected = loader.input_for(loader.open_dataset(str(apd_dataset_path)), 1.005, 1.01)
+    assert cut.equals(expected)
+    lazy.close()
+
+
+def test_a_lazy_open_is_shared_and_a_new_copy_of_the_file_is_opened_again(
+    asp_dataset_path,
+):
+    import os
+
+    first = loader.open_lazily(str(asp_dataset_path))
+    assert loader.open_lazily(str(asp_dataset_path)) is first
+    later = os.path.getmtime(asp_dataset_path) + 10
+    os.utime(asp_dataset_path, (later, later))
+    assert loader.open_lazily(str(asp_dataset_path)) is not first

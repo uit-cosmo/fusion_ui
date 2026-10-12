@@ -63,6 +63,21 @@ What is drawn
     the temperature at the grid's outer end that the outer end is not credible. A ``fit_note`` that calls the core an
     extrapolation gets a caption of its own, passed or not. The diagnostician's caveat is under every figure.
 
+The Mirror Langmuir Probe's profiles, on request
+    The spec names the ASP file as a companion (``companions=("asp",)``), so the single-shot page hands it the shot's
+    ASP file beside its own, opened lazily: nothing but its attributes is read until this view reads something. Where
+    the probe plunges within the page's window, which :func:`fusion_ui.core.mlp.strokes_in` judges from its depth in
+    the attributes alone, the sidebar offers the MLP's profiles, with the discharge DB's ``mlp_mode`` beside the offer
+    as a hint; where it does not, the sidebar says why. **The probe's data are read only while the overlay is on**
+    (:func:`overlay`), with the reduction of the MLP profiles plot (:func:`fusion_ui.core.mlp.read`): the 1 ms means of
+    the four pins combined, over the strokes in the window. They are drawn on the n_e, T_e and p_e rows (p_e =
+    e·n_e·T_e), placed by ρ, the probe's distance to the separatrix mapped to the outboard midplane, in metres: on R_mid
+    at the separatrix drawn plus ρ, and on ρ_pol at the ρ_pol of that R_mid through the fit's own ``fit_R_mid``. **Not
+    moved by default**, so that both sets are on EFIT's mapping; the sidebar offers the move of the MLP profiles plot
+    to the file's ``Te_sep_2pm``, or ``Te_sep_fit`` where it has one. A caption says how the points were placed. Each
+    row's range stays the one the Thomson scattering points set, and the MLP points above it are counted in the row's
+    corner. **Without the overlay, the view is drawn exactly as it was without the companion.**
+
 Everything but :func:`render` is pure: it takes an opened file, or what :func:`read` made of one, and returns data, a
 figure or text, so each can be tested without Streamlit.
 """
@@ -76,7 +91,7 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from fusion_ui.core import loader, params_ui, registry
+from fusion_ui.core import loader, mlp, params_ui, registry
 
 SYSTEMS = ("edge", "core")
 
@@ -894,6 +909,313 @@ def points_above(profiles, quantity, axis, top, scale=1.0):
 
 
 # ---------------------------------------------------------------------------
+# The Mirror Langmuir Probe's profiles, drawn over the Thomson scattering ones
+# ---------------------------------------------------------------------------
+
+#: The diagnostic whose file the spec draws beside its own (:attr:`fusion_ui.core.registry.PlotSpec.companions`).
+COMPANION = "asp"
+
+#: How the MLP's points are drawn: the data-viz palette's fourth slot, yellow, in the step that clears 3:1 on a dark page
+#: (2.99:1 on a light one, which the legend and the hover text relieve), with the markers of the MLP profiles plot, which
+#: no Thomson scattering system uses: a triangle pointing the way the probe ran, filled on the way in and open on the
+#: way out. Against the edge points and the fit, among which it is drawn, the colour clears the palette's checks for a
+#: scatter; it is near the core's orange, but the two never meet: the core system reaches no further out than ρ_pol 0.9,
+#: and the probe no further in than about a centimetre inside the separatrix.
+MLP_LOOK = dict(label="MLP", colour="#c98500", symbols={"in": "triangle-left", "out": "triangle-right-open"})
+
+#: What the MLP's profile can be moved to, by the file's own name for the temperature (:func:`separatrix_choices`): not at
+#: all, or the separatrix temperature of the two-point model, or the one the fit was moved to.
+MOVES = (
+    ("none", "not moved: EFIT's mapping"),
+    ("Te_sep_2pm", "the two-point model's"),
+    ("Te_sep_fit", "the fit's"),
+)
+
+
+def separatrix_choices(profiles):
+    """``[(name, te_sep, label), …]``: what the MLP's profile can be moved to, as the MLP profiles plot moves it (its
+    ``te_sep``). ``none`` (0 eV, not moved) first, the default; then ``Te_sep_2pm`` and ``Te_sep_fit``, each where the file
+    holds it as a positive number. The label says what each is, with its value."""
+    found = [("none", 0.0, MOVES[0][1])]
+    for name, said in MOVES[1:]:
+        value = profiles.scalars.get(name)
+        if value is not None and np.isfinite(value) and value > 0:
+            found.append((name, float(value), f"{name} = {value:.1f} eV, {said}"))
+    return found
+
+
+def rho_pol_of(fit, r_mid):
+    """The ρ_pol whose R_mid is ``r_mid`` (m), through the fit's own R_mid (``fit_R_mid``) inverted: NaN where it does not
+    reach, and everywhere when the file has no fit or no ``fit_R_mid``.
+
+    Only the outermost stretch of the grid over which ``fit_R_mid`` grows is inverted: the separatrix and the SOL, where
+    the probe is. A fit moved inward (a negative ``fit_rho_shift``) has a few samples near the axis where it does not
+    grow, and they cannot be inverted.
+    """
+    r_mid = np.asarray(r_mid, dtype=float)
+    found = np.full(r_mid.shape, np.nan)
+    if fit is None or fit.R_mid is None:
+        return found
+    rho, grid_r = np.asarray(fit.rho_pol, dtype=float), np.asarray(fit.R_mid, dtype=float)
+    finite = np.flatnonzero(np.isfinite(grid_r) & np.isfinite(rho))
+    if finite.size < 2:
+        return found
+    rho, grid_r = rho[: finite[-1] + 1], grid_r[: finite[-1] + 1]
+    with np.errstate(invalid="ignore"):
+        grows = np.isfinite(grid_r[1:]) & np.isfinite(grid_r[:-1]) & (np.diff(grid_r) > 0)
+    stops = np.flatnonzero(~grows)
+    first = int(stops[-1]) + 1 if stops.size else 0
+    if grid_r.size - first < 2:
+        return found
+    placed = np.isfinite(r_mid)
+    found[placed] = np.interp(r_mid[placed], grid_r[first:], rho[first:], left=np.nan, right=np.nan)
+    return found
+
+
+@dataclass(eq=False)  # arrays do not compare as a whole
+class Overlay:
+    """The MLP's profile on the Thomson scattering axes, one entry per point: the combined 1 ms means of the four pins on
+    a stroke in the page's window (``found.drawn``, :func:`fusion_ui.core.mlp.read`).
+
+    ``rho`` is the file's ρ plus the move to ``te_sep``, where one was asked for and reached (``found.shift``): the
+    probe's distance to the separatrix at the outboard midplane, in metres. Each point is drawn on R_mid at ``R_mid`` =
+    ``separatrix_R_mid`` + ``rho``, and on ρ_pol at ``rho_pol``, the ρ_pol of that R_mid through the fit's own R_mid
+    (:func:`rho_pol_of`). NaN where it has no place.
+    """
+
+    found: mlp.Profiles
+    #: What the profile was asked to be moved to: ``"none"``, ``"Te_sep_2pm"`` or ``"Te_sep_fit"``, and its value (0 eV for
+    #: none).
+    source: str
+    te_sep: float
+    time: np.ndarray  # s, the middle of the point's window
+    plunge: np.ndarray
+    stroke: np.ndarray  # "in" or "out"
+    rho: np.ndarray  # m
+    ne: np.ndarray  # m^-3
+    Te: np.ndarray  # eV
+    R_mid: np.ndarray  # m
+    rho_pol: np.ndarray
+    #: The R_mid of ρ = 0, the separatrix the figure draws on its R_mid axis (:func:`separatrix`), or ``None``.
+    separatrix_R_mid: Optional[float]
+
+    @property
+    def size(self):
+        return int(self.time.size)
+
+    @property
+    def shift(self):
+        """How far the profile was moved, in metres of ρ: 0 where it was not."""
+        return self.found.shift.by if self.te_sep and self.found.shift.ok else 0.0
+
+    def on(self, axis):
+        return self.rho_pol if axis == "rho_pol" else self.R_mid
+
+    def series(self, quantity):
+        """``(values, errors)`` of ``"ne"``, ``"Te"`` or ``"pe"`` in SI units, as :meth:`Points.series` gives them: a 1 ms
+        mean has no error bar, so the errors are NaN."""
+        values = {"ne": self.ne, "Te": self.Te, "pe": ELEMENTARY_CHARGE * self.ne * self.Te}[quantity]
+        return values, np.full(values.shape, np.nan)
+
+    def has(self, quantity, axis):
+        """Whether a point of ``quantity`` has a place on ``axis``."""
+        return bool(np.any(np.isfinite(self.on(axis)) & np.isfinite(self.series(quantity)[0])))
+
+
+def overlay(profiles, asp, t_start, t_end, source="none"):
+    """The MLP's profile from the ASP file ``asp``, over the page's window ``[t_start, t_end]``, placed on the axes of the
+    Thomson scattering ``profiles``: an :class:`Overlay`. **The one place this view reads the probe's data.**
+
+    ``source`` names what to move it to (:func:`separatrix_choices`); one the file does not hold moves nothing. The
+    reduction and the move are the MLP profiles plot's (:func:`fusion_ui.core.mlp.read`), so the points are those it
+    draws.
+    """
+    te_sep = {name: value for name, value, _ in separatrix_choices(profiles)}.get(source, 0.0)
+    found = mlp.read(asp, t_start, t_end, te_sep)
+    drawn = found.drawn
+
+    def values(name):
+        return np.asarray(drawn[name].values, dtype=float) if name in drawn else np.full(drawn.sizes["window"], np.nan)
+
+    shift = found.shift.by if te_sep and found.shift.ok else 0.0
+    rho = values("rho") + shift
+    sep = separatrix(profiles, "R_mid")
+    r_mid = rho + sep if sep is not None else np.full(rho.shape, np.nan)
+    return Overlay(
+        found=found,
+        source=source if te_sep else "none",
+        te_sep=float(te_sep),
+        time=np.asarray(drawn["time"].values, dtype=float),
+        plunge=np.asarray(drawn["plunge"].values, dtype=int),
+        stroke=np.asarray(drawn["stroke"].values, dtype=str),
+        rho=rho,
+        ne=values("ne"),
+        Te=values("Te"),
+        R_mid=r_mid,
+        rho_pol=rho_pol_of(profiles.fit, r_mid),
+        separatrix_R_mid=sep,
+    )
+
+
+def _strokes_said(pairs):
+    """``[(3, "in"), (3, "out")]`` as ``plunge 3, in and out``."""
+    by_plunge = {}
+    for number, stroke in pairs:
+        by_plunge.setdefault(number, []).append(stroke)
+    return "; ".join(f"plunge {number}, {' and '.join(ways)}" for number, ways in by_plunge.items())
+
+
+def mlp_mode_hint(target):
+    """What the discharge DB says of the probe for the shot, as a hint beside the offer: its ``mlp_mode``, quoted."""
+    discharge = getattr(target, "discharge", None)
+    if discharge is None:
+        return "The shot has no discharge-DB entry."
+    mode = str(getattr(discharge, "mlp_mode", "") or "").strip()
+    return f"The discharge DB's mlp_mode: “{mode}”." if mode else "The discharge DB gives no mlp_mode."
+
+
+def _held_depth(found_track, t_start, t_end):
+    """The probe's depth over ``[t_start, t_end]`` in words, from its track, or ``""``."""
+    time, depth = found_track
+    inside = (time >= t_start) & (time <= t_end)
+    if not inside.any():
+        return ""
+    low, high = float(depth[inside].min()) * 100, float(depth[inside].max()) * 100
+    return f" at a depth of {low:.1f} cm" if high - low < 0.05 else f" between depths of {low:.1f} and {high:.1f} cm"
+
+
+def offer(asp, target):
+    """``(strokes, text)``: whether the sidebar offers the MLP's profiles, and the words it says beside the offer.
+
+    ``strokes`` is :func:`fusion_ui.core.mlp.strokes_in` over the page's window, judged from the probe's depth in the
+    file's attributes alone, so no variable is read: empty where the probe does not plunge in the window, or the file
+    holds no MLP quantity, and the text then says why. The text ends with the discharge DB's ``mlp_mode``
+    (:func:`mlp_mode_hint`), a hint the judgement does not rest on.
+    """
+    hint = mlp_mode_hint(target)
+    if not mlp.layout(asp):  # the names alone: a probe file of another kind has no MLP quantity to draw
+        return [], (
+            "No MLP profiles to draw over these: the ASP file holds no MLP quantity (ne, Te, Js, Is, Vp or Vf on a "
+            f"pin). {hint}"
+        )
+    strokes = mlp.strokes_in(asp, target.t_start, target.t_end)
+    if strokes:
+        return strokes, (
+            f"The probe plunges in the window: {_strokes_said(strokes)}, judged from its depth in the ASP file. {hint}"
+        )
+    found_track = mlp.track(asp)
+    if found_track is None:
+        why = "the ASP file has no plunge depth (`plunge_time`, `plunge_depth`), so its plunges cannot be found"
+    else:
+        record = mlp.plunges(*found_track)
+        if any(p.start <= target.t_end and p.end >= target.t_start for p in record):
+            why = "the probe holds still in the window" + _held_depth(found_track, target.t_start, target.t_end)
+        elif record:
+            tips = ", ".join(f"{p.tip:.3f}" for p in record)
+            why = f"its plunges are outside the window (their tips at {tips} s)"
+        else:
+            why = "the probe does not plunge in this shot"
+    return [], f"No MLP profiles to draw over these: {why}. {hint}"
+
+
+def overlay_warnings(points):
+    """The warnings above the figure that the overlay calls for: a move to a separatrix temperature that was asked for
+    and not made, and a window with no MLP point to draw. Empty for an overlay drawn as asked."""
+    said = []
+    found = points.found
+    if points.te_sep and not found.shift.ok:
+        said.append(
+            f"The MLP profile is not moved to T_e = {points.te_sep:.1f} eV ({points.source}): {found.shift.reason}. It is "
+            "drawn on EFIT's mapping."
+        )
+    if not points.size:
+        recorded, partial = mlp.recording(found.means)
+        if not recorded:
+            why = "the MLP recorded nothing while the probe moved"
+        elif partial == recorded:
+            why = f"in none of the {recorded} ms the MLP recorded while the probe moved did every pin record"
+        else:
+            why = "the file holds no ρ for the milliseconds the MLP recorded, so none of them can be placed"
+        said.append(f"The probe plunges in the window, but there is no MLP point to draw: {why}.")
+    return said
+
+
+def overlay_notes(points, profiles, axis):
+    """The lines under the figure for the MLP's profile: what its points are, how they were placed on the axes, and how
+    many have no place on ``axis``."""
+    fit = profiles.fit
+    found = points.found
+    pins = found.means.sizes.get("pin", 0)
+    strokes = _strokes_said(mlp.strokes(found.drawn))
+    lines = [
+        f"MLP: {points.size} 1 ms means of the Mirror Langmuir Probe in the window ({strokes}), each the mean of its "
+        f"{pins} pins, as the MLP profiles plot reduces them: ◀ on the way in, ▷ on the way out. Their p_e is e·n_e·T_e "
+        "of those means. The probe's file names no unit: the Documentation page says how each was established."
+    ]
+    sep = points.separatrix_R_mid
+    if sep is None:
+        placed = (
+            "The Thomson scattering file gives no separatrix on R_mid, so the MLP points, whose ρ is a distance to the "
+            "separatrix, have no place on either axis and are not drawn."
+        )
+    else:
+        source = "`R_mid_sep`" if fit is None or not fit.moved else "the fit's R_mid at its ρ_pol 1"
+        placed = (
+            "Placed by ρ, the probe's distance to the separatrix mapped to the outboard midplane, in metres: on R_mid at "
+            f"R_mid,sep + ρ, with R_mid,sep = {sep:.4f} m ({source}, the separatrix drawn), and on ρ_pol at the ρ_pol of "
+            "that R_mid through the fit's own R_mid (`fit_R_mid`, from EFIT at the window's middle time)."
+        )
+        if axis == "rho_pol":
+            if fit is None or fit.R_mid is None:
+                placed += " The file has no `fit_R_mid`, so the MLP points are not drawn on this axis."
+            else:
+                lost = int((np.isfinite(points.R_mid) & np.isnan(points.rho_pol)).sum())
+                if lost:
+                    placed += (
+                        f" {lost} of the {points.size} MLP points lie where `fit_R_mid` does not reach (it ends at "
+                        f"ρ_pol {np.nanmax(fit.rho_pol):g}) and are not drawn on this axis."
+                    )
+    if not points.te_sep:
+        moved = (
+            "Not moved: the MLP's ρ and the Thomson scattering points' ρ_pol both come from EFIT's mapping."
+            if fit is None or not fit.moved
+            else (
+                f"Not moved: the MLP's ρ comes from EFIT's mapping, while the Thomson scattering points are drawn moved "
+                f"with the fit, by {fit.rho_shift:+.4f} in ρ_pol. Moved to Te_sep_fit, the MLP is on the fit's "
+                "separatrix too, where the probe's T_e reaches it."
+            )
+        )
+    elif found.shift.ok:
+        moved = (
+            f"Moved by {points.shift * 100:+.2f} cm, as the MLP profiles plot moves its profile, so that the MLP's T_e is "
+            f"{points.te_sep:.1f} eV ({points.source}) at ρ = 0: an exponential fit of the {found.shift.points} 1 ms "
+            f"means of T_e within a factor {mlp.BAND:g} of it puts it at {-points.shift * 100:+.2f} cm of the file's ρ."
+        )
+    else:
+        moved = f"Not moved to {points.te_sep:.1f} eV ({points.source}): {found.shift.reason}."
+    lines.append(f"{placed} {moved}")
+    return lines
+
+
+def _mlp_hover(points, quantity, scale, unit, values):
+    """One hover text per MLP point: which stroke, when, where on both axes and in ρ, and the value."""
+    texts = []
+    for i in range(points.size):
+        rho = f"ρ = {points.rho[i] * 100:.2f} cm"
+        if points.shift:
+            rho += f" (file: {(points.rho[i] - points.shift) * 100:.2f} cm)"
+        r_mid = "–" if not np.isfinite(points.R_mid[i]) else f"{points.R_mid[i]:.4f} m"
+        rho_pol = "–" if not np.isfinite(points.rho_pol[i]) else f"{points.rho_pol[i]:.3f}"
+        value = "–" if not np.isfinite(values[i]) else _number(values[i] * scale, 3)
+        texts.append(
+            f"MLP · plunge {int(points.plunge[i])}, {points.stroke[i]} · t = {points.time[i]:.4f} s<br>"
+            f"{rho} · R_mid = {r_mid} · ρ_pol = {rho_pol}<br>"
+            f"{quantity} = {value} {unit}"
+        )
+    return texts
+
+
+# ---------------------------------------------------------------------------
 # The figure
 # ---------------------------------------------------------------------------
 
@@ -951,7 +1273,37 @@ def _fit_label(fit):
     return "fit" if fit.window is None else f"fit, {_span(fit.window)}"
 
 
-def figure(profiles, axis="rho_pol"):
+def _mlp_traces(fig, mlp_points, axis, row, quantity, label, scale, unit, seen):
+    """The MLP's points of one row on ``axis``: a trace for each way the probe ran, both in one legend group, so that a
+    click on either entry hides the MLP in every row. ``seen`` holds the names already in the legend."""
+    values = mlp_points.series(quantity)[0]
+    texts = _mlp_hover(mlp_points, label, scale, unit, values)
+    for stroke, symbol in MLP_LOOK["symbols"].items():
+        mask = mlp_points.stroke == stroke
+        x, y = mlp_points.on(axis)[mask], values[mask]
+        if not np.any(np.isfinite(x) & np.isfinite(y)):
+            continue
+        name = f"{MLP_LOOK['label']}, {stroke}"
+        colour = MLP_LOOK["colour"]
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=y * scale,
+                mode="markers",
+                name=name,
+                legendgroup="mlp",
+                showlegend=name not in seen,
+                marker=dict(symbol=symbol, size=8, color=colour, opacity=0.85, line=dict(width=1.5, color=colour)),
+                hovertext=[text for text, keep in zip(texts, mask) if keep],
+                hoverinfo="text",
+            ),
+            row=row,
+            col=1,
+        )
+        seen.add(name)
+
+
+def figure(profiles, axis="rho_pol", mlp_points=None):
     """n_e, T_e and p_e on one shared ``axis`` (``"rho_pol"`` or ``"R_mid"``), one row each.
 
     The edge and core points, with their bars; the stored fit over its whole range, without a band; and the separatrix.
@@ -975,10 +1327,19 @@ def figure(profiles, axis="rho_pol"):
     row says how many of its points lie above its top ("▲ 3 points above") in its corner, and says nothing when none
     does. Error bars are not part of the rule, as in the PDF, so a bar can leave through the top as well. A bar that
     reaches below zero ends at the axis.
+
+    ``mlp_points``, an :class:`Overlay`, draws the Mirror Langmuir Probe's profile over these on its own place on
+    ``axis``, in yellow, a triangle pointing the way the probe ran. It does not move a row's range, which the Thomson
+    scattering points set: those of its points above the top are counted in the row's corner as well ("▲ 2 MLP points
+    above"). Without it, the figure is what it always was.
     """
     if axis not in AXES:
         raise ValueError(f"axis is one of {', '.join(AXES)}, not {axis!r}")
-    rows = [quantity for quantity in QUANTITIES if profiles.has(quantity[0], axis)]
+    rows = [
+        quantity
+        for quantity in QUANTITIES
+        if profiles.has(quantity[0], axis) or (mlp_points is not None and mlp_points.has(quantity[0], axis))
+    ]
     if not rows:
         measured = sum(found.drawn for found in profiles.points.values())
         if measured:
@@ -989,6 +1350,7 @@ def figure(profiles, axis="rho_pol"):
 
     fig = make_subplots(rows=len(rows), cols=1, shared_xaxes=True, vertical_spacing=0.05)
     sep, fit = separatrix(profiles, axis), profiles.fit
+    in_legend = set()  # the MLP's entries, which may first appear in any row
     for row, (name, label, title, scale, unit) in enumerate(rows, start=1):
         for system in SYSTEMS:
             found = profiles.points.get(system)
@@ -1038,6 +1400,8 @@ def figure(profiles, axis="rho_pol"):
                 row=row,
                 col=1,
             )
+        if mlp_points is not None:
+            _mlp_traces(fig, mlp_points, axis, row, name, label, scale, unit, in_legend)
         if sep is not None:
             # A line of each row, one legend entry for them all: clicking it hides the separatrix everywhere.
             fig.add_vline(
@@ -1067,9 +1431,15 @@ def figure(profiles, axis="rho_pol"):
             col=1,
         )
         above = points_above(profiles, name, axis, top, scale)
-        if above:  # nothing is left out silently: the points the top leaves out are counted, in the row's corner
+        said = [f"▲ {above} point{'s' * (above > 1)} above"] if above else []
+        if mlp_points is not None:  # the probe's points do not set the range, but they are not left out silently either
+            values = mlp_points.series(name)[0] * scale
+            mlp_above = int((np.isfinite(mlp_points.on(axis)) & (np.nan_to_num(values, nan=-np.inf) > top)).sum())
+            if mlp_above:
+                said.append(f"▲ {mlp_above} MLP point{'s' * (mlp_above > 1)} above")
+        if said:  # nothing is left out silently: the points the top leaves out are counted, in the row's corner
             fig.add_annotation(
-                text=f"▲ {above} point{'s' * (above > 1)} above",
+                text="<br>".join(said),
                 xref="paper",
                 yref=f"{'y' if row == 1 else f'y{row}'} domain",
                 x=0.99,
@@ -1100,11 +1470,62 @@ def _escape(text):
     return re.sub(r"([\\`*_{}\[\]<>$])", r"\\\1", text)
 
 
-def render(ds, params, target):
-    """The warnings, if the fit fails its check or its own points are not known to be the file's, the figure, the lines
-    under it and what the file says of itself.
+def mlp_controls(asp, profiles, target):
+    """The sidebar's offer of the MLP's profiles, drawn below the plot's parameters: the name of the separatrix
+    temperature to move the profile to (:func:`separatrix_choices`), or ``None`` while the overlay is off or not offered.
 
-    Draws into Streamlit and returns ``None``: the warnings go above the figure and the notes below it.
+    Nothing without an ASP file. Where the probe does not plunge in the window, only the words that say why
+    (:func:`offer`); else a toggle with those words under it and, while it is on, the choice of what to move the profile
+    to, which starts at not moving it. Both widgets are view state, keyed off the target as the page's are, so a shot
+    opens with the overlay off.
+    """
+    import streamlit as st
+
+    if asp is None:
+        return None
+    strokes, said = offer(asp, target)
+    if not strokes:
+        st.sidebar.caption(said)
+        return None
+    on = st.sidebar.toggle(
+        "MLP profiles",
+        key=f"thomson_profiles.mlp.{target.key}",
+        help=(
+            "Draw the Mirror Langmuir Probe's profiles from the shot's ASP file on the n_e, T_e and p_e rows: the 1 ms "
+            "means of its plunges in the window, as the MLP profiles plot draws them. Its data are read only while "
+            "this is on."
+        ),
+    )
+    st.sidebar.caption(said)
+    if not on:
+        return None
+    choices = separatrix_choices(profiles)
+    names, labels = [name for name, _, _ in choices], {name: label for name, _, label in choices}
+    key = f"thomson_profiles.mlp_moved_to.{target.key}"
+    if key in st.session_state and st.session_state[key] not in names:
+        del st.session_state[key]  # a remembered choice this file does not offer: back to not moving it
+    return st.sidebar.selectbox(
+        "Move the MLP profile to",
+        names,
+        format_func=lambda name: labels[name],
+        key=key,
+        help=(
+            "A separatrix temperature from this file, to move the MLP's profile to as the MLP profiles plot moves it: "
+            "so that its T_e is that at ρ = 0. Not moved, its ρ and the Thomson scattering points' ρ_pol both come "
+            "from EFIT's mapping."
+        ),
+    )
+
+
+def render(ds, params, target, companions=None):
+    """The warnings, if the fit fails its check or its own points are not known to be the file's, the figure, the lines
+    under it and what the file says of itself; and, where the probe plunges in the window, the offer of the MLP's
+    profiles over these, in the sidebar.
+
+    Draws into Streamlit and returns ``None``: the warnings go above the figure, the notes below it, and the MLP's
+    controls below the plot's parameters. ``companions`` is what the single-shot page hands the spec beside its own
+    file: ``{"asp": the shot's ASP file, opened lazily, or None}``. Its data are read only while the overlay is on
+    (:func:`overlay`), and without the overlay the view is what it was without the file.
     """
     import streamlit as st
 
@@ -1114,11 +1535,25 @@ def render(ds, params, target):
         return None
     axis = params.axis if params.axis in AXES else "rho_pol"
 
-    for text in (warning(profiles), points_warning(profiles)):
+    mlp_points, problems = None, []
+    asp = (companions or {}).get(COMPANION)
+    moved_to = mlp_controls(asp, profiles, target)
+    if moved_to is not None:
+        try:
+            mlp_points = overlay(profiles, asp, target.t_start, target.t_end, moved_to)
+        except Exception as error:  # noqa: BLE001 - the probe's file must not take the Thomson scattering view down
+            problems.append(f"The MLP profiles could not be read from the ASP file: {type(error).__name__}: {error}")
+        else:
+            problems += overlay_warnings(mlp_points)
+
+    for text in (warning(profiles), points_warning(profiles), *problems):
         if text:
             st.warning(text, icon="⚠️")
-    st.plotly_chart(figure(profiles, axis), width="stretch")
-    for line in notes(profiles, target, axis):
+    st.plotly_chart(figure(profiles, axis, mlp_points), width="stretch")
+    lines = notes(profiles, target, axis)
+    if mlp_points is not None and mlp_points.size:
+        lines[-1:-1] = overlay_notes(mlp_points, profiles, axis)  # before the caveat, which ends the notes
+    for line in lines:
         st.caption(line)
     rows = about(profiles)
     if rows:
@@ -1135,9 +1570,11 @@ SPEC = registry.register(
         params=ThomsonProfilesParams,
         render=render,
         preprocessed=False,
+        companions=(COMPANION,),
         description=(
             "n_e, T_e and p_e of the edge and core Thomson scattering systems against ρ_pol or R_mid: the points in "
-            "the window, and the fit the file stores. Read off the file: nothing is computed."
+            "the window, and the fit the file stores; and, where the probe plunges in the window, the Mirror Langmuir "
+            "Probe's profiles over them on request. Read off the files: nothing is computed."
         ),
     )
 )

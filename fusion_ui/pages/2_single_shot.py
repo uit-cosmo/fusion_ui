@@ -10,6 +10,8 @@ What the page does own is the chrome every plot should have and none should
 have to write: the time-window caption, the figure container, the error surface
 for a failed run, and the provenance line -- because a result computed by last
 month's ``imaging_methods`` is the trap that makes people distrust the tool.
+It also opens the files a spec names as its companions, other diagnostics of
+the same shot, and hands them to its ``render`` (:func:`open_companions`).
 
 One rule it enforces for every spec: nothing batch only is ever computed here.
 A batch-only spec is looked up and shown, or the command that fills it is; a
@@ -18,6 +20,7 @@ cached. Everything this page computes runs inside the process that serves the
 whole group.
 """
 
+import math
 import os
 from datetime import datetime
 
@@ -170,10 +173,11 @@ def open_target(machine, shot, diagnostic, preprocessed):
         st.error(f"Could not open `{path}`: {type(error).__name__}: {error}", icon="⚠️")
         return None, None
 
+    discharge = discharge_for_shot(shot)
     if loader.TIME_DIM in ds.dims:
-        t_start, t_end, source = loader.time_window(ds, discharge_for_shot(shot))
+        t_start, t_end, source = loader.time_window(ds, discharge)
     else:
-        t_start, t_end, source = loader.metadata_window(discharge_for_shot(shot))
+        t_start, t_end, source = loader.metadata_window(discharge)
 
     target = registry.Target(
         machine=machine,
@@ -184,6 +188,7 @@ def open_target(machine, shot, diagnostic, preprocessed):
         t_start=t_start,
         t_end=t_end,
         window_source=source,
+        discharge=discharge,
     )
     return target, ds
 
@@ -194,6 +199,45 @@ def input_for(spec, target, ds):
     declares ``whole_record``. The same call ``fusion-ui precompute`` makes, so
     the two cannot disagree on what a result was computed from."""
     return loader.input_for(ds, target.t_start, target.t_end, spec.whole_record)
+
+
+def open_companions(spec, target, table):
+    """``{diagnostic: dataset or None}`` for each of ``spec.companions``: what
+    its ``render`` is handed beside its own file.
+
+    Each is the raw file of that diagnostic for the same shot, opened lazily
+    (:func:`fusion_ui.core.loader.open_lazily`: attributes only, until the view
+    reads something) and cut to the target's window as the spec's own file is,
+    which hands a probe file over whole. ``None`` where the index holds no such
+    file for the shot -- the page reads the index, not the data tree -- or it
+    cannot be opened, which the sidebar says.
+    """
+    rows = table[
+        (table["machine"].astype(str) == target.machine)
+        & (table["shot"].astype(int) == target.shot)
+    ]
+    found = {}
+    for diagnostic in spec.companions:
+        availability = rows.iloc[0][diagnostic] if len(rows) else ""
+        if "R" not in str(availability or ""):
+            found[diagnostic] = None
+            continue
+        path = loader.dataset_path(target.machine, target.shot, diagnostic, False)
+        try:
+            companion = loader.open_lazily(path)
+        # Gone since the rescan, or unreadable: the spec's own view is still drawn.
+        except Exception as error:  # noqa: BLE001
+            st.sidebar.warning(
+                f"Could not open the {diagnostic} file of this shot, `{path}`: "
+                f"{type(error).__name__}: {error}",
+                icon="⚠️",
+            )
+            found[diagnostic] = None
+            continue
+        if math.isfinite(target.t_start) and math.isfinite(target.t_end):
+            companion = loader.input_for(companion, target.t_start, target.t_end)
+        found[diagnostic] = companion
+    return found
 
 
 def window_caption(target, ds):
@@ -356,10 +400,19 @@ def show_batch_missing(missing, target):
         show_params_to_save(link, link_params)
 
 
-def draw(spec, result, params, target):
-    """Render ``result``; ``False`` when the render itself failed."""
+def draw(spec, result, params, target, companions=None):
+    """Render ``result``; ``False`` when the render itself failed.
+
+    A spec that names companions is handed them as well, ``render(result,
+    params, target, companions)``; every other is called as it always was.
+    """
     try:
-        figure = spec.render(result, params, target)
+        if spec.companions:
+            if companions is None:
+                companions = dict.fromkeys(spec.companions)
+            figure = spec.render(result, params, target, companions)
+        else:
+            figure = spec.render(result, params, target)
     except Exception as error:  # noqa: BLE001 - a plot bug must not kill the page
         st.error(f"{type(error).__name__}: {error}", icon="⚠️")
         st.caption(f"Rendering {spec.label.lower()} failed.")
@@ -473,7 +526,8 @@ def main():
         show_failure(run, conn)
         return
 
-    if draw(spec, result, params, target):
+    companions = open_companions(spec, target, table) if spec.companions else None
+    if draw(spec, result, params, target, companions):
         provenance(run, conn, spec, target, params)
 
 
