@@ -98,8 +98,10 @@ The cleanup is done (2026-10-12, at the user's word):
     L14 regresses against;
   - mfe's `~/fusion_ts/`, which the TS retriever uses.
 
-J12e was stopped by the user at about 11:20, while mfe refused ssh. Its work is
-committed on `phase06/j12e` (4863bba) and is not reviewed.
+J12e was stopped by the user at about 11:20, while mfe refused ssh, and then
+redone once the user had fixed the connection. It is merged into fusion_scripts
+at 721c1ad, with both PDFs regenerated from main. Its recommendation is to keep
+d6a6466. The user decides (open question 6).
 
 ## Decisions (the user, 2026-10-07)
 
@@ -2633,6 +2635,67 @@ orchestrator's own try failed at 10:41, and the agent's last at 11:14.
   check would not let the agent read its git metadata (another user's
   personal data), so the files record each loaded file's sha256 instead.
 - **No process was left behind:** no retry loop and no ssh control socket.
+
+**Result (2026-10-12).** The user fixed the connection, and the `mfe` alias now
+points to mferws03. The stopped agent could not be resumed, so a second one
+reviewed the four commits, added three more, and ran everything on mferws03
+through one ssh connection. The branch is merged into fusion_scripts at 721c1ad
+(d51ad99).
+
+- **What it added:**
+  - the mfe script and the retriever run either commit (`--settings`,
+    `--efit`);
+  - the mfe script checks that the four modules come from the checkout it
+    names, and records the separatrix code by the sha256 of each file loaded;
+  - the retriever takes `--ssh-option`, and reports the host each shot ran on;
+  - the TS PDF from any folder, with a tag;
+  - `density_scan/thomson_compare.py`, the comparison;
+  - tests.
+- **The files,** all made on mferws03:
+  - nine with 24e1499, in `~/Data/thomson_scattering_24e1499/`;
+  - nine with 24e1499's code and d6a6466's settings, in
+    `~/Data/thomson_scattering_24e1499_d6a6466_settings/`.
+- **The orchestrator's rerun:**
+  - **The remakes.** The nine d6a6466 files remade on mferws03 equal
+    production, which was made on mferws02. That holds in all 32 variables, and
+    in every attribute but `created` and `script_commit`.
+  - **The 24e1499 files' attributes.** They carry 24e1499 with no local
+    changes, ANALYSIS, and seven sha256s of `/home/millerma/pysepest_kc/pysepest`.
+  - **What moved.** T_e,sep and λ_q of the two-point model are bit-identical to
+    production. R_mid_sep moves by +0.07 to +3.65 mm. Only 017's fit is
+    moved, to 42.9 eV.
+  - **Read on mfe in 24e1499's code:**
+    - `run_db.py` sets `force_to_zero = True`, `lambdaq_type = 'profile'`
+      and `sub_type = 'log_linear'`;
+    - `get_cmod_kin_profs` always maps with ANALYSIS;
+    - when the root finder fails, `single_pysepest` sets up its wider bounded
+      search but never runs it, and returns NaN.
+  - **Key numbers, from the files:**
+    - 026's fit T_e at ρ_pol 1 is 26.6 eV under d6a6466 and 5.0 eV under
+      24e1499;
+    - 022's p_e fit reaches 1213 times e·n_e·T_e of its own fits in the SOL.
+  - **The suites:**
+    - the paper's venv: 267 passed and 8 skipped;
+    - the app's venv: 1 failed, 218 passed, 3 skipped and 2 errors, the
+      three known gaps.
+  - **The PDFs,** regenerated from main:
+    - `thomson_profiles_1160616_24e1499.pdf` and
+      `thomson_profiles_1160616_d6a6466_vs_24e1499.pdf`, 10 pages each;
+    - all 20 provenance entries are at 721c1ad with nothing uncommitted;
+    - the overview and 017's page were read by eye.
+- **The recommendation: keep d6a6466.**
+  - What 24e1499 adds rests on unversioned code that fails on 8 of the 9
+    shots, through the fallback that never runs.
+  - Its p_e fix changes only the p_e points' weights. It fixes 026's p_e
+    inside the separatrix only with `force_to_zero`, which drags 026's T_e to
+    5 eV at the separatrix and lets the p_e fits run away in the SOL.
+  - The rest is small: no change to T_e,sep or λ_q, and ANALYSIS for EFIT20.
+    24e1499's own `run_db.py` still takes R_sep from EFIT20.
+- **Open, for the user:**
+  - whether to report the fallback bug and `shift_profs`' one-sided guard to
+    C-Mod_Analysis's author;
+  - mfe's `~/fusion_ts/j12e_*` folders, which hold 19 copies of `.nc` files;
+  - fusion_scripts' merge, which is not pushed.
 
 ## Orchestration
 
