@@ -22,6 +22,17 @@ What the file holds, and what this view reads of it (netCDF3, ``time`` in second
     attributes
         ``window_t_start`` and ``window_t_end`` (the fit's window), ``fit_status``, ``fit_check`` (run_db.py's own test
         of whether the fit silently failed), ``fit_note``, ``fit_settings`` and ``caveat``, among others.
+    ``fit_rho_shift``, ``Te_sep_fit``, and the attributes ``fit_separatrix`` and ``separatrix_code``
+        Only in a file made with C-Mod_Analysis 24e1499, whose fit looks for the separatrix in its own T_e profile and,
+        where it finds one, moves itself, and its own copy of the points, by ``fit_rho_shift`` in ρ_pol, so that its
+        T_e is ``Te_sep_fit`` at ρ_pol 1: ``rho_pol`` is then the moved grid. The raw points stay as EFIT maps them,
+        and ``fit_rho_shift`` is 0 where the fit was not moved. ``separatrix_code`` is the folder of the code that
+        looks, which is outside C-Mod_Analysis. A file made with d6a6466 has none of them.
+    the attributes ``fit_points_check`` and ``mapping_failure``
+        Only in a file made by the script's later versions. ``fit_points_check`` says whether the edge points the fit
+        was made on are the file's: ``equal``, or a sentence beginning ``differ:``. ``mapping_failure``, there only
+        where mapping the points failed, is a sentence beginning ``mapping failed:`` that says which system and
+        coordinate, at which pulses, and the error; the points' ρ_pol or R_mid are NaN where it failed.
 
 What is drawn
     One row each for n_e, T_e and p_e, on one shared axis, ρ_pol or R_mid (a choice): the edge and core points in the
@@ -31,9 +42,20 @@ What is drawn
     user, 2026-10-09): with ``frac_err`` the fit's n_e and T_e errors are 20% of the fit by construction, and
     ``fit_pe_err`` adds a density to a temperature, so it is no error of p_e.
 
+    **A fit moved to a separatrix takes its points with it.** Where ``fit_rho_shift`` is not 0, the points are drawn
+    where the fit saw them: at their ρ_pol plus the shift, and on R_mid at the fit's own R_mid of that ρ_pol
+    (``fit_R_mid``, interpolated). The separatrix is the fit's ρ_pol 1, and its R_mid there, and a caption says by how
+    much they were moved and to which T_e,sep, quoting ``fit_separatrix``. Every other file, a d6a6466 one among them,
+    draws each point at its own pulse's ρ_pol and R_mid, as EFIT puts it. A fit whose outer side fictitious points
+    hold (``force_to_zero``) gets a caption that says so, and that the p_e fit is not held. A file whose
+    ``fit_points_check`` is anything but ``equal`` gets a warning above the figure, quoting it: the points drawn may
+    then not be where the fit saw them. A point with no place on the axis drawn is left out and counted, with the
+    file's ``mapping_failure`` quoted where it has one.
+
     **A row's range is set by the points, not by the fit** (:func:`y_limits`, the rule of the paper's PDF of the density
     scan, ported): it opens on ``[0, top]``, and a fit that runs away leaves through the top instead of squashing the
     points flat against zero. Autoscale returns to that range, and the points above it are counted in the row's corner.
+    The points are judged where they are drawn, moved or not.
 
     A fit that does not pass ``fit_check`` gets a warning above the figure that quotes it, and **anything but the
     outcome** ``passed`` **is warned about**: a verdict spelt another way, an outcome nobody wrote a rule for, an empty
@@ -61,8 +83,9 @@ SYSTEMS = ("edge", "core")
 #: One electron-volt in joules: n_e [m^-3] times T_e [eV] times this is p_e [Pa].
 ELEMENTARY_CHARGE = 1.602176634e-19
 
-#: The scalars the file may hold, read for the separatrix and the "about this file" list.
-SCALARS = ("R_mid_sep", "Te_sep_2pm", "lambda_q_2pm")
+#: The scalars the file may hold, read for the separatrix, the captions and the "about this file" list. ``Te_sep_fit``
+#: is only in a file whose fit was moved to a separatrix it found (C-Mod_Analysis 24e1499).
+SCALARS = ("R_mid_sep", "Te_sep_2pm", "Te_sep_fit", "lambda_q_2pm")
 
 #: The caveat of the C-Mod_Analysis README on the Thomson scattering data, in the words ``get_thomson_scattering.py``
 #: writes into every file's ``caveat``. A file that lacks the attribute is shown under this one: it is never left
@@ -122,6 +145,10 @@ class Points:
 
     ``pulses`` and ``readings`` count what the window held, ``time`` and the arrays after it what is drawn: a reading of
     0 is no measurement, so it is counted and not kept. Every array has one entry per kept point, in pulse order.
+
+    ``rho_pol`` and ``R_mid`` are where EFIT puts each point at its own pulse, as the file holds them. A fit that was
+    moved to a separatrix took its own copy of the points with it, and :meth:`on` says where they are drawn: at
+    ``rho_pol`` plus ``rho_shift``, and on R_mid at ``R_mid_moved``, the fit's own R_mid of that ρ_pol.
     """
 
     system: str
@@ -137,10 +164,20 @@ class Points:
     ne_err: np.ndarray  # NaN where the tree's error is missing, or is not positive
     Te: np.ndarray  # eV, NaN where it reads 0 though n_e does not
     Te_err: np.ndarray
+    #: How far the fit moved the points in ρ_pol (the file's ``fit_rho_shift``): 0 where it did not move them.
+    rho_shift: float = 0.0
+    #: Where the moved points are on the R_mid axis, in metres: the fit's own R_mid of their moved ρ_pol, NaN where it does
+    #: not reach. ``None`` for points that were not moved.
+    R_mid_moved: Optional[np.ndarray] = None
 
     @property
     def drawn(self):
         return int(self.time.size)
+
+    @property
+    def moved(self):
+        """Whether these points are drawn moved with the fit, away from where EFIT puts them."""
+        return bool(self.rho_shift)
 
     def pe(self):
         """p_e in Pa, from the points: e·n_e·T_e."""
@@ -159,8 +196,13 @@ class Points:
         return self.pe(), self.pe_err()
 
     def on(self, axis):
-        """Where the points are on ``axis``: ρ_pol, or R_mid in metres."""
-        return self.rho_pol if axis == "rho_pol" else self.R_mid
+        """Where the points are drawn on ``axis``: ρ_pol, or R_mid in metres. Points the fit moved are where the fit saw
+        them, all others where EFIT puts them."""
+        if not self.moved:
+            return self.rho_pol if axis == "rho_pol" else self.R_mid
+        if axis == "rho_pol":
+            return self.rho_pol + self.rho_shift
+        return self.R_mid_moved if self.R_mid_moved is not None else np.full(self.rho_pol.shape, np.nan)
 
 
 @dataclass(eq=False)
@@ -177,12 +219,29 @@ class Fit:
     pe: Optional[np.ndarray]  # Pa
     R_mid: Optional[np.ndarray]  # m, at the window's middle time
     window: Optional[tuple]  # (start, end) in seconds, the window the fit was made over
+    #: How far C-Mod_Analysis moved the fit, and its own copy of the points, in ρ_pol (the file's ``fit_rho_shift``), so
+    #: that its T_e is the separatrix T_e it found at ρ_pol 1: ``rho_pol`` is then the moved grid. 0 where it did not
+    #: move it, and ``None`` in a file whose code never moves its fit (C-Mod_Analysis d6a6466).
+    rho_shift: Optional[float] = None
+
+    @property
+    def moved(self):
+        """Whether the fit was moved to a separatrix: a shift that is a number, and not 0."""
+        return self.rho_shift is not None and bool(np.isfinite(self.rho_shift)) and self.rho_shift != 0.0
 
     def on(self, axis):
         return self.rho_pol if axis == "rho_pol" else self.R_mid
 
     def values(self, quantity):
         return {"ne": self.ne, "Te": self.Te, "pe": self.pe}[quantity]
+
+    def R_mid_of(self, rho_pol):
+        """The fit's own R_mid of ``rho_pol`` on its axis (``fit_R_mid``, interpolated), in metres: NaN outside its grid,
+        and everywhere when the file has no ``fit_R_mid``."""
+        rho_pol = np.asarray(rho_pol, dtype=float)
+        if self.R_mid is None:
+            return np.full(rho_pol.shape, np.nan)
+        return np.interp(rho_pol, self.rho_pol, self.R_mid, left=np.nan, right=np.nan)
 
 
 @dataclass(eq=False)
@@ -194,7 +253,7 @@ class Profiles:
     fit: Optional[Fit]
     #: Laser pulses in the window, as the file's ``time`` axis has them.
     pulses: int
-    #: ``R_mid_sep``, ``Te_sep_2pm`` and ``lambda_q_2pm``, those the file holds.
+    #: Those of :data:`SCALARS` the file holds.
     scalars: dict
     #: The file's attributes, as plain Python: text for text.
     attrs: dict
@@ -295,6 +354,7 @@ def _fit(ds, attrs):
             return np.asarray(ds[name].values, dtype=float)
         return None
 
+    shift = ds["fit_rho_shift"] if "fit_rho_shift" in ds else None
     return Fit(
         rho_pol=np.asarray(ds["rho_pol"].values, dtype=float),
         ne=on_grid("fit_ne"),
@@ -302,24 +362,36 @@ def _fit(ds, attrs):
         pe=on_grid("fit_pe"),
         R_mid=on_grid("fit_R_mid"),
         window=_window(attrs),
+        rho_shift=float(shift.values) if shift is not None and shift.ndim == 0 else None,
     )
+
+
+def _move(points, fit):
+    """Draw ``points`` where the moved ``fit`` saw them: C-Mod_Analysis moved its own copy of them with it, by its shift
+    in ρ_pol, and on the R_mid axis they go to the fit's own R_mid of their moved ρ_pol."""
+    points.rho_shift = float(fit.rho_shift)
+    points.R_mid_moved = fit.R_mid_of(points.rho_pol + points.rho_shift)
 
 
 def read(ds):
     """The :class:`Profiles` of an open Thomson scattering file, cut to whatever window ``ds`` was sliced to.
 
     Everything is optional but one of the systems' points or the fit: a file that holds only the core, or only the
-    edge, or whose fit failed, draws what it has.
+    edge, or whose fit failed, draws what it has. Where the fit was moved to a separatrix, the points are moved with it
+    (:class:`Points`).
     """
     attrs = {name: _plain(value) for name, value in ds.attrs.items()}
+    fit = _fit(ds, attrs)
     points = {}
     for system in SYSTEMS:
         found = _points(ds, system)
         if found is not None:
+            if fit is not None and fit.moved:
+                _move(found, fit)
             points[system] = found
     return Profiles(
         points=points,
-        fit=_fit(ds, attrs),
+        fit=fit,
         pulses=int(ds.sizes.get(loader.TIME_DIM, 0)),
         scalars={name: float(ds[name].values) for name in SCALARS if name in ds},
         attrs=attrs,
@@ -405,14 +477,82 @@ def warning(profiles):
     return text + f"The file's `fit_check`: “{check}”"
 
 
+def points_warning(profiles):
+    """The warning above the figure when the file does not say that the fit's own points are its own, or ``None``.
+
+    A file made by the script's later versions records in ``fit_points_check`` whether the edge points
+    ``get_cmod_kin_profs`` fitted are this file's, as EFIT maps them and moved by any ``fit_rho_shift``: ``equal``, or a
+    sentence beginning ``differ:`` that says by how much. **Anything that does not begin with** ``equal`` **is warned
+    about**, quoting it, since the points drawn may then not be where the fit saw them. A file without the attribute,
+    every older one among them, and a file with no fit get none.
+    """
+    if profiles.fit is None or "fit_points_check" not in profiles.attrs:
+        return None
+    said = str(profiles.attrs["fit_points_check"] or "").strip()
+    if said.startswith("equal"):
+        return None
+    quoted = f"says “{_escape(said)}”" if said else "is empty"
+    return (
+        "**The points drawn may not be where the fit saw them.** The file's `fit_points_check`, which compares the "
+        f"edge points the fit was made on with this file's, {quoted}."
+    )
+
+
+def _sentences(text, word):
+    """The sentences of ``text`` that hold ``word``, joined, or ``""``: the attributes write whole sentences."""
+    sentences = re.split(r"(?<=\.)\s+", str(text or ""))
+    return " ".join(sentence for sentence in sentences if word in sentence)
+
+
 def extrapolation(attrs):
     """The sentence of ``fit_note`` that calls the fit's core an extrapolation, or ``""`` when it does not.
 
     The file says so when it finds no core T_e of 1 keV or more inside ρ_pol 0.2: the fit's pre-filter drops the lower
     ones, so the fit has none to rest on there, whether or not its check passed.
     """
-    sentences = re.split(r"(?<=\.)\s+", str(attrs.get("fit_note") or ""))
-    return " ".join(sentence for sentence in sentences if "extrapolation" in sentence)
+    return _sentences(attrs.get("fit_note"), "extrapolation")
+
+
+def move_note(profiles):
+    """The caption of a fit moved to a separatrix, or ``""`` for any other: by how much the fit and the points were
+    moved, to which T_e,sep, and the file's own ``fit_separatrix``, quoted. Where the points are on the axis drawn is the
+    axis's own line (:func:`notes`)."""
+    fit = profiles.fit
+    if fit is None or not fit.moved:
+        return ""
+    te_sep = profiles.scalars.get("Te_sep_fit")
+    to = (
+        f"so that its T_e is T_e,sep = {te_sep:.1f} eV (`Te_sep_fit`) at ρ_pol = 1"
+        if te_sep is not None and np.isfinite(te_sep)
+        else "though the file records no T_e,sep that it was moved to"
+    )
+    text = (
+        "The fit was moved to a separatrix, and the points are drawn moved with it, where the fit saw them: "
+        f"C-Mod_Analysis moved the fit, and its own copy of the points, by {fit.rho_shift:+.4f} in ρ_pol, {to}."
+    )
+    said = profiles.attrs.get("fit_separatrix")
+    if said:
+        text += f" The file's `fit_separatrix`: “{_escape(str(said))}”"
+    return text
+
+
+def held_note(attrs):
+    """The caption of a fit whose outer side fictitious points hold (``force_to_zero`` in ``fit_settings``), quoting what
+    ``fit_note`` says of them, or ``""`` for any other fit.
+
+    C-Mod_Analysis 24e1499's ``run_db.py`` sets it: before each fit it adds fictitious T_e and n_e points beyond the
+    separatrix, which hold the n_e and T_e fits there but not the p_e fit.
+    """
+    if _settings(attrs).get("force_to_zero") is not True:
+        return ""
+    text = (
+        "Fictitious points hold the outer side of the n_e and T_e fits (`force_to_zero`), so there the fit says nothing "
+        "measured. The p_e fit is not held, and can run away in the SOL."
+    )
+    said = _sentences(attrs.get("fit_note"), "force_to_zero")
+    if said:
+        text += f" The file's `fit_note` says “{_escape(said)}”"
+    return text
 
 
 def _settings(attrs):
@@ -430,13 +570,22 @@ def separatrix(profiles, axis):
     ρ_pol = 1 by definition. On the R_mid axis it is the file's ``R_mid_sep``, the separatrix's outboard midplane radius
     at the window's middle time, which the fit's own R_mid reaches at ρ_pol = 1 as well; the fit's is used when the
     file holds no scalar.
+
+    A fit moved to a separatrix is drawn on its own axis, so the separatrix is its ρ_pol = 1, and on R_mid its own R_mid
+    there (``fit_R_mid``, interpolated), where its T_e is the T_e,sep it was moved to. ``fit_R_mid`` maps the moved
+    ρ_pol through EFIT, so that is ``R_mid_sep`` as well, to the grid's interpolation, and ``R_mid_sep`` stands in when
+    the fit's R_mid does not reach ρ_pol 1.
     """
     if axis == "rho_pol":
         return 1.0
+    fit = profiles.fit
+    if fit is not None and fit.moved:
+        found = float(fit.R_mid_of(1.0))
+        if np.isfinite(found):
+            return found
     sep = profiles.scalars.get("R_mid_sep")
     if sep is not None and np.isfinite(sep):
         return float(sep)
-    fit = profiles.fit
     if fit is not None and fit.R_mid is not None and fit.rho_pol.min() <= 1.0 <= fit.rho_pol.max():
         found = float(np.interp(1.0, fit.rho_pol, fit.R_mid))
         return found if np.isfinite(found) else None  # a fit_R_mid that is NaN there says nothing
@@ -460,10 +609,19 @@ def _differs(window, target):
 def notes(profiles, target, axis):
     """The lines under the figure, as markdown, one paragraph each: the points, the fit, the axis, the caveat.
 
+    A fit that was moved to a separatrix adds a line on the move (:func:`move_note`), and one whose outer side
+    fictitious points hold a line on them (:func:`held_note`), both after the fit's.
+
+    The points with no place on ``axis`` are counted with what the file says of why: no EFIT tree could be opened, its
+    ``mapping_failure`` (quoted), or else a pulse outside the EFIT time base. Points moved with the fit have a place on
+    R_mid only where the fit's own R_mid reaches: those beyond its grid, and those where it is NaN, are counted apart.
+
     ``target`` supplies the page's window; ``None`` leaves out whatever depends on it.
     """
     attrs = profiles.attrs
     lines = []
+    fit = profiles.fit
+    moved = fit is not None and fit.moved
 
     # The points.
     held = []
@@ -472,11 +630,26 @@ def notes(profiles, target, axis):
         held.append(
             f"no {system} TS in this file" if found is None else f"{system} {found.drawn} of {found.readings} readings"
         )
-    unmapped = sum(int(np.isnan(found.on(axis)).sum()) for found in profiles.points.values())
+    beyond = gap = 0
+    if moved:
+        # A moved point has a place wherever EFIT gave it a ρ_pol, but on R_mid only where the fit's own R_mid reaches.
+        unmapped = sum(int(np.isnan(found.rho_pol).sum()) for found in profiles.points.values())
+        if axis == "R_mid" and fit.R_mid is not None:
+            low, high = np.nanmin(fit.rho_pol), np.nanmax(fit.rho_pol)
+            for found in profiles.points.values():
+                lost = np.isfinite(found.rho_pol) & np.isnan(found.on(axis))
+                outside = (found.on("rho_pol") < low) | (found.on("rho_pol") > high)
+                beyond += int((lost & outside).sum())
+                gap += int((lost & ~outside).sum())
+    else:
+        unmapped = sum(int(np.isnan(found.on(axis)).sum()) for found in profiles.points.values())
+    failure = attrs.get("mapping_failure")  # only in a file whose mapping of the points failed somewhere
     if not unmapped:
         why = ""
     elif attrs.get("efit_tree") == "none":
         why = f", since {_escape(str(attrs.get('efit') or 'no EFIT tree could be opened'))}: they are not drawn"
+    elif failure not in (None, ""):
+        why = f" and are not drawn: the file's `mapping_failure` says “{_escape(str(failure))}”"
     else:
         why = " (the pulse is outside the EFIT time base) and are not drawn"
     lines.append(
@@ -484,10 +657,16 @@ def notes(profiles, target, axis):
         "A reading of 0 is no measurement and is not drawn. The bars are the tree's ±1σ, and the p_e points are "
         "e·n_e·T_e with the errors propagated."
         + (f" {unmapped} of the points have no {AXES[axis][1]}{why}." if unmapped else "")
+        + (
+            f" {beyond} of the points moved with the fit lie beyond its grid, where `fit_R_mid` gives them no R_mid, "
+            "and are not drawn."
+            if beyond
+            else ""
+        )
+        + (f" {gap} of the points moved with the fit fall where `fit_R_mid` is NaN, and are not drawn." if gap else "")
     )
 
     # The fit.
-    fit = profiles.fit
     if fit is None:
         status = attrs.get("fit_status")  # an exception's text, which may hold markdown's own characters
         lines.append(f"No fit in this file ({_escape(str(status))})." if status else "No fit in this file.")
@@ -503,7 +682,11 @@ def notes(profiles, target, axis):
             f"(ρ_pol {fit.rho_pol.min():g}–{fit.rho_pol.max():g})."
         )
         if axis == "R_mid" and fit.R_mid is None:
-            text += " The file has no R_mid for the fit, so it is not drawn on this axis."
+            text += (
+                " The file has no R_mid for the fit, so neither it nor the points moved with it are drawn on this axis."
+                if moved
+                else " The file has no R_mid for the fit, so it is not drawn on this axis."
+            )
         if _differs(fit.window, target):
             text += (
                 f" The page's window is {target.t_start:g}–{target.t_end:g} s, so the points and the fit are not over "
@@ -524,6 +707,7 @@ def notes(profiles, target, axis):
                 f"The fit's core is an extrapolation: the file's `fit_note` says “{core}” Read the points there, not "
                 "the curve."
             )
+        lines += [line for line in (move_note(profiles), held_note(attrs)) if line]
 
     # The axis and the separatrix.
     sep = separatrix(profiles, axis)
@@ -532,7 +716,22 @@ def notes(profiles, target, axis):
         text = (
             "ρ_pol = √ψ_N of each point's channel at its own pulse"
             + (f", from the EFIT tree `{tree}`" if tree and tree != "none" else "")
-            + ". The separatrix is ρ_pol = 1."
+            + (
+                f", moved by {fit.rho_shift:+.4f} with the fit. The separatrix is the fit's ρ_pol = 1."
+                if moved
+                else ". The separatrix is ρ_pol = 1."
+            )
+        )
+    elif moved:
+        text = (
+            "R_mid is the major radius at which a flux surface crosses the outboard midplane. The points are moved with "
+            "the fit, so each is drawn at the fit's own R_mid of its moved ρ_pol (`fit_R_mid`, from EFIT at the window's "
+            "middle time), and not at its own pulse."
+            + (
+                f" The separatrix, the fit's ρ_pol = 1, is at R_mid = {sep:.4f} m."
+                if sep is not None
+                else " The file gives no separatrix."
+            )
         )
     else:
         text = (
@@ -563,13 +762,45 @@ ABOUT = (
     "two_point_model",
 )
 
+#: What the list quotes after those of a file made by code that looks for the separatrix in its own fit (C-Mod_Analysis
+#: 24e1499), which no other file has: what that code found and did, and where it is.
+SEPARATRIX_ABOUT = ("fit_separatrix", "separatrix_code")
+
+#: The file's numbers the list gives, with the unit and the factor each is shown in: the separatrix T_e of the fit beside
+#: the two-point model's.
+NUMBERS = (("Te_sep_2pm", "eV", 1.0), ("Te_sep_fit", "eV", 1.0), ("lambda_q_2pm", "mm", 1e3), ("R_mid_sep", "m", 1.0))
+
+
+def separatrix_code(attrs):
+    """What the "about" list says of the code that looked for the separatrix: its folder, that no commit pins it, and
+    that the file keeps the sha256 of each of its files that were loaded (``separatrix_code_sha256``)."""
+    try:
+        files = json.loads(attrs.get("separatrix_code_sha256") or "")
+    except (TypeError, ValueError):
+        files = None
+    kept = (
+        f"the file keeps the sha256 of each of the {len(files)} files of it that were loaded, in separatrix_code_sha256"
+        if isinstance(files, dict) and files
+        else "the file records no sha256 of it"
+    )
+    return f"{attrs.get('separatrix_code')}: outside C-Mod_Analysis' repository, so no commit pins it; {kept}."
+
 
 def about(profiles):
-    """``[(attribute, text), …]``: what the file says of how it was made, in its own words, for the expander."""
+    """``[(attribute, text), …]``: what the file says of how it was made, in its own words, for the expander, then its
+    numbers. The separatrix code is said in the list's words (:func:`separatrix_code`)."""
     rows = [(name, str(profiles.attrs[name])) for name in ABOUT if profiles.attrs.get(name) not in (None, "")]
-    for name, unit, scale in (("Te_sep_2pm", "eV", 1.0), ("lambda_q_2pm", "mm", 1e3), ("R_mid_sep", "m", 1.0)):
+    for name in SEPARATRIX_ABOUT:
+        if profiles.attrs.get(name) not in (None, ""):
+            text = separatrix_code(profiles.attrs) if name == "separatrix_code" else str(profiles.attrs[name])
+            rows.append((name, text))
+    for name, unit, scale in NUMBERS:
         if name in profiles.scalars:
             rows.append((name, f"{profiles.scalars[name] * scale:.4g} {unit}"))
+    fit = profiles.fit
+    if fit is not None and fit.rho_shift is not None:
+        shift = fit.rho_shift
+        rows.append(("fit_rho_shift", f"{shift:+.4g} in ρ_pol" if shift else "0: the fit was not moved"))
     return rows
 
 
@@ -683,15 +914,23 @@ def _number(value, digits):
 
 
 def _hover(points, quantity, scale, unit, values, errors):
-    """One hover text per point: which system, when, where, and the value with its error."""
+    """One hover text per point: which system, when, where, and the value with its error. A point moved with the fit
+    says where it is drawn, and where EFIT puts it."""
     texts = []
+    rho, r_mid = points.on("rho_pol"), points.on("R_mid")
     for i in range(points.drawn):
         value = _number(values[i] * scale, 3)
         if np.isfinite(errors[i]):
             value += f" ± {_number(errors[i] * scale, 2)}"
+        where = f"ρ_pol = {points.rho_pol[i]:.3f} · R_mid = {points.R_mid[i]:.4f} m<br>"
+        if points.moved:
+            where = (
+                f"ρ_pol = {rho[i]:.3f} · R_mid = {r_mid[i]:.4f} m, moved with the fit ({points.rho_shift:+.4f})<br>"
+                f"EFIT: ρ_pol = {points.rho_pol[i]:.3f} · R_mid = {points.R_mid[i]:.4f} m<br>"
+            )
         texts.append(
             f"{LOOKS[points.system]['label']} · t = {points.time[i]:.4f} s · channel {int(points.channel[i])}<br>"
-            f"ρ_pol = {points.rho_pol[i]:.3f} · R_mid = {points.R_mid[i]:.4f} m<br>"
+            f"{where}"
             f"R = {points.R[i]:.4f} m, Z = {points.Z[i]:+.4f} m<br>"
             f"{quantity} = {value} {unit}"
         )
@@ -719,6 +958,12 @@ def figure(profiles, axis="rho_pol"):
     Only what there is is drawn: a row with no point to place and no fit is left out, a system with none is left out
     of the legend, and a file with nothing at all gives a figure that says so. A legend entry appears once, however
     many rows hold its trace or its line (the separatrix is a line in every row), and hides it in all of them.
+
+    The points are drawn where the fit saw them. C-Mod_Analysis 24e1499 moves its fit, and its own copy of the points,
+    so that the fit's T_e is the separatrix T_e it found at ρ_pol 1 (``fit_rho_shift``, ``Te_sep_fit``); drawn where
+    EFIT puts them, the points would sit beside the fit by that shift, so they are drawn moved with it (:class:`Points`),
+    and the separatrix is the fit's ρ_pol 1 and its R_mid there (:func:`separatrix`). Every other file, among them all
+    those of d6a6466, which never moves its fit, draws each point where EFIT puts it at its own pulse.
 
     Every row runs from zero, as n_e, T_e and p_e are not negative, to a top that **the points set and a fit that runs
     away cannot** (:func:`y_limits`, the rule of the density scan's PDF). The top is 1.1 times the larger of the 98th
@@ -856,9 +1101,10 @@ def _escape(text):
 
 
 def render(ds, params, target):
-    """The warning if the fit fails its check, the figure, the lines under it and what the file says of itself.
+    """The warnings, if the fit fails its check or its own points are not known to be the file's, the figure, the lines
+    under it and what the file says of itself.
 
-    Draws into Streamlit and returns ``None``: the warning goes above the figure and the notes below it.
+    Draws into Streamlit and returns ``None``: the warnings go above the figure and the notes below it.
     """
     import streamlit as st
 
@@ -868,9 +1114,9 @@ def render(ds, params, target):
         return None
     axis = params.axis if params.axis in AXES else "rho_pol"
 
-    text = warning(profiles)
-    if text:
-        st.warning(text, icon="⚠️")
+    for text in (warning(profiles), points_warning(profiles)):
+        if text:
+            st.warning(text, icon="⚠️")
     st.plotly_chart(figure(profiles, axis), width="stretch")
     for line in notes(profiles, target, axis):
         st.caption(line)

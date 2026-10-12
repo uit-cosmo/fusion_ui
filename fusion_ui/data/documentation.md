@@ -619,10 +619,13 @@ the record are coloured by `cc_tde`, and all others by the pixel's events.
 The Single shot page draws the Thomson scattering (TS) profiles of a shot from `thomson_scattering_<shot>.nc`
 (`fusion_ui/plots/thomson_profiles.py: figure`). Nothing is fitted in the app: the file holds the measurements
 and the fit, and the page draws them, working out only the p_e of the points
-(`fusion_ui/plots/thomson_profiles.py: Points.pe`) and where the separatrix is
+(`fusion_ui/plots/thomson_profiles.py: Points.pe`), where the points go when the fit was moved
+(`fusion_ui/plots/thomson_profiles.py: Points.on`) and where the separatrix is
 (`fusion_ui/plots/thomson_profiles.py: separatrix`). fusion_scripts makes the file on mfe, where the tree and the
-fitting code are (`tools/mfe/get_thomson_scattering.py: make`). This section was read against that script at
-fusion_scripts `30eb16d`, and against what it says of C-Mod_Analysis `d6a6466`, mfe's checkout.
+fitting code are (`tools/mfe/get_thomson_scattering.py: make`), with C-Mod_Analysis 24e1499, GitHub's head, and its
+own settings, which the user chose for the app on 2026-10-12. A file made before that with mfe's d6a6466 is drawn as
+it always was; the end of "What is fitted" says how the two differ. This section was read against that script at
+fusion_scripts `721c1ad`, and against what it says of C-Mod_Analysis `24e1499` and `d6a6466`.
 
 ### What is measured
 
@@ -638,10 +641,13 @@ file holds no p_e of the measurements: the page draws e·n_e·T_e at each point,
 
 ### What each axis means
 
-Each point has a ρ_pol and an R_mid for its own pulse, from the EFIT tree the attribute `efit_tree` names (EFIT20,
-or ANALYSIS where EFIT20 has none) at the EFIT time nearest the pulse
-(`tools/mfe/get_thomson_scattering.py: map_channels`). A pulse outside that tree's time base has neither, and the
-page leaves its points out and says how many.
+Each point has a ρ_pol and an R_mid for its own pulse, from the EFIT tree the attribute `efit_tree` names, at the
+EFIT time nearest the pulse (`tools/mfe/get_thomson_scattering.py: map_channels`): ANALYSIS, which C-Mod_Analysis
+24e1499 always maps the points of its fit with, or, in a file made with d6a6466, EFIT20, or ANALYSIS where EFIT20
+has none. A pulse outside that tree's time base has neither, and the page leaves its points out and says how many.
+Where mapping the points failed, the file says so in `mapping_failure`, a sentence beginning "mapping failed:" that
+names the system, the coordinate, the pulses and the error; those points have no ρ_pol or R_mid there, and the page
+leaves them out as well and quotes it where it counts them.
 
 - **ρ_pol** is √ψ_N, the normalised poloidal flux coordinate: 0 on the magnetic axis and 1 at the separatrix.
 - **R_mid** is the major radius at which the point's flux surface crosses the outboard midplane, in metres. It is
@@ -649,6 +655,21 @@ page leaves its points out and says how many.
   middle time, but each point is at its own pulse, so a plasma that moves within the window shows as scatter
   against them. The separatrix on this axis is `R_mid_sep`, or the fit's R_mid at ρ_pol = 1 where the file has
   no scalar.
+
+**Where the fit was moved to a separatrix, the points are drawn moved with it**
+(`fusion_ui/plots/thomson_profiles.py: Points.on`). Such a fit lies on an axis of its own, `fit_rho_shift` away
+from EFIT's (see "What is fitted"), and the points, drawn where EFIT puts them, would sit beside it by that much.
+So each point is drawn where the fit saw it: on ρ_pol at its own ρ_pol plus `fit_rho_shift`, and on R_mid at the
+fit's own R_mid of that ρ_pol (`fit_R_mid`, interpolated), which is at the window's middle time rather than at the
+point's own pulse. The separatrix is the fit's ρ_pol = 1, and on R_mid the fit's R_mid there, where the fit's T_e
+is the T_e it was moved to. A caption under the figure gives the move, each point's hover gives where EFIT puts it
+as well, and each row's range is set by the points as they are drawn.
+
+**Whether the fit saw these points** is in `fit_points_check`, which compares the edge points the fit was made on
+with the file's own, moved by any `fit_rho_shift`: `equal`, or a sentence beginning "differ:" that says by how much.
+Anything but `equal` gets a warning above the figure that quotes it, since the points drawn may then not be where
+the fit saw them (`fusion_ui/plots/thomson_profiles.py: points_warning`). A file made before the check was written
+has no such attribute, and gets no warning.
 
 ### What is fitted
 
@@ -666,33 +687,72 @@ largest value where it stays within {{value:thomson.fit_factor}} times the media
 points nearest it on the axis drawn, so a fit that runs away leaves through the top instead of squashing the points
 against zero, the points above the top are counted in the row's corner, and autoscale returns to this range.
 
+At 24e1499, `run_db.py` gives the fit two settings d6a6466's did not, and they change what the file holds:
+
+- **Fictitious points beyond the separatrix** (`force_to_zero`). Before each fit, `get_cmod_kin_profs` adds a T_e
+  point of 5 eV at ρ_pol 1.05 and an n_e point of 0.1·10²⁰ m⁻³ at 1.1, with errors of 1 eV and 10¹⁷ m⁻³, as the
+  file's `fit_note` says. They hold the outer side of the n_e and T_e fits, which therefore say nothing measured
+  there, and the page says so under the figure. They do not hold the p_e fit.
+- **The separatrix from the fit's own T_e** (`lambdaq_type` 'profile', `sub_type` 'log_linear'), which d6a6466
+  neither looked for nor moved its fit to. `power_balance.py: find_separatrix` looks for the separatrix T_e in the
+  fitted T_e profile. Where it finds one, `get_cmod_kin_profs` moves the fit, and its own copy of the points, by
+  `fit_rho_shift` in ρ_pol, so that the fit's T_e at ρ_pol 1 is the T_e it found, `Te_sep_fit`. The file's fit is
+  on the moved grid, and its raw points stay where EFIT puts them, which is why the page moves them (above).
+  `fit_separatrix` says what was found and done, and `fit_rho_shift` is 0 where the fit was not moved. The list
+  under the figure gives `Te_sep_fit` beside the two-point model's `Te_sep_2pm`.
+
+**The code that finds the separatrix is outside the repository.** `find_separatrix` imports it from another user's
+home on mfe, `/home/millerma/pysepest_kc/pysepest` (`separatrix_code`), so no C-Mod_Analysis commit pins it. The
+file keeps the sha256 of each of its files that were loaded (`separatrix_code_sha256`), and the list under the
+figure names the folder.
+
 What to distrust in it:
 
+- **The separatrix finder often fails, and then leaves the fit unmoved.** On the density scan's nine 1160616
+  shots it found a separatrix only on 017, which it moved by +0.0071 to T_e,sep = 42.9 eV. On the other eight it
+  gave up, and the fit stays where EFIT's mapping put it, with no `Te_sep_fit`: its T_e at ρ_pol 1 is wherever
+  EFIT's separatrix falls on it. When its root finder fails, the code sets up a wider search and never runs it
+  (read on mfe on 2026-10-12).
+- **The p_e fit in the SOL.** The fictitious points do not hold it, so beyond the separatrix it can run away. On
+  the nine 1160616 shots it reaches 11 to 1213 times e·n_e·T_e of the file's own n_e and T_e fits (1213 on 022),
+  where d6a6466's reached 1.1 to 34 times. Compare it with the pressure points drawn from the measurements, not
+  with the other two fits.
+- **026's separatrix T_e of 5 eV.** On 1160616026 the fit's T_e is 5.0 eV at ρ_pol 1, where d6a6466's fit read
+  26.6 eV and the two-point model gives 17.1 eV. 5 eV is the fictitious point's value, not a measurement: it holds
+  the fit there, and the finder found no separatrix to move the fit to.
 - **The core is often an extrapolation.** The fit drops core T_e below 1 keV, and n_e below 0.5e20 m⁻³, inside
   ρ_pol 0.2 (`cmod_tools.py: prefit_filter`), so where the core points are lower the fit has none to rest on.
   `fit_note` says so when no core T_e inside ρ_pol 0.2 reaches 1 keV, and the page captions it whether or not the
-  check below passed: that is 15 of the 115 files of 2026-10-09, five of which pass the check. On 1160616027 the
-  fit reads 134 eV on axis where the core points read about 900 eV.
+  check below passed. Of the 115 files made with d6a6466 on 2026-10-09 that was 15, five of which passed the check;
+  of the nine 1160616 files it is 026 and 027, under either commit. On 1160616027 the fit reads 104 eV on axis (134
+  eV with d6a6466) where the core points read about 900 eV.
 - **`fit_check`** is run_db.py's own test (`tools/mfe/get_thomson_scattering.py: run_db_check`): T_e above 100 eV
   at the grid's outer end, or T_e below 0.5 keV or n_e below 0.5e20 m⁻³ on axis, means "something must have
   silently failed". A fit that does not pass is drawn all the same, with a warning above the figure that quotes the
-  check and says what the clause that failed means. **On axis**, the core is an extrapolation (12 of the 115 files).
-  **At the outer end**, the outer end is not credible (8 files): there the fit's T_e at ρ_pol 0.95 to 1.05 was 4
-  to 6 times the median of the points on three of them, and on one it ran on to about 51 keV past the last point.
-  The page takes nothing it cannot read for a pass: a file with a fit is warned about unless its check says
-  `passed`, whether the attribute is empty, missing, spelt another way or an outcome the page does not know.
+  check and says what the clause that failed means. **On axis**, the core is an extrapolation (12 of the 115 files
+  made with d6a6466). **At the outer end**, the outer end is not credible (8 of those files): there the fit's T_e at
+  ρ_pol 0.95 to 1.05 was 4 to 6 times the median of the points on three of them, and on one it ran on to about 51
+  keV past the last point. At 24e1499 the fictitious T_e point holds the outer end down: all nine 1160616 fits end
+  at 5 eV. The page takes nothing it cannot read for a pass: a file with a fit is warned about unless its check
+  says `passed`, whether the attribute is empty, missing, spelt another way or an outcome the page does not know.
 - **The errors.** With `frac_err`, which `cmod_tools.py: get_cmod_kin_profs` is given (`fit_settings` keeps it),
   the fit's n_e and T_e errors are 20% of the fit by construction, and `fit_pe_err` adds a density to a
   temperature, so it is no error of p_e. That is why the page draws no band.
 - **The pressure fit**, `fit_pe`, is a fit of its own and not e·n_e·T_e of the other two, so compare it with the
-  pressure points drawn from the measurements. At ρ_pol 0.97 to 1 it lay 3.5 times above the median of the edge
-  points on 1160616027, and within 10% of it on 1140827019 and 1091216009 (the samples, read on 2026-10-09).
-- **The scrape-off layer** is flat or linear by construction: `fit_reg` names the mtanh coefficients the fit sets
-  to zero. It is no measurement of the SOL profile.
+  pressure points drawn from the measurements. 24e1499 fixes C-Mod_Analysis' `create_pe`, whose mixed units gave
+  the pressure points the wrong weights in d6a6466's fit. On 1160616027, at ρ_pol 0.97 to 1, the fit's median is 1.7
+  times that of the edge pressure points, where d6a6466's was 3.8 times (read on 2026-10-12).
+- **The scrape-off layer** is no measurement: `fit_reg` names the mtanh coefficients the fit sets to zero, which
+  make its outer side flat or linear by construction, and at 24e1499 the fictitious points hold it as well.
 - **The two-point model.** `Te_sep_2pm` and `lambda_q_2pm` come from `power_balance.py: Teu_2pt_model`, which falls
   back silently where the main bolometer has no data, or where B_t and B_p at the outboard midplane cannot be
-  computed; `two_point_model` names the fallback. The page does not draw them: they are in the list under the
-  figure.
+  computed; `two_point_model` names the fallback. Both commits give the same numbers. The page does not draw them:
+  they are in the list under the figure.
+
+**A file made with d6a6466**, as every file was before 2026-10-12, says so in `cmod_analysis_commit` in the list
+under the figure. It maps its points with EFIT20 where the shot has it, holds no fictitious points, never moves its
+fit, and has no `fit_rho_shift`, `Te_sep_fit` or `fit_separatrix`, so the page draws each of its points where EFIT
+puts it.
 
 ### The diagnostician's caveat
 
