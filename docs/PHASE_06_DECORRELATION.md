@@ -746,6 +746,7 @@ Built, tested and pushed to main on 2026-10-07, and deployed the same day (JD).
 | J12e | The density scan's TS profiles with C-Mod_Analysis's head, against d6a6466, and a recommendation | **Opus 5.5** | fusion_scripts + mfe | J12c; the user's request (2026-10-12) | — |
 | J12f | The TS view on 24e1499's files, and the retriever's defaults | **Opus 5.5** | fusion_ui + fusion_scripts | J12e; the user's decision (2026-10-12) | J12g |
 | J12g | The production TS files remade with 24e1499, and swapped in on the server | orchestrator | mfe + server | J12e; swap after J12f's deploy | J12f |
+| J12h | The mfe script keeps every file: mapping errors, J12e's point check, 1140619014's stamps | **Opus 5.5** | fusion_scripts + mfe | J12g's step 1 | J12f |
 
 **Why these models.** `PLAN.md` splits work by how expensive a wrong decision
 is to undo, not by how hard it is, and so does this table.
@@ -2835,6 +2836,59 @@ against d6a6466, from the mfe logs:
 
 Stopped there to ask the user. Nothing is staged on the server, and the ssh
 connection is closed.
+
+**The user's answer (2026-10-12): 24e1499 everywhere.** J12h makes the script
+keep every file. Step 1 is then rerun on all 119 shots with the fixed script,
+so that every file comes from the same code. The 9 fits that 24e1499's own code
+loses stay lost until its author fixes them.
+
+#### J12h — The mfe script keeps every file · Opus 5.5 · fusion_scripts + mfe
+
+**Why.** J12g's run with 24e1499 dropped nine files, and 1140619014 has had no
+file since J12a. That breaks J12a's rule that a fit that fails never drops the
+raw data. The user wants 24e1499 everywhere (2026-10-12).
+
+**Deliver,** in `tools/mfe/get_thomson_scattering.py` and its tests only. J12f
+changes the retriever's defaults, so leave `tools/get_thomson_scattering.py`
+alone.
+
+1. **Mapping never drops a file.** When mapping the points fails, for some
+   pulses or for all, leave the values that failed NaN, and say in an
+   attribute what failed. The fit then runs as usual. The case seen is
+   `data_access._getRmidSpline`'s "x must be increasing if s > 0" with
+   ANALYSIS, on 1120217010 and 1140228019.
+2. **J12e's point check never drops a file.**
+   - Find why it fails on 1090826015, 1120217025, 1120814020, 1140827029,
+     1150618031, 1150618034 and 1150618037: the order of the points, a count,
+     or a real difference in mapping. Fix the check where it is wrong.
+   - Keep the fit, and record the outcome in a new global attribute,
+     `fit_points_check`: `equal`, or a sentence beginning `differ:` that says
+     by how much and what is known of why. J12f's view warns on `differ`.
+3. **1140619014's stamps.** "edge stamps are not increasing": find out what
+   the stamps do, handle it explicitly, and say so in an attribute, so the
+   shot gets a file.
+4. **Tests,** hermetic, for each.
+
+**Accept when:**
+
+- **The ten shots each get a file:** the nine above and 1140619014, run with
+  24e1499's settings on mfe into a scratch folder. Report each one's
+  `fit_status` and `fit_points_check`;
+- **24e1499's results are unchanged:** the nine 1160616 shots, remade with the
+  fixed script, equal J12e's files in
+  `~/Data/thomson_scattering_24e1499/`, except `created`, `script_commit` and
+  the new attributes;
+- **d6a6466's results are unchanged:** two d6a6466 files remade equal
+  production in the same way;
+- fusion_scripts' suites in both venvs are at their baselines, plus the new
+  tests.
+
+**Rules:**
+
+- **On mfe:** one ControlMaster connection, with no retry loops; work only in
+  `~/fusion_ts/`; leave `~/C-Mod_Analysis` and the 24e1499 clone as they are;
+  install nothing.
+- **Nothing is written to the server.**
 
 ## Orchestration
 
