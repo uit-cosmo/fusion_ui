@@ -13,6 +13,11 @@ start of the record and cannot work from a cut of it. :func:`input_for` is the
 one place that decides which of the two a spec computes on; the single-shot page
 and ``fusion-ui precompute`` both call it, so they cannot disagree.
 
+A spec's *companion*, another diagnostic's file drawn beside its own (see
+:class:`fusion_ui.core.registry.PlotSpec`), is opened with :func:`open_lazily`,
+which does not even read the time axes that :func:`open_dataset` indexes: a
+probe file's are most of the file.
+
 APD's ``frames`` has dims ``(y, x, time)``; phantom's has ``(time, y, x)``.
 Everything here indexes by dimension *name*, never position, so both work
 unmodified -- ``isel(time=...)`` and ``isel(y=..., x=...)`` leave the
@@ -74,6 +79,68 @@ def open_dataset(path):
     """
     mtime = os.path.getmtime(path)
     return _open_cached(path, mtime)
+
+
+def lazily(path):
+    """``path`` as an ``xr.Dataset`` that has read nothing but the file's
+    attributes and its shared ``time`` axis.
+
+    ``xr.open_dataset`` reads every dimension coordinate whole, to index it.
+    That is cheap for an imaging file, whose one time axis is a few megabytes,
+    and most of the file for a probe file, whose every quantity at every
+    position has an axis of its own: about 720 MB of a 1.1 GB ASP file. Here
+    the variables, the coordinates among them, stay on disk until something
+    reads them, and only a ``time`` axis is indexed, so that :func:`input_for`
+    cuts the file to a window as it cuts one opened whole. The variables, the
+    attributes and their decoding are ``xr.open_dataset``'s; what the dataset
+    cannot do is ``.sel`` on an axis that is not indexed, which
+    :func:`fusion_ui.core.mlp.means` does not need.
+
+    Nothing read is kept: a variable read twice is read from the file twice,
+    so a dataset kept open holds no more than its attributes.
+    """
+    store = xr.backends.NetCDF4DataStore.open(path, mode="r")
+    try:
+        variables, attrs = store.load()
+        variables, attrs, coord_names = xr.conventions.decode_cf_variables(
+            variables, attrs
+        )
+        coords = {
+            name: variable
+            for name, variable in variables.items()
+            if name in coord_names or variable.dims == (name,)
+        }
+        data = {
+            name: variable for name, variable in variables.items() if name not in coords
+        }
+        # An empty `indexes` is what keeps xarray from indexing, and so from
+        # reading, every dimension coordinate.
+        ds = xr.Dataset(data, coords=xr.Coordinates(coords, indexes={}), attrs=attrs)
+        if TIME_DIM in ds.coords and ds[TIME_DIM].dims == (TIME_DIM,):
+            ds = ds.set_xindex(TIME_DIM)
+    except Exception:
+        store.close()
+        raise
+    ds.set_close(store.close)
+    return ds
+
+
+@st.cache_resource(show_spinner=False)
+def _lazily_cached(path, mtime):
+    # ``mtime`` busts the cache for a re-copied file, as in _open_cached.
+    return lazily(path)
+
+
+def open_lazily(path):
+    """:func:`lazily`, opened once per server process: how the single-shot
+    page opens a spec's companion.
+
+    It costs tens of milliseconds and keeps nothing but the attributes,
+    whatever the file's size, so a view can look at another diagnostic's
+    attributes on every rerun and read its data only when it draws them.
+    Shared across sessions, as :func:`open_dataset`'s datasets are.
+    """
+    return _lazily_cached(path, os.path.getmtime(path))
 
 
 def _finite(value):

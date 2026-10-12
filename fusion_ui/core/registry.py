@@ -59,6 +59,18 @@ Every place that cuts a dataset before ``compute`` honours the flag, through
 :func:`fusion_ui.core.loader.input_for`: the single-shot page and
 ``fusion-ui precompute``.
 
+A live spec may also draw *other diagnostics of the same shot* beside its own
+file (``companions``): the Thomson scattering profiles offer the Mirror
+Langmuir Probe's on the same axes. The single-shot page opens each companion's
+file as it opens the spec's own, cut to the same window, and calls ``render``
+as ``render(result, params, target, companions)``, with ``companions`` a dict
+``{diagnostic: dataset or None}``; ``None`` where the shot has no such file.
+A companion is opened without reading its variables or indexing its ragged
+time axes (:func:`fusion_ui.core.loader.open_lazily`): a probe file's are most
+of its gigabyte, so a view can judge from the attributes whether to draw it at
+all, and reads its data only when it does. ``render`` stays pure: the page
+opens the files, and ``render`` reads only what it is handed.
+
 What must never enter a spec's ``params``: view state. A frame index, a
 selected pixel, a zoom -- those live in ``st.session_state`` keyed off
 :attr:`Target.key`. A slider drag must not mint a new ``param_sets`` row.
@@ -66,6 +78,8 @@ selected pixel, a zoom -- those live in ``st.session_state`` keyed off
 
 from dataclasses import dataclass, field
 from typing import Callable, Optional
+
+from fusion_ui.core import catalog
 
 
 @dataclass(frozen=True)
@@ -85,6 +99,13 @@ class Target:
     t_start: float
     t_end: float
     window_source: str = "metadata"  # "metadata" | "default" | "none"
+    #: The shot's entry in the discharge DB (``experimental_database``'s
+    #: ``PlasmaDischarge``), or ``None``: what a view may quote of the shot, as
+    #: the Thomson scattering view quotes its ``mlp_mode``. The single-shot page
+    #: sets it; a target built elsewhere has none. It says nothing of *what* a
+    #: plot is computed on, so it is left out of equality, hashing and
+    #: :attr:`key`.
+    discharge: Optional[object] = field(default=None, compare=False, repr=False)
 
     @property
     def key(self):
@@ -120,8 +141,9 @@ class PlotSpec:
     #: widget panel and the canonical dict that is hashed, so the form and the
     #: cache key cannot disagree.
     params: type
-    #: ``(result, params, target) -> go.Figure | None``. Returning ``None``
-    #: means the callable drew into Streamlit itself.
+    #: ``(result, params, target) -> go.Figure | None``, or ``(result,
+    #: params, target, companions)`` for a spec that names :attr:`companions`.
+    #: Returning ``None`` means the callable drew into Streamlit itself.
     render: Callable
     #: ``(ds, params) -> xr.Dataset``, or ``None`` for a live view.
     compute: Optional[Callable] = None
@@ -171,6 +193,17 @@ class PlotSpec:
     #: cached spec can need it, and a chain agrees on it, since the store hands
     #: every link the same dataset.
     whole_record: bool = False
+    #: Other diagnostics of the same shot that this live spec draws beside its
+    #: own file, as diagnostic strings (``("asp",)``). The single-shot page
+    #: opens the raw file of each, lazily (no variable read and no ragged axis
+    #: indexed, :func:`fusion_ui.core.loader.open_lazily`), cut to the target's
+    #: window (:func:`fusion_ui.core.loader.input_for`, which hands a probe file
+    #: over whole), and calls ``render(result, params, target, companions)``
+    #: with ``companions`` = ``{diagnostic: dataset or None}`` in this order:
+    #: ``None`` where the shot has no such file, or it cannot be opened. Only a
+    #: live spec can have them, and one with no ``overlay``, since many-pixel
+    #: mode opens none.
+    companions: tuple = ()
 
     @property
     def cached(self):
@@ -204,6 +237,7 @@ def register(spec):
             f"{spec.key!r} needs the whole record but is a live spec: a live "
             "spec has no compute to hand it to, and its view is the cut dataset"
         )
+    _check_companions(spec)
     if spec.requires is not None:
         # Checked at registration, not at compute time: a typo here would
         # otherwise surface as a failed run on someone's shot.
@@ -238,6 +272,47 @@ def register(spec):
         raise ValueError(f"{spec.key!r} sets upstream_params but no requires")
     REGISTRY[spec.key] = spec
     return spec
+
+
+def _check_companions(spec):
+    """Refuse a ``companions`` declaration the single-shot page could not honour.
+
+    Each is checked here rather than on someone's shot: a misspelt diagnostic
+    would otherwise never find a file, and the view would quietly never draw it.
+    """
+    companions = spec.companions
+    if not isinstance(companions, tuple):
+        # A bare string would iterate as its letters: ("asp") is "asp".
+        raise ValueError(
+            f"{spec.key!r} names its companions as {companions!r}: give a tuple "
+            "of diagnostic names, such as ('asp',)"
+        )
+    if not companions:
+        return
+    if spec.compute is not None:
+        raise ValueError(
+            f"{spec.key!r} names companions but is a cached spec: a result "
+            "computed from other files would need them in its cache key, and "
+            "only a live spec's render is handed them"
+        )
+    if spec.overlay is not None:
+        raise ValueError(
+            f"{spec.key!r} names companions and has an overlay: many-pixel mode "
+            "opens no companion, so its overlay would draw without them"
+        )
+    for name in companions:
+        if not isinstance(name, str) or name not in catalog.DIAGNOSTICS:
+            raise ValueError(
+                f"{spec.key!r} names {name!r} as a companion, which is no "
+                f"diagnostic: they are {', '.join(catalog.DIAGNOSTICS)}"
+            )
+        if name in spec.diagnostics:
+            raise ValueError(
+                f"{spec.key!r} names {name!r} as a companion, but it is one of "
+                "its own diagnostics: a companion is another diagnostic's file"
+            )
+    if len(set(companions)) != len(companions):
+        raise ValueError(f"{spec.key!r} names a companion twice: {companions!r}")
 
 
 def get(key):

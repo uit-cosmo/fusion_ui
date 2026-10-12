@@ -873,3 +873,28 @@ The page's L_n is within 5% of the paper's at f_GW 0.30, 0.45 and 0.65. At 0.24 
 plunge, and the paper fits two exponentials: a far-SOL length of a two-layer profile moves with where the fit begins,
 and 009's L_n is 1.9 cm from 0 cm, 2.6 cm from 0.3 cm and 3.2 cm from 0.5 cm of the file's ρ. The paper gives its L_T
 of 2.5 cm "for f_GW = 0.80", where there are no probe data, so the table puts it at 0.65.
+
+### On the Thomson scattering profiles
+
+The Thomson scattering profiles plot offers these profiles over its own, on its n_e, T_e and p_e rows, wherever the
+probe plunges in the discharge window (`fusion_ui/plots/thomson_profiles.py: overlay`). Whether it does is judged from
+the probe's depth alone, which the ASP file holds in its attributes (`fusion_ui/core/mlp.py: strokes_in`), by the rule
+that finds the plunges above. The page opens the ASP file without reading its variables
+(`fusion_ui/core/loader.py: lazily`), since indexing its time axes alone reads about 720 MB of the largest files, and
+the plot reads the probe's data only while the overlay is switched on. The sidebar gives the discharge DB's `mlp_mode`
+beside the offer, as a hint and no more: the data decide, and on 1150618021 the DB says "none" of a probe that scans.
+
+The points are the ones this plot draws, the 1 ms means of the four pins combined, and their p_e is e·n_e·T_e. They
+are placed by ρ: on R_mid at the separatrix the plot draws plus ρ, and on ρ_pol at the ρ_pol of that R_mid, through
+the fit's own R_mid (`fit_R_mid`) inverted. A point beyond the fit's grid has no ρ_pol, and the caption counts it. **The
+points are not moved**, so that the probe's ρ and the Thomson scattering points' ρ_pol both come from EFIT's mapping,
+unless a separatrix temperature of the Thomson scattering file is chosen, `Te_sep_2pm` or, where the fit was moved to
+one, `Te_sep_fit`: the profile is then moved as above, where the probe's T_e reaches it. Where the fit was moved, its
+points are drawn moved with it and the probe's are not, and the caption says so. A row's range stays the one the
+Thomson scattering points set, and the probe's points above it are counted in the row's corner.
+
+On the 1160616 scan (read on 2026-10-12) the probe plunges in the windows of 009, 011, 016, 017 and 022, and holds
+still in those of 018 and 025, where nothing is offered. Every point has a place on both axes: the fits' R_mid reach
+4.3 to 4.4 cm beyond the separatrix, and the probe's ρ less than 3 cm. Of the separatrix temperatures, the probe reaches
+only 011's `Te_sep_2pm`, 56.6 eV, which moves its profile by +0.58 cm; elsewhere its T_e stays below them, as on 017,
+whose fit was moved to 42.9 eV and where the probe reads at most 31.2 eV.

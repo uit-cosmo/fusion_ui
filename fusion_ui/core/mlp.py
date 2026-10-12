@@ -1,8 +1,10 @@
 """The Mirror Langmuir Probe's profiles: its plunges, the paper's 1 ms means, ρ, and the far-SOL e-folding lengths.
 
 The reduction behind the "MLP profiles" view (:mod:`fusion_ui.plots.mlp_profiles`), kept apart from the view so that
-another can reuse it rather than copy it: the Thomson scattering view is to draw the same points on its own axes. Pure:
-numpy, scipy and xarray, no Streamlit, no database, and no file but the dataset it is handed.
+another can reuse it rather than copy it: the Thomson scattering view draws the same points on its own axes, from the
+ASP file the single-shot page hands it as a companion, and judges whether the probe plunges in its window from the track
+alone (:func:`strokes_in`). Pure: numpy, scipy and xarray, no Streamlit, no database, and no file but the dataset it is
+handed.
 
 The paper it reproduces is O E Garcia, J M Losada et al., "Velocity scaling regimes for blob-like filaments in the
 Alcator C-Mod scrape-off layer", Plasma Phys. Control. Fusion 68 (2026) 055034, section 3: "The resulting measurement
@@ -257,14 +259,26 @@ def _binned(time, values, edges):
 
 def _series(ds, name, t_start, t_end):
     """``(time, values)`` of a 1-D variable on its own axis, within ``[t_start, t_end]``: only the window is read, through
-    the axis' index where it is sorted, as the files' are."""
+    the axis' index where it is sorted, as the files' are.
+
+    A file opened without indexing its axes (:func:`fusion_ui.core.loader.lazily`, as the Thomson scattering view opens
+    one) has the axis read instead, and where it is sorted only the window of the values is read, the samples the index
+    would have chosen: from the first at or after ``t_start`` to the last at or before ``t_end``, compared in the axis'
+    own type, as the index looks a bound up. On an axis of float32, as the ρ companions' are, ``1.15`` is then the
+    sample stored for 1.15, which a comparison in float64 would put a hair below it.
+    """
     variable = ds[name]
     dim = variable.dims[0]
     index = ds.indexes.get(dim)
     if index is not None and index.is_monotonic_increasing:
         variable = variable.sel({dim: slice(t_start, t_end)})
         return np.asarray(variable[dim].values, dtype=float), np.asarray(variable.values, dtype=float)
-    time = np.asarray(variable[dim].values, dtype=float)
+    stored = np.asarray(variable[dim].values)
+    time = stored.astype(float)
+    if index is None and time.size and bool(np.all(np.diff(time) >= 0)):
+        bounds = np.asarray([t_start, t_end], dtype=stored.dtype if stored.dtype.kind == "f" else float)
+        first, last = int(np.searchsorted(stored, bounds[0], "left")), int(np.searchsorted(stored, bounds[1], "right"))
+        return time[first:last], np.asarray(variable.isel({dim: slice(first, last)}).values, dtype=float)
     keep = np.flatnonzero((time >= t_start) & (time <= t_end))
     return time[keep], np.asarray(variable.isel({dim: keep}).values, dtype=float)
 
@@ -455,6 +469,27 @@ def on_strokes(found):
     if first is not None and found[first].ndim == 1:
         keep &= np.isfinite(found[first].values)
     return found.isel(window=np.flatnonzero(keep))
+
+
+def strokes_in(ds, t_start=None, t_end=None, window=WINDOW):
+    """``[(plunge, stroke), …]`` of the strokes the probe runs in the whole windows within ``[t_start, t_end]``, in the
+    order it runs them, judged from its track alone (:func:`track`): **no variable is read**, so it costs nothing on a
+    file opened lazily (:func:`fusion_ui.core.loader.lazily`).
+
+    The windows are labelled as :func:`means` labels them, so a stroke found here is one whose windows the profile is
+    read over. Empty where the probe holds still in the window, as in a dwell, or the file has no track. Over the whole
+    track where either end is ``None`` or not finite.
+    """
+    found_track = track(ds)
+    if found_track is None:
+        return []
+    if t_start is None or t_end is None or not np.isfinite([t_start, t_end]).all():
+        t_start, t_end = float(found_track[0][0]), float(found_track[0][-1])
+    grid = edges(t_start, t_end, window)
+    if grid.size < 2:
+        return []
+    _, _, plunge, stroke, _ = _labels(found_track, grid, 0.5 * (grid[:-1] + grid[1:]))
+    return strokes(xr.Dataset({"plunge": ("window", plunge), "stroke": ("window", stroke)}))
 
 
 def recording(found):

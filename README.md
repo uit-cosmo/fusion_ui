@@ -175,6 +175,28 @@ plots one per-pixel scalar across the selection — so for a cached spec an
 what makes it eligible at all. `fusion_ui/plots/spectra.py` (cached) and the
 trace overlay in `fusion_ui/plots/raw.py` (live) are the worked examples.
 
+A live spec may also draw other diagnostics of the same shot beside its own
+file. It names them, and the single-shot page opens each one's raw file —
+lazily, so that only its attributes are read until the view reads more — cut
+to the same window, and hands them over, `None` where the shot has none:
+
+```python
+def render(ds, params, target, companions):   # companions: {"asp": dataset or None}
+    ...
+
+SPEC = registry.register(
+    registry.PlotSpec(
+        ...,
+        render=render,
+        companions=("asp",),
+    )
+)
+```
+
+The Thomson scattering profiles in `fusion_ui/plots/thomson_profiles.py` are
+the worked example: they offer the MLP's profiles where the probe plunges in
+the window, and read the probe's data only while that overlay is on.
+
 ## Adding a statistic
 
 One file in `fusion_ui/stats/`, one line in its `__init__.py`. No page changes,

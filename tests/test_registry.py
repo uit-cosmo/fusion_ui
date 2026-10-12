@@ -210,3 +210,72 @@ def test_a_target_is_hashable_and_frozen():
     assert {target(), target()} == {target()}
     with pytest.raises(dataclasses.FrozenInstanceError):
         target().shot = 1
+
+
+def test_the_discharge_entry_a_target_carries_is_not_part_of_what_it_is():
+    """The page hands a view the shot's discharge-DB entry, to quote; two targets
+    on one file are one target."""
+    # Unhashable, as experimental_database's PlasmaDischarge is.
+    entry = dataclasses.make_dataclass("Entry", ["mlp_mode"])("scan")
+    with_entry = target(discharge=entry)
+    assert with_entry == target() and hash(with_entry) == hash(target())
+    assert with_entry.key == target().key
+    assert with_entry.discharge is entry and target().discharge is None
+    assert "scan" not in repr(with_entry)
+
+
+# ---------------------------------------------------------------------------
+# Companions: other diagnostics of the same shot that a live spec draws beside
+# its own file. The single-shot page opens them and hands them to render; a
+# declaration it could not honour is refused here, not on someone's shot.
+# ---------------------------------------------------------------------------
+
+
+def test_a_spec_names_no_companion_unless_it_says_so():
+    assert spec("plain").companions == ()
+
+
+def test_a_live_spec_may_name_other_diagnostics_of_the_shot():
+    registry.register(spec("profiles", ("thomson_scattering",), companions=("asp",)))
+    registry.register(spec("both", ("thomson_scattering",), companions=("asp", "apd")))
+    assert registry.get("both").companions == ("asp", "apd")
+
+
+def test_a_cached_spec_cannot_name_companions():
+    """Its result would be computed from files its cache key does not name."""
+    with pytest.raises(ValueError, match="cached spec"):
+        registry.register(spec("heavy", compute=lambda ds, p: ds, companions=("asp",)))
+
+
+def test_a_spec_with_an_overlay_cannot_name_companions():
+    """Many-pixel mode opens no companion, so its overlay would draw without them."""
+    with pytest.raises(ValueError, match="overlay"):
+        registry.register(
+            spec("frames", overlay=lambda items, p, t: None, companions=("asp",))
+        )
+
+
+@pytest.mark.parametrize("companions", [("apsd",), ("",), (None,), ("asp", 3)])
+def test_a_companion_must_be_a_diagnostic(companions):
+    with pytest.raises(ValueError, match="no diagnostic"):
+        registry.register(
+            spec("profiles", ("thomson_scattering",), companions=companions)
+        )
+
+
+def test_a_companion_is_given_as_a_tuple_not_as_a_bare_name():
+    """("asp") is "asp", which would iterate as its letters."""
+    with pytest.raises(ValueError, match="tuple"):
+        registry.register(spec("profiles", ("thomson_scattering",), companions="asp"))
+
+
+def test_a_companion_is_another_diagnostic_than_the_specs_own():
+    with pytest.raises(ValueError, match="one of its own diagnostics"):
+        registry.register(spec("profiles", ("asp", "fsp"), companions=("fsp",)))
+
+
+def test_a_companion_is_named_once():
+    with pytest.raises(ValueError, match="twice"):
+        registry.register(
+            spec("profiles", ("thomson_scattering",), companions=("asp", "asp"))
+        )
