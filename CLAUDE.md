@@ -27,9 +27,10 @@ what `batch_only` is for (see the contract below).
 
 Phase 06 (decorrelation fields: every method's velocity field and every
 pixel's average, computed in batch through `fusion_scripts`'
-`decorrelation/pipeline.py`) is **done**, except that J12b, the Thomson
-scattering profiles (`plots/thomson_profiles.py`), is merged and not yet
-deployed. The plan, with a record of each job, is
+`decorrelation/pipeline.py`) is **done**. Its follow-ups, J12 (the Thomson
+scattering profiles, `plots/thomson_profiles.py`) and J13 (the MLP profiles,
+`plots/mlp_profiles.py`, and their overlay on the TS view), are merged; the
+plan's Status says what is deployed. The plan, with a record of each job, is
 `docs/PHASE_06_DECORRELATION.md`, written as jobs for an orchestrator. Read it
 before touching `pixel_averages`, `method_fields`, `blob_parameters`,
 `dead_pixels`, the Fields page or `precompute --workers`. What it left as

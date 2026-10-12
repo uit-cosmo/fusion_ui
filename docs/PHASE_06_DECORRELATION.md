@@ -105,6 +105,15 @@ d6a6466. The user chose 24e1499 for the app instead (open question 6). J12f
 makes the view and the retriever ready for 24e1499's files, and J12g remakes the
 production files and swaps them in.
 
+J12f (8a2140a) and J12h (fusion_scripts dd4b2d8) are merged and pushed, with
+fusion_ui at 20327db, and the server's fusion_ui is pulled to 20327db. J12g's
+final run made 116 files with 95 fits, staged on the server with their
+checksums checked. The swap waits for the user's restart. J13a (1d0bdea) and
+J13b (233f59e) are merged locally: the MLP profiles as a single-shot plot,
+checked against the density-scan paper's Fig. 2, and on the TS plots on
+request. They are not pushed, and go out after the user's word, with a
+restart.
+
 ## Decisions (the user, 2026-10-07)
 
 | | |
@@ -2984,6 +2993,25 @@ alone.
 
 J12g's step 1 was rerun with dd4b2d8 into `~/Data/thomson_scattering_24e1499_final/`.
 
+- **116 files with 95 fits,** against d6a6466's 115 and 103.
+  - The 3 shots with no TS have no file.
+  - 1140619014 has one now, with its stamps repaired.
+  - The 9 fits that 24e1499's own code loses stay lost.
+- **`fit_points_check`:** `equal` on 88, `differ` on 7 and none on the 21
+  without a fit.
+  - The seven are J12h's: their fits lean on ANALYSIS equilibria up to
+    0.59 s from the pulses.
+  - 56 fits moved themselves to a separatrix.
+- **Steps 2 and 3:** compared above, and staged in
+  `/hdd1/fusion_data/thomson_scattering_24e1499/` (0775, the files 0664).
+  The 116 files' checksums equal the laptop's.
+- **Pushed with the user's word:** fusion_ui at 20327db, and fusion_scripts
+  at dd4b2d8.
+  - The server's fusion_ui is pulled to 20327db.
+  - Its fusion_scripts stays at 9417aa9, under which the Fields page's
+    results were computed, so that they carry no commit-mismatch badge.
+- **Step 4 waits for the user's restart.**
+
 ### J13 — MLP profiles
 
 **The request (the user, 2026-10-12).**
@@ -3180,6 +3208,83 @@ or deployed, and goes out with J13b.
   overlay is switched on;
 - a TS plot without the overlay is drawn exactly as before, on every TS file;
 - screenshots, read by eye.
+
+**Result (2026-10-12).** Merged locally at 233f59e (0a555f3). It is not pushed
+or deployed, and goes out with J13a after the user's word, with a restart.
+
+- **What it added:**
+  - **`PlotSpec.companions`.** A live spec names other diagnostics of the
+    shot. The single-shot page hands their raw files to `render`, opened
+    lazily (`loader.open_lazily`: the attributes, no variable) and cut to the
+    window, or `None` where the shot has none. `register()` checks the
+    declaration. `Target.discharge` carries the DB entry, outside the
+    target's key.
+  - `mlp.strokes_in`: the strokes in a window, from the track alone.
+  - **The TS view's overlay:**
+    - offered in the sidebar where the probe plunges in the window, with
+      `mlp_mode` as a hint, and off by default;
+    - drawn on the n_e, T_e and p_e rows, at R_mid,sep + ρ and at the ρ_pol
+      of that through `fit_R_mid`;
+    - unmoved by default, with `Te_sep_2pm` and `Te_sep_fit` offered;
+    - each row keeps the TS points' range, and the MLP points above it are
+      counted.
+  - The README recipe, CLAUDE.md's contract and rows, a Documentation
+    subsection, and 54 tests.
+- **Done otherwise than planned:**
+  - The overlay's controls are view state in the sidebar, not parameters,
+    so `ThomsonProfilesParams` keeps `axis` alone.
+  - J13a's `_series` compares a window's bounds in the axis's own type. A
+    file opened without indexes needs that on the float32 ρ axes.
+- **The orchestrator's rerun:**
+  - **Suite on the branch:** 1277 passed.
+  - **Without the overlay, drawn exactly as before.**
+    - The single-shot page's main column is identical under main's code and
+      the branch's: every element, the figure's JSON, the warnings, the
+      captions and the About list.
+    - That holds on all 116 24e1499 files and all 115 d6a6466 files, on both
+      axes, with the laptop's eight ASP files present: 462 views, none
+      different.
+    - Each run printed the checkout it loaded.
+  - **Offered** on 009, 011, 016, 017 and 022, and on 1150618021.
+    - Not on 018: "the probe holds still in the window at a depth of
+      10.9 cm".
+    - Not on 025: the same, at 11.2 cm.
+  - **Placement, checked exactly.**
+    - Every MLP point drawn, on both axes and all three rows, is where the
+      two files put it.
+    - The expected places were computed apart from the overlay's code: the
+      probe's 1 ms means from the ASP file opened the ordinary way, at
+      R_mid_sep + ρ, and at the ρ_pol of that through `fit_R_mid` inverted.
+    - 26 to 190 points a shot, all placed.
+    - Moved to 011's `Te_sep_2pm` (56.57 eV), the profile moves +0.578 cm,
+      again exactly.
+    - On the other shots the probe's T_e never reaches the offered
+      temperatures. The view warns, and leaves the profile unmoved.
+  - **Nothing of the probe is read while the overlay is off,** by the
+    kernel's count of bytes read (`rchar`).
+    - A TS view reads 7.5–7.9 MB without an ASP file, and 12.6–12.8 MB with
+      one, for files of 0.46–1.1 GB. The extra 5 MB is the header.
+    - Switched on, it reads 362 MB (011) and 495 MB (022). Switched off
+      again, 0.24 MB.
+  - **The server** has the laptop's xarray (2025.6.1), netCDF4 (1.7.4) and
+    Streamlit (1.63.0), as `loader.lazily`'s use of xarray's internals needs.
+  - **Screenshots, read by eye:**
+    - the MLP on the three rows, with one legend entry for each stroke;
+    - on 011 it sits about 0.6 cm inward of the TS edge, as J13a found.
+- **Open, for the user:**
+  - The MLP's T_e and p_e sit at the bottom of rows ranged by the core: 2–80 eV
+    under about 2 keV. An edge zoom?
+  - Of the offered separatrix temperatures, the probe reaches only 011's
+    `Te_sep_2pm`.
+  - While on, the overlay rereads the probe on every rerun: 0.4–0.5 GB, 1–2 s
+    on the laptop, and more on the server's HDD when cold. A cache keyed on
+    the file and the window would save it.
+  - `loader.lazily` uses xarray's internals. After an upgrade, xarray
+    2025.07's `create_default_indexes=False` could replace them.
+  - An existing cost: a shot with ASP and TS files but no APD opens on its
+    ASP file, read whole.
+  - 1150618021 (`mlp_mode` 'none') is offered the overlay: its probe plunges
+    in the window.
 
 ## Orchestration
 
