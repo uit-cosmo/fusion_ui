@@ -658,7 +658,13 @@ profiles to the edge and core points of the discharge window together: **one pro
 one per pulse, on a grid of 1000 values of ρ_pol from 0 to 1.1, with R_mid on it. The window is the discharge
 DB's, in `window_t_start` and `window_t_end`: the legend gives it, and the caption says when the page's window is
 another. A shot whose fit failed has no fit and says why in `fit_status`; every shot with core TS only reads
-"No edge Thomson data!". The page draws the fit over its whole range, with no band.
+"No edge Thomson data!". The page draws the fit over its whole range, with no band. Each row's range is set by the
+points and not by the fit (`fusion_ui/plots/thomson_profiles.py: y_limits`, the rule of the density scan's PDF): it
+runs from 0 to {{value:thomson.margin}} times the larger of the {{value:thomson.percentile}} of the points measured
+to better than {{value:thomson.sigmas}}σ (all of them where fewer than {{value:thomson.min_well}} are) and the fit's
+largest value where it stays within {{value:thomson.fit_factor}} times the median of the {{value:thomson.nearest}}
+points nearest it on the axis drawn, so a fit that runs away leaves through the top instead of squashing the points
+against zero, the points above the top are counted in the row's corner, and autoscale returns to this range.
 
 What to distrust in it:
 

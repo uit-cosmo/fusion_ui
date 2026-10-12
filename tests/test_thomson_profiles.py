@@ -517,6 +517,255 @@ def test_no_hover_text_of_a_real_looking_core_temperature_carries_an_exponent():
 
 
 # ---------------------------------------------------------------------------
+# The range of a row
+# ---------------------------------------------------------------------------
+
+#: The layout's names for the rows n_e, T_e and p_e, top to bottom.
+YAXES = ("yaxis", "yaxis2", "yaxis3")
+
+
+def toy(x, value, *, error=None, fit=None, r_mid=None, fit_r_mid=None):
+    """Profiles whose only points are edge T_e readings of ``value`` eV at ρ_pol ``x``, and whose fit is ``(ρ_pol, T_e)``
+    when one is given, so that the rule that sets a row's top can be checked against numbers worked out by hand.
+
+    The row is ``"Te"``, which is drawn in the unit it is in (scale 1). Each point's error is 10% of its value unless
+    ``error`` says otherwise; ``r_mid`` is where each point is on the R_mid axis and ``fit_r_mid`` where each sample of the
+    fit is, both the same as on ρ_pol unless given.
+    """
+    x, value = np.asarray(x, float), np.asarray(value, float)
+    error = 0.1 * value if error is None else np.asarray(error, float)
+    n, nan = x.size, np.full(x.size, np.nan)
+    points = tp.Points(
+        system="edge",
+        pulses=1,
+        readings=n,
+        time=np.zeros(n),
+        channel=np.arange(n),
+        R=nan,
+        Z=nan,
+        rho_pol=x,
+        R_mid=x if r_mid is None else np.asarray(r_mid, float),
+        ne=np.ones(n),
+        ne_err=nan,
+        Te=value,
+        Te_err=error,
+    )
+    found = None
+    if fit is not None:
+        rho, te = (np.asarray(a, float) for a in fit)
+        found = tp.Fit(
+            rho_pol=rho,
+            ne=te,
+            Te=te,
+            pe=None,
+            R_mid=rho if fit_r_mid is None else np.asarray(fit_r_mid, float),
+            window=None,
+        )
+    return tp.Profiles(points={"edge": points}, fit=found, pulses=1, scalars={}, attrs={})
+
+
+def test_the_top_is_1_1_times_the_98th_percentile_of_the_points_and_not_their_largest():
+    found = toy(np.linspace(0.5, 1.0, 100), np.arange(1.0, 101.0))  # no fit; each point has a 10% error
+    bottom, top = tp.y_limits(found, "Te", "rho_pol")
+    assert bottom == 0.0
+    assert top == pytest.approx(1.1 * 98.02)  # 1 + 0.98 * 99, between the 98th and the 99th of them: not 1.1 * 100
+    assert tp.points_above(found, "Te", "rho_pol", top) == 0
+
+
+def test_a_point_measured_to_worse_than_2_sigma_does_not_set_the_top_and_is_counted_above_it():
+    value = np.append(np.arange(1.0, 101.0), [1000.0] * 3)
+    error = np.append(0.1 * np.arange(1.0, 101.0), [800.0] * 3)  # an error of 800 on 1000 is worse than half the value
+    found = toy(np.linspace(0.5, 1.0, 103), value, error=error)
+    top = tp.y_limits(found, "Te", "rho_pol")[1]
+    assert top == pytest.approx(1.1 * 98.02)  # as if the three were not there
+    assert tp.points_above(found, "Te", "rho_pol", top) == 3  # and they are said to be, not left out silently
+
+
+def test_a_point_with_no_error_is_not_measured_to_better_than_2_sigma():
+    value = np.arange(1.0, 101.0)
+    error = np.where(value > 90, np.nan, 0.1 * value)  # the last ten have none
+    found = toy(np.linspace(0.5, 1.0, 100), value, error=error)
+    assert tp.y_limits(found, "Te", "rho_pol")[1] == pytest.approx(1.1 * 88.22)  # the 98th percentile of 1 to 90
+
+
+def test_with_fewer_than_5_well_measured_points_all_the_points_set_the_percentile():
+    def top(well):
+        value = np.array([10.0] * well + [20.0] * (20 - well))
+        error = np.array([1.0] * well + [20.0] * (20 - well))  # the others are measured no better than their value
+        return tp.y_limits(toy(np.linspace(0.5, 1.0, 20), value, error=error), "Te", "rho_pol")[1]
+
+    assert top(4) == pytest.approx(1.1 * 20)  # four are not enough to go by: all twenty set it
+    assert top(5) == pytest.approx(1.1 * 10)  # five are, and the others no longer count
+
+
+def test_a_fit_that_runs_away_leaves_the_top_where_the_points_put_it():
+    x, value = np.linspace(0.5, 1.0, 40), np.full(40, 100.0)
+    rho = np.linspace(0.0, 1.1, 111)
+    without = tp.y_limits(toy(x, value), "Te", "rho_pol")
+    assert without == pytest.approx((0.0, 110.0))
+    runaway = np.where(rho <= 1.0, 100.0, 1e5)  # follows the points, and then leaves them
+    assert tp.y_limits(toy(x, value, fit=(rho, runaway)), "Te", "rho_pol") == without
+
+
+def test_a_fit_within_3_times_the_points_sets_the_top_and_one_beyond_that_does_not():
+    x, value = np.linspace(0.5, 1.0, 40), np.full(40, 100.0)
+    rho = np.linspace(0.0, 1.1, 111)
+
+    def top(level):
+        return tp.y_limits(toy(x, value, fit=(rho, np.full(rho.size, level))), "Te", "rho_pol")[1]
+
+    assert top(250.0) == pytest.approx(1.1 * 250)  # within 3 times the points: it sets the top
+    assert top(300.0) == pytest.approx(1.1 * 300)  # exactly 3 times counts
+    assert top(301.0) == pytest.approx(1.1 * 100)  # a little beyond does not: the points do
+
+
+def test_a_fit_is_judged_against_the_points_beside_it_and_not_against_the_largest_ones():
+    x = np.r_[np.linspace(0.1, 0.3, 20), np.linspace(0.9, 1.0, 20)]
+    value = np.r_[np.full(20, 100.0), np.full(20, 1000.0)]  # low points inside, high ones at the edge
+
+    def top(at):
+        return tp.y_limits(toy(x, value, fit=([at], [2000.0])), "Te", "rho_pol")[1]
+
+    assert top(0.2) == pytest.approx(1.1 * 1000)  # 2000 beside points of 100 is not plausible: the points set it
+    assert top(1.0) == pytest.approx(1.1 * 2000)  # beside points of 1000 it is, and it sets the top
+
+
+def test_a_row_with_no_points_takes_the_whole_fit_and_a_row_with_no_fit_is_set_by_the_points_alone():
+    rho = np.linspace(0.0, 1.1, 111)
+    fit_only = toy([], [], fit=(rho, np.where(rho <= 1.0, 100.0, 1e5)))
+    assert tp.y_limits(fit_only, "Te", "rho_pol") == pytest.approx((0.0, 1.1e5))  # no points to hold the fit to
+    nothing = tp.Profiles(points={}, fit=fit_only.fit, pulses=0, scalars={}, attrs={})  # not even a system
+    assert tp.y_limits(nothing, "Te", "rho_pol") == pytest.approx((0.0, 1.1e5))
+    no_fit = toy(np.linspace(0.5, 1.0, 40), np.full(40, 100.0))
+    assert no_fit.fit is None and tp.y_limits(no_fit, "Te", "rho_pol") == pytest.approx((0.0, 110.0))
+
+
+def test_the_points_and_the_fit_are_judged_on_the_axis_drawn():
+    """The same points and fit give another top on R_mid than on ρ_pol when the points beside a sample of the fit are other
+    points there: here the two groups of points trade places."""
+    x = np.r_[np.linspace(0.5, 0.7, 20), np.linspace(0.9, 1.0, 20)]
+    value = np.r_[np.full(20, 100.0), np.full(20, 1000.0)]
+    r_mid = np.r_[np.linspace(0.90, 1.00, 20), np.linspace(0.50, 0.60, 20)]
+    found = toy(x, value, r_mid=r_mid, fit=([0.6, 1.05], [50.0, 2500.0]), fit_r_mid=[0.55, 0.95])
+    assert tp.y_limits(found, "Te", "rho_pol")[1] == pytest.approx(1.1 * 2500)  # beside points of 1000, at ρ_pol 1.05
+    assert tp.y_limits(found, "Te", "R_mid")[1] == pytest.approx(1.1 * 1000)  # beside points of 100, at R_mid 0.95
+
+
+def test_the_bottom_stays_at_zero_where_the_fit_goes_below_it():
+    rho = np.linspace(0.0, 1.1, 111)
+    found = toy(np.linspace(0.5, 1.0, 40), np.full(40, 100.0), fit=(rho, np.where(rho > 0.5, -200.0, 100.0)))
+    assert tp.y_limits(found, "Te", "rho_pol") == pytest.approx((0.0, 110.0))  # the PDF's bottom would be -220 here
+
+
+def test_a_row_with_nothing_above_zero_has_no_top_and_is_left_to_autorange_from_zero():
+    rho = np.linspace(0.0, 1.1, 111)
+    found = toy([], [], fit=(rho, np.zeros(rho.size)))
+    assert tp.y_limits(found, "Te", "rho_pol") is None
+    fig = tp.figure(found)
+    for key in ("yaxis", "yaxis2"):  # the n_e and the T_e row: the fit holds both
+        options = fig.layout[key].autorangeoptions
+        assert fig.layout[key].range is None and options.minallowed == 0 and options.maxallowed is None
+    assert not fig.layout.annotations
+
+
+def test_each_row_opens_on_zero_to_its_top_and_autoscale_is_given_no_other_range_to_return_to():
+    found = profiles_of(runaway=True)
+    for axis in ("rho_pol", "R_mid"):
+        fig = tp.figure(found, axis)
+        for key, (name, _label, _title, scale, _unit) in zip(YAXES, tp.QUANTITIES):
+            _, top = tp.y_limits(found, name, axis, scale)
+            row, options = fig.layout[key], fig.layout[key].autorangeoptions
+            assert tuple(row.range) == (0.0, top)  # it opens on it
+            assert (options.minallowed, options.maxallowed) == (0.0, top)  # and autoscale is given the same
+
+
+def test_a_runaway_fit_is_drawn_whole_and_leaves_through_the_top_without_moving_the_range():
+    plain, runaway = tp.figure(profiles_of()), tp.figure(profiles_of(runaway=True))
+    for n, key in enumerate(YAXES, start=1):
+        fit = in_row(runaway, n)[2]
+        assert fit.name == FIT and fit.x[0] == 0.0 and fit.x[-1] == 1.1  # the whole grid, to its last point
+        assert np.max(fit.y) > 50 * runaway.layout[key].range[1]  # far above the top of its row
+        assert runaway.layout[key].range == plain.layout[key].range  # and the range is where the points put it
+
+
+def stray(n, removed=False):
+    """The fixture's profiles with ``n`` of its edge readings in the window made 10 keV, measured to no better than that:
+    points far above the rest, which are not well measured and so do not set the top. With ``removed`` those readings are
+    instead no measurement at all (0, which is not drawn): the same population of points without the strays."""
+    ds = tf.thomson_dataset()
+    times = ds["time"].values
+    in_window = (times >= tf.WINDOW[0]) & (times <= tf.WINDOW[1])
+    rows, channels = np.nonzero((ds["edge_ne"].values > 0) & in_window[:, None])
+    for i, c in list(zip(rows, channels))[:n]:
+        if removed:
+            ds["edge_ne"][int(i), int(c)] = 0.0
+            ds["edge_Te"][int(i), int(c)] = 0.0
+        else:
+            ds["edge_Te"][int(i), int(c)] = 1e4
+            ds["edge_Te_err"][int(i), int(c)] = 1e4
+    return tp.read(cut(ds))
+
+
+def corner_notes(fig):
+    """What each row says in its corner: ``{its y axis's domain: text}``."""
+    return {note.yref: note.text for note in fig.layout.annotations}
+
+
+def test_a_row_says_in_its_corner_how_many_points_lie_above_its_top_and_a_row_with_none_says_nothing():
+    plain = tp.figure(profiles_of())
+    assert not plain.layout.annotations  # no point of the fixture is above the top of its row
+    fig = tp.figure(stray(3))
+    # T_e and p_e (the same readings), and not n_e, which they leave as it was.
+    assert corner_notes(fig) == {"y2 domain": "▲ 3 points above", "y3 domain": "▲ 3 points above"}
+    # The strays do not set the top: it is where it is with those readings gone (the three were well-measured ones).
+    assert fig.layout.yaxis2.range == tp.figure(stray(3, removed=True)).layout.yaxis2.range
+    note = fig.layout.annotations[0]  # in the top right corner of its row, with no arrow
+    assert (note.xref, note.x, note.xanchor) == ("paper", 0.99, "right")
+    assert (note.y, note.yanchor, note.showarrow) == (0.985, "top", False)
+    assert corner_notes(tp.figure(stray(1))) == {"y2 domain": "▲ 1 point above", "y3 domain": "▲ 1 point above"}
+    assert corner_notes(tp.figure(stray(3), "R_mid")) == corner_notes(fig)  # on the other axis too
+
+
+@pytest.mark.slow
+def test_in_a_browser_a_row_opens_on_its_range_and_autoscale_and_reset_axes_return_to_it():
+    """That autoscale keeps the range is a claim about the renderer, so it is read off one: the figure of a runaway fit is
+    opened in chromium, zoomed, and autoscaled, as the modebar does it, and reset. Skipped where playwright or its browser
+    is not there."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    fig = tp.figure(profiles_of(runaway=True))
+    # The two ends of each row, in one list.
+    expected = pytest.approx([end for key in YAXES for end in (0.0, fig.layout[key].range[1])])
+    read = (
+        "() => ['yaxis', 'yaxis2', 'yaxis3'].flatMap("
+        "k => document.querySelector('.js-plotly-plot')._fullLayout[k].range)"
+    )
+    zoom = (
+        "() => Plotly.relayout(document.querySelector('.js-plotly-plot'), "
+        "{'yaxis.range': [0.5, 0.6], 'yaxis2.range': [100, 110], 'yaxis3.range': [1, 2]})"
+    )
+    with sync_api.sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except Exception as error:  # no browser installed for playwright here
+            pytest.skip(f"no chromium to drive: {error}")
+        try:
+            page = browser.new_page(viewport={"width": 1000, "height": 1000})
+            page.set_content(fig.to_html(include_plotlyjs=True, full_html=True))
+            page.wait_for_selector(".js-plotly-plot .nsewdrag")
+            page.wait_for_timeout(500)
+            assert page.evaluate(read) == expected  # it opens on it, far below the runaway fit
+            for button in ("Autoscale", "Reset axes"):
+                page.evaluate(zoom)
+                assert page.evaluate(read) != expected  # zoomed away from it
+                page.hover(".js-plotly-plot .nsewdrag")
+                page.click(f'[data-title="{button}"]')
+                page.wait_for_timeout(300)
+                assert page.evaluate(read) == expected, button
+        finally:
+            browser.close()
+
+
+# ---------------------------------------------------------------------------
 # The words
 # ---------------------------------------------------------------------------
 
@@ -998,6 +1247,24 @@ def test_the_page_draws_each_kind_of_file_it_can_meet(tree, shot, options):
     assert bool(app.warning) == (options.get("check") == tf.FAILED)
 
 
+def test_a_runaway_fit_does_not_set_the_range_the_page_draws(tree):
+    (plain,) = charts(open_view(tree(window=tf.WINDOW)))
+    app = open_view(tree(window=tf.WINDOW, runaway=True, check=tf.FAILED_OUTER))
+    assert app.warning  # the fit fails its outer-end check, and the page says so above the figure
+    (fig,) = charts(app)
+    for n, key in enumerate(YAXES, start=1):
+        row = fig.layout[key]
+        assert np.max(in_row(fig, n)[2].y) > 50 * row.range[1]  # the fit runs far above the top of its row...
+        assert row.range == plain.layout[key].range  # ...and the range is where the points put it, as without it
+        assert row.autorangeoptions.maxallowed == row.range[1]  # autoscale returns to that range
+    widget(app, "selectbox", "axis").set_value("R_mid").run()
+    assert not app.exception, [e.value for e in app.exception]
+    (on_r_mid,) = charts(app)
+    # Judged on R_mid the rule gives the same tops here: the fixture's R_mid is a straight line of ρ_pol, which keeps
+    # the points nearest each sample of the fit the same ones.
+    assert all(on_r_mid.layout[key].range == fig.layout[key].range for key in YAXES)
+
+
 # ---------------------------------------------------------------------------
 # The other pages
 # ---------------------------------------------------------------------------
@@ -1139,3 +1406,32 @@ def test_the_section_says_what_the_page_draws_as_the_page_does():
     assert "only the points with n_e > 0" in text
     assert "a warning above the figure that quotes the check" in text
     assert "10 to 20 ms apart" in text
+
+
+def test_the_section_says_how_a_rows_range_is_set_with_the_numbers_of_the_rule():
+    """The sentence quotes the rule's constants as placeholders, so that the text cannot drift from what runs, and says
+    that a runaway fit leaves through the top."""
+    text, unknown = documentation.fill(" ".join(" ".join(b.text.split()) for b in section().blocks))
+    assert not unknown
+    assert (
+        "Each row's range is set by the points and not by the fit (`fusion_ui/plots/thomson_profiles.py: y_limits`, "
+        "the rule of the density scan's PDF)"
+    ) in text
+    ordinal = documentation._ordinal(tp.WHOLE_PERCENTILE)
+    assert (
+        f"runs from 0 to {tp.MARGIN:g} times the larger of the {ordinal} percentile of the points measured to better than "
+        f"{1 / tp.WELL_MEASURED:g}σ (all of them where fewer than {tp.MIN_WELL} are) and the fit's largest value where it "
+        f"stays within {tp.FIT_FACTOR:g} times the median of the {tp.NEAREST} points nearest it on the axis drawn"
+    ) in text
+    assert "a fit that runs away leaves through the top" in text and "autoscale returns to this range" in text
+
+
+def test_the_figures_docstring_quotes_the_numbers_of_the_rule():
+    """The docstring says why the figure is drawn as it is, so it is held to the numbers it gives."""
+    doc = " ".join(tp.figure.__doc__.split())
+    ordinal = documentation._ordinal(tp.WHOLE_PERCENTILE)
+    assert (
+        f"{tp.MARGIN:g} times the larger of the {ordinal} percentile of the row's points measured to better than "
+        f"{1 / tp.WELL_MEASURED:g}σ (all of them when fewer than {tp.MIN_WELL} are)"
+    ) in doc
+    assert f"within {tp.FIT_FACTOR:g} times the median of the {tp.NEAREST} points nearest it" in doc
