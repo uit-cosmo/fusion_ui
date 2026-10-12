@@ -2788,6 +2788,54 @@ On the nine 1160616 shots:
   - the fit's T_e at the drawn separatrix equals `Te_sep_fit`;
 - screenshots of 017 and 026, read by eye.
 
+**Result (2026-10-12).** Merged into fusion_ui at 8a2140a (0c52707), and into
+fusion_scripts at bbd9a76 (c4ea04b). Nothing is pushed or deployed.
+
+- **What it changed:**
+  - **fusion_ui:**
+    - the view moves the points with a moved fit, and draws the separatrix at
+      the fit's ρ_pol 1;
+    - captions for a moved fit and for `force_to_zero`;
+    - a warning on a `fit_points_check` that does not begin `equal`;
+    - the count of unplaced points quotes `mapping_failure`;
+    - `Te_sep_fit` and the separatrix code's folder under "About this file";
+    - the Documentation page's TS section and CLAUDE.md's row;
+    - 48 tests.
+  - **fusion_scripts:** the retriever's defaults are 24e1499's, and one test.
+- **The orchestrator's rerun:**
+  - **Suites:**
+    - fusion_ui on the branch: 1173 passed;
+    - fusion_scripts' main after the merge: 268 passed and 8 skipped in the
+      paper's venv; 1 failed, 219 passed, 3 skipped and 2 errors in the
+      app's, the three known gaps.
+  - **d6a6466 drawn as before.** For all 115 d6a6466 production files, the
+    view's output is identical under main's code and the branch's: the
+    figure on both axes, the warning and the About list. A check confirmed
+    that the two runs loaded different code.
+  - **The page.** Through AppTest, it draws the nine 24e1499 and the nine
+    d6a6466 files of 1160616 on both axes, one chart each, with no
+    exception. The 24e1499 views carry the `force_to_zero` caption, 017 the
+    move's caption, and 025 and 027 the fit-check warning.
+  - **017's placement, checked exactly:**
+    - all 184 edge points are drawn at the file's ρ_pol plus the shift
+      (+0.00707);
+    - the separatrix is at ρ_pol 1, and at 0.890407 m on R_mid;
+    - the fit's T_e there is 42.857232 eV on both axes, which is
+      `Te_sep_fit`.
+- **The residual criterion held for T_e only.** For n_e and p_e it did not, and
+  the cause is the fit, not the view.
+  - In the fit's own frame, 017's n_e fit lies below its own points at ρ_pol
+    0.98–1.0, by a median of 0.20·10²⁰ m⁻³ under 24e1499 and 0.13 under
+    d6a6466.
+  - Moving the points outward, to where the fit is lower, therefore widens
+    the n_e residuals.
+  - The criterion was a proxy for placement, and placement was checked
+    exactly instead (above). It was not relaxed: this record says it failed.
+- **Left:**
+  - the Documentation page's counts over all files are still d6a6466's, so
+    refresh them after J12g;
+  - CLAUDE.md's "Current state" still calls J12b undeployed.
+
 #### J12g — The production TS files with 24e1499 · orchestrator · mfe + server
 
 1. **Remake every DB shot.** Use one ControlMaster connection to mfe, and run
