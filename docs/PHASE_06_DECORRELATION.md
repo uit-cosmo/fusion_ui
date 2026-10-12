@@ -2804,6 +2804,38 @@ On the nine 1160616 shots:
    - Do the same with the laptop's mirror.
    - The d6a6466 folders stay until the user says to delete them.
 
+**Step 1 (2026-10-12).** Run on mferws03, from fusion_scripts' main at 721c1ad,
+into `~/Data/thomson_scattering_24e1499_all/`. **It writes 106 files where
+d6a6466 wrote 115, and fits 86 shots where d6a6466 fitted 103.** The losses
+against d6a6466, from the mfe logs:
+
+- **9 shots get no file, all through this script:**
+  - **7 through J12e's check** that the fit's edge points are the file's:
+    1090826015, 1120217025, 1120814020, 1140827029, 1150618031, 1150618034
+    and 1150618037. They differ by 0.0145 to 0.731 in ρ_pol. The large ones
+    look like points in another order, not another EFIT. Either way, the
+    check aborts the file, against J12a's rule that a failed fit keeps the
+    raw data.
+  - **2 through mapping the points with ANALYSIS:** 1120217010 and 1140228019.
+    `data_access._getRmidSpline` raises "x must be increasing if s > 0"
+    outside the fit's `try`.
+- **9 shots keep the file and lose the fit, both through 24e1499's own code:**
+  - **7 in `create_pe`'s new p_e error,** whose n_e and T_e arrays differ by one
+    or two in length: 1120814016, 019, 025 and 026, and 1140613007, 026 and
+    027;
+  - **2 in `assemble_dict_for_2pm`,** which interpolates at ρ_pol 1 where the
+    data end at 0.97 to 0.99: 1091216034 and 1140605024.
+- **Otherwise as with d6a6466:**
+  - 3 shots have no TS;
+  - 11 have no edge TS. With d6a6466 that was 12; 1140228019 is among the
+    9 above;
+  - 1140619014 errs as before.
+- **Fewer fits fail `run_db.py`'s check:** 4 (1091216009, 1120712027,
+  1160616025 and 1160616027) against 20.
+
+Stopped there to ask the user. Nothing is staged on the server, and the ssh
+connection is closed.
+
 ## Orchestration
 
 **The session.** Run the orchestrator as Opus 5.5 in `~/Git/fusion_ui`. It does
