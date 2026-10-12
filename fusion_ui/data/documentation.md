@@ -759,3 +759,117 @@ puts it.
 The C-Mod_Analysis README asks that the diagnostician be consulted before the data are used in a public forum. The
 Thomson scattering data were collected by Jerry Hughes, and the page repeats the caveat under every figure
 (`caveat`, in the file).
+
+## MLP profiles
+
+The Single shot page draws the profiles of the Mirror Langmuir Probe (MLP) of a shot from `asp_<shot>.nc`
+(`fusion_ui/plots/mlp_profiles.py: figure`): each quantity it measures against ρ, over the probe's plunges in the
+discharge window, reduced as O E Garcia, J M Losada et al., Plasma Phys. Control. Fusion 68 (2026) 055034, reduce
+theirs in its section 3. The reduction is `fusion_ui/core/mlp.py: read`, apart from the view so that another can reuse
+it. Nothing is cached: the plot reads the file each time.
+
+### What the file holds
+
+`cmod_functions/asp_functions.py: get_asp_dataset` (uit-cosmo/cmod_functions, f5cbb5c) writes the file from C-Mod's
+edge tree. The MLP runs on the four pins of the head of the horizontal scanning probe, 11 cm above the outboard
+midplane: p0 to p3, the NE, SW, SE and NW pins by that module's own note. `probe_origin` holds the probe's R, Z and φ.
+For each pin the file holds six quantities, each on its own time axis, one sample every 0.3 µs while the MLP records,
+which is only around the plunges: `ne` (the tree's DENSITY_FIT), `Te` (TE_FIT), `Js` (JSAT_FIT), `Is` (ISAT_FIT), `Vp`
+(PHI_FIT, the plasma potential) and `Vf` (VF_FIT). Each has a companion `rho_<q>_<pin>`, the pin's ρ at 10 kHz over the
+whole shot, which reads exactly 0 where the tree has no mapping, before and after the plasma. The attributes
+`plunge_time` and `plunge_depth` are the probe's depth at 10 kHz, from the tree's PLUNGE node.
+
+### The units, and how they were established
+
+**No variable in the file has a units attribute.** The units below were established from the data, by relations that
+hold only in these units, on every sample of the files of 1160616 and 1150618021 (`fusion_ui/core/mlp.py: UNITS` keeps
+them):
+
+- **n_e in m⁻³, T_e in eV, J_s in A m⁻²**: J_s = ½·e·n_e·c_s, with c_s = √(e·(T_e + T_i)/m_i), T_i = T_e and
+  m_i = 2m_p, holds on every sample to five figures. It is the Bohm flux of a deuterium plasma, and the tree makes its
+  n_e from J_s and T_e by it. T_e reads no lower than 2 eV, the MLP's floor, which the limiter shadow reaches.
+- **I_s in A**: I_s / J_s is steady on each pin to within 3%, at 0.84 to 1.07 mm², the pin's collecting area.
+- **V_p and V_f in V**: (V_p − V_f) / T_e has a median of 2.7 to 2.8 on every pin, the sheath drop in units of T_e.
+- **The depth in m**: cmod_functions says so of the PLUNGE node, "in metres and assumed purely horizontal". The probe's
+  full stroke is 12 cm, and the scans of 1160616 run at about 0.5 m/s.
+- **ρ in m**: it moves 0.95 to 1.09 m per metre of plunge while the probe moves fast, it is negative only at the tips
+  of the deepest plunges, by up to 1.1 cm, and the profiles fall into the limiter shadow about 2 cm out.
+
+The page draws ρ in cm, as the paper does, n_e in 10²⁰ m⁻³, J_s in kA m⁻² and I_s in mA.
+
+### What ρ means
+
+ρ is the tree's RHO of the pin, which cmod_functions calls "the distance relative to the last-closed flux surface",
+negative inside it. The paper defines ρ as "the distance to the separatrix as mapped along magnetic field lines to the
+outboard mid-plane location by using magnetic equilibrium reconstruction", EFIT. The file says neither, and its data
+cannot tell a distance mapped to the midplane from one at the probe, since the slope against the plunge fits both. The
+page takes the paper's word for it.
+
+**The paper moves its profiles, and the page does not unless asked.** "To account for mapping errors, the measured
+electron temperature profile combined with SOL power balance considerations is used to determine the temperature at the
+last closed magnetic flux surface and shift the profiles to be consistent with this constraint", after LaBombard et
+al., Phys. Plasmas 21 (2014) 056108. That temperature needs what the file does not hold: the power into the
+scrape-off layer and the heat-flux width. So the page draws ρ as the file holds it, and offers the move. Given a
+separatrix temperature (`te_sep`), `fusion_ui/core/mlp.py: shift_to` fits ln T_e linear in ρ over the 1 ms means
+within a factor {{value:mlp.band}} of it, with at least {{value:mlp.min_side}} of them on each side, and moves ρ so that
+the fit reaches it at ρ = 0. It never extrapolates: a temperature the probe did not measure moves nothing, and the page
+says why. The two-point model's `Te_sep_2pm` in the shot's Thomson scattering file is a temperature of this kind; on
+the 1160616 scan it is 53 to 67 eV, which the probe reaches in its window only on 1160616011, the T_e of the others
+staying below 57 eV.
+
+**On the 1160616 scan the paper's profiles sit about 0.65 cm outward of the file's ρ**, on all four densities alike:
+the innermost points of its Fig. 2 lie 0.61 to 0.69 cm out from the tips of the third plunges, and its profiles fall
+into the limiter shadow that much further out. Moved by 0.65 cm, the page's points lie on the paper's (read by eye on
+2026-10-12). That is where the paper shades the limiter shadow, from 2.4 cm on its axis, where its equilibrium puts
+the limiters at 1.8 cm.
+
+### How the profiles are made
+
+- **The plunges** (`fusion_ui/core/mlp.py: plunges`) are found on the probe's depth: a plunge is a maximum of depth
+  at least {{value:mlp.prominence}} deeper than where the probe starts from and goes back to, numbered in the order of
+  the shot, so plunge 3 is the third of the shot whichever window is drawn. The probe is on a stroke while its depth
+  changes faster than {{value:mlp.moving}}: **in** while it goes deeper, **out** while it comes back. Where it holds
+  still, as in a dwell at one depth, it is on no stroke and its data make no profile: the page says so, and draws the
+  probe's depth over the shot instead.
+- **The 1 ms means** (`fusion_ui/core/mlp.py: means`): the shot's clock is cut into windows of {{value:mlp.window}},
+  on whole milliseconds, and every quantity of every pin is averaged over each window that lies wholly inside the
+  discharge window. A pin's mean counts only where it recorded at least {{value:mlp.min_fill}} of the window. A window's
+  ρ is the mean of the pin's ρ at the samples that make its mean, interpolated from the 10 kHz companion, whose own
+  samples sit tens of µs away.
+- **The four pins** (`fusion_ui/core/mlp.py: combine`) are combined as the group's own code combines them,
+  `cmod_functions/asp_functions.py: generate_average_mlp_data`: one point per window, the mean of the four, and only
+  where every pin recorded. The paper draws one profile per discharge. The pins sit on one flux surface, their ρ
+  agreeing to a tenth of a millimetre, but they do not read the same: on the 1160616 scan their n_e differ by about
+  ±13% and their V_f by several volts, two against two, as the pins of a head facing both ways along the field do. The
+  Probe trace plot draws each pin on its own.
+- **The window.** A probe file has no shared time axis, so the page does not cut it: it hands the plot the discharge
+  DB's window, and the profiles are the strokes in it. 1160616009's window begins at 1.305 s, after its third plunge's
+  tip at 1.296 s, so the page draws only the way out of that plunge. Every plunge of a shot with no window in the
+  discharge DB is drawn.
+
+### The far-SOL e-folding lengths
+
+`fusion_ui/core/mlp.py: efold` fits ln y linear in ρ by least squares, to the combined 1 ms means of n_e and of T_e
+between two values of ρ as the file holds it, {{value:mlp.far_sol}} by default (`fit_from`, `fit_to`), with at least
+{{value:mlp.min_fit}} points. The fits are drawn dashed, and their lengths, L_n and L_T, are given under the figure. A
+move to a separatrix temperature moves the axis and not the fits: the range stays on the file's ρ, on the same points.
+
+The paper fits "an exponential function to the far-SOL profiles" (the caption of the same figure in its reference
+[63], Garcia et al., Nucl. Fusion 66 (2026)), and puts the far SOL between the break from the steep near SOL, at about
+0.5 cm, and the limiter shadow, where its equilibrium's field lines meet the limiters at ρ ≳ 1.8 cm. The default range
+takes both numbers on the file's ρ. The paper calls the profiles of the two lowest densities bi-exponential; the page
+fits one exponential to the far SOL alone, since a bi-exponential fit to these points does not settle on one answer.
+
+On the 1160616 scan, over each shot's discharge window (read on 2026-10-12):
+
+| f_GW | shots | L_n, the paper | L_n, the page | L_T, the paper | L_T, the page |
+|---|---|---|---|---|---|
+| 0.24 | 009 | 2.8 cm (2.5 cm in [63]) | 3.20 cm | 1.8 cm | 2.52 cm |
+| 0.30 | 011 | 2.8 cm in [63] | 2.92 cm | about 2 cm in [63] | 2.12 cm |
+| 0.45 | 016 and 017 together | 4.2 cm in [63] | 4.13 cm | about 2 cm in [63] | 2.58 cm |
+| 0.65 | 022 | 5.6 cm (5.4 cm in [63]) | 5.39 cm | 2.5 cm | 2.59 cm |
+
+The page's L_n is within 5% of the paper's at f_GW 0.30, 0.45 and 0.65. At 0.24 the window holds only the way out of a
+plunge, and the paper fits two exponentials: a far-SOL length of a two-layer profile moves with where the fit begins,
+and 009's L_n is 1.9 cm from 0 cm, 2.6 cm from 0.3 cm and 3.2 cm from 0.5 cm of the file's ρ. The paper gives its L_T
+of 2.5 cm "for f_GW = 0.80", where there are no probe data, so the table puts it at 0.65.

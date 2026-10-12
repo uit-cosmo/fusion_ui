@@ -15,6 +15,7 @@ from fusion_ui.plots import (  # noqa: F401 - imported to register
     dead_pixels,
     stored_mask,
     thomson_profiles,
+    mlp_profiles,
     spectra,
     velocity_tde,
     two_dca,
@@ -48,13 +49,15 @@ from fusion_ui.plots import (  # noqa: F401 - imported to register
 # key -- the three keys and those names are as permanent as any other.
 #
 # thomson_profiles is live, unchained and the only spec on its diagnostic (thomson_scattering), so it sits with
-# the other live specs, before the products that tests hold to the end.
+# the other live specs, before the products that tests hold to the end. mlp_profiles is live and unchained too, on
+# the ASP files beside the probe trace, which stays first and so the one the page opens on.
 __all__ = [
     "probe",
     "raw",
     "dead_pixels",
     "stored_mask",
     "thomson_profiles",
+    "mlp_profiles",
     "spectra",
     "velocity_tde",
     "two_dca",

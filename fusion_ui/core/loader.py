@@ -83,12 +83,11 @@ def _finite(value):
         return False
 
 
-def time_window(ds, discharge=None, default_span=DEFAULT_WINDOW_SECONDS):
-    """``(t_start, t_end, source)`` to slice ``ds`` to.
+def metadata_window(discharge):
+    """``(t_start, t_end, "metadata")`` from the discharge DB's window, or ``(nan, nan, "none")`` when it has none.
 
-    The discharge DB's window when it has one (``source="metadata"``);
-    otherwise a centred default around this dataset's own time midpoint
-    (``source="default"``), clipped to the record.
+    The window of a file with no shared time axis, a probe file: there is no record's middle to centre a default on,
+    so without a window in the DB there is none.
     """
     if (
         discharge is not None
@@ -96,6 +95,19 @@ def time_window(ds, discharge=None, default_span=DEFAULT_WINDOW_SECONDS):
         and _finite(discharge.t_end)
     ):
         return float(discharge.t_start), float(discharge.t_end), "metadata"
+    return float("nan"), float("nan"), "none"
+
+
+def time_window(ds, discharge=None, default_span=DEFAULT_WINDOW_SECONDS):
+    """``(t_start, t_end, source)`` to slice ``ds`` to.
+
+    The discharge DB's window when it has one (``source="metadata"``);
+    otherwise a centred default around this dataset's own time midpoint
+    (``source="default"``), clipped to the record.
+    """
+    t_start, t_end, source = metadata_window(discharge)
+    if source == "metadata":
+        return t_start, t_end, source
 
     t_min = float(ds[TIME_DIM].min())
     t_max = float(ds[TIME_DIM].max())
