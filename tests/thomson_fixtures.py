@@ -103,6 +103,7 @@ def thomson_dataset(
     efit=True,
     fit_r_mid=True,
     extrapolation=False,
+    runaway=False,
 ):
     """The dataset of one file, over a shot of 2 s.
 
@@ -112,7 +113,9 @@ def thomson_dataset(
     ``unmapped`` plants pulses with no ρ_pol, outside the EFIT time base. ``efit=False`` is a shot whose EFIT tree could
     not be opened: no point has a ρ_pol or an R_mid, and there is no ``R_mid_sep``. ``fit_r_mid=False`` leaves the
     fit's ``fit_R_mid`` out. ``extrapolation`` makes ``fit_note`` call the fit's core an extrapolation, as the files
-    do where no core T_e inside rho_pol 0.2 reaches 1 keV.
+    do where no core T_e inside rho_pol 0.2 reaches 1 keV. ``runaway`` makes the fit's outer end run away, as the fits
+    that fail run_db.py's outer-end check do (1091216034's n_e reaches 1.3e23 m^-3, 1110201014's T_e 51 keV): the fit
+    leaves the profile at rho_pol 1 and is 1000 times it at 1.1, with the points unchanged.
     """
     times = np.round(np.arange(0.0, 2.0, PULSE), 6)
     nt = times.size
@@ -165,6 +168,9 @@ def thomson_dataset(
         grid = np.linspace(0.0, 1.1, 200)
         coords["rho_pol"] = ("rho_pol", grid, {"units": "1"})
         ne_fit, te_fit = ne_profile(grid), te_profile(grid)
+        if runaway:
+            blow = 1 + 1e3 * np.clip((grid - 1.0) / 0.1, 0.0, None) ** 2  # 1 up to rho_pol 1, then 1001 at 1.1
+            ne_fit, te_fit = ne_fit * blow, te_fit * blow
         for key, value, units in (("ne", ne_fit, "m^-3"), ("Te", te_fit, "eV")):
             data_vars[f"fit_{key}"] = ("rho_pol", value, {"units": units})
             data_vars[f"fit_{key}_err"] = ("rho_pol", 0.2 * value, {"units": units})

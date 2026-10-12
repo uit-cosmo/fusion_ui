@@ -31,6 +31,10 @@ What is drawn
     user, 2026-10-09): with ``frac_err`` the fit's n_e and T_e errors are 20% of the fit by construction, and
     ``fit_pe_err`` adds a density to a temperature, so it is no error of p_e.
 
+    **A row's range is set by the points, not by the fit** (:func:`y_limits`, the rule of the paper's PDF of the density
+    scan, ported): it opens on ``[0, top]``, and a fit that runs away leaves through the top instead of squashing the
+    points flat against zero. Autoscale returns to that range, and the points above it are counted in the row's corner.
+
     A fit that does not pass ``fit_check`` gets a warning above the figure that quotes it, and **anything but the
     outcome** ``passed`` **is warned about**: a verdict spelt another way, an outcome nobody wrote a rule for, an empty
     attribute. Its advice follows the clause that failed: the temperature on axis says the core is an extrapolation,
@@ -570,6 +574,95 @@ def about(profiles):
 
 
 # ---------------------------------------------------------------------------
+# The range of a row
+# ---------------------------------------------------------------------------
+
+#: How the top of a row is set, and how far a fit may stray from the points beside it before it stops counting. **This is
+#: the rule of the paper's PDF of the density scan, ported**: ``pool``, ``plausible`` and ``y_limits`` of fusion_scripts'
+#: ``density_scan/thomson_profiles.py`` (J12c), with the constants it names the same way, so that the page and the PDF
+#: draw the same range. It is not imported, since nothing here imports from fusion_scripts: a change to the rule is made
+#: in both. The PDF's ``EDGE_PERCENTILE`` is not ported, because the page has no row zoomed on the edge.
+#:
+#: ``WELL_MEASURED``
+#:     A point is measured to better than 2σ when its error is under this fraction of its value.
+#: ``MIN_WELL``
+#:     Only the well-measured points set the scale, unless fewer than this many are: then all of them do.
+#: ``WHOLE_PERCENTILE``
+#:     The percentile of those points that sets the scale, so that a stray point does not.
+#: ``NEAREST``, ``FIT_FACTOR``
+#:     A sample of the fit counts only where it is within ``FIT_FACTOR`` times the median of the ``NEAREST`` points
+#:     nearest to it on the axis drawn.
+#: ``MARGIN``
+#:     The top is this many times what sets it.
+WELL_MEASURED, MIN_WELL, WHOLE_PERCENTILE = 0.5, 5, 98
+NEAREST, FIT_FACTOR, MARGIN = 10, 3.0, 1.1
+
+
+def pool(profiles, quantity, axis, scale=1.0):
+    """All the points of the row of ``quantity`` on ``axis``, edge and core together: ``(x, value, error)``.
+
+    Those the figure draws: a point with a place on ``axis`` and a value. The values and errors are in the row's own unit,
+    the SI ones times ``scale``, and ``error`` is NaN where the tree gives none (:class:`Points`). Empty arrays when
+    there is no such point.
+    """
+    parts = []
+    for system in SYSTEMS:
+        found = profiles.points.get(system)
+        if found is None:
+            continue
+        values, errors = found.series(quantity)
+        x = found.on(axis)
+        shown = np.isfinite(x) & np.isfinite(values)
+        parts.append((x[shown], values[shown] * scale, errors[shown] * scale))
+    if not parts:
+        return np.empty(0), np.empty(0), np.empty(0)
+    return tuple(np.concatenate(array) for array in zip(*parts))
+
+
+def plausible(fit_x, fit, x, value):
+    """Which samples of a fit stay within ``FIT_FACTOR`` times the median of the ``NEAREST`` points nearest to them on the
+    axis: a fit is held to the data beside it, wherever the data are. All of them when there are no points."""
+    if not x.size:
+        return np.ones(fit.shape, dtype=bool)
+    k = min(NEAREST, x.size)
+    nearest = np.argpartition(np.abs(fit_x[:, None] - x[None, :]), k - 1, axis=1)[:, :k]
+    return np.abs(fit) <= FIT_FACTOR * np.abs(np.median(value[nearest], axis=1))
+
+
+def y_limits(profiles, quantity, axis, scale=1.0):
+    """``(0.0, top)`` of the row of ``quantity`` on ``axis``, in the row's own unit (the SI values times ``scale``), or
+    ``None`` when nothing in the row is above zero.
+
+    ``top`` is ``MARGIN`` times the larger of two things. One is the ``WHOLE_PERCENTILE`` percentile of the points
+    measured to better than 2σ (error under ``WELL_MEASURED`` of the value), or of all of them when fewer than
+    ``MIN_WELL`` are. The other is the largest value of the fit where :func:`plausible` says it stays near the points, or
+    of the whole fit when the row has none. So a fit that runs away leaves through the top instead of rescaling the row,
+    and the points and the fit are judged on ``axis``: the same rule gives another top on R_mid than on ρ_pol, where the
+    points beside a sample of the fit are other points. The bottom is zero, as n_e, T_e and p_e are not negative.
+    """
+    x, value, error = pool(profiles, quantity, axis, scale)
+    values = []
+    fit = profiles.fit
+    if fit is not None and fit.values(quantity) is not None and fit.on(axis) is not None:
+        fit_x, fit_y = fit.on(axis), fit.values(quantity) * scale
+        shown = np.isfinite(fit_x) & np.isfinite(fit_y)  # a sample with no place or no value is not drawn
+        fit_x, fit_y = fit_x[shown], fit_y[shown]
+        values += list(fit_y[plausible(fit_x, fit_y, x, value)])
+    if x.size:
+        with np.errstate(invalid="ignore"):  # a point with no error is not well measured: NaN compares false
+            good = error < WELL_MEASURED * value
+        values.append(np.percentile(value[good] if good.sum() >= MIN_WELL else value, WHOLE_PERCENTILE))
+    top = MARGIN * max([0.0, *values])
+    return (0.0, float(top)) if top > 0 else None
+
+
+def points_above(profiles, quantity, axis, top, scale=1.0):
+    """How many of the row's drawn points lie above ``top``, which its range leaves out: the ones the row says it counts."""
+    value = pool(profiles, quantity, axis, scale)[1]
+    return int((value > top).sum())
+
+
+# ---------------------------------------------------------------------------
 # The figure
 # ---------------------------------------------------------------------------
 
@@ -625,9 +718,18 @@ def figure(profiles, axis="rho_pol"):
     The edge and core points, with their bars; the stored fit over its whole range, without a band; and the separatrix.
     Only what there is is drawn: a row with no point to place and no fit is left out, a system with none is left out
     of the legend, and a file with nothing at all gives a figure that says so. A legend entry appears once, however
-    many rows hold its trace or its line (the separatrix is a line in every row), and hides it in all of them. Every
-    row starts at zero, as n_e, T_e and p_e are not negative, and a bar that reaches below it ends at the axis
-    instead of stretching the range.
+    many rows hold its trace or its line (the separatrix is a line in every row), and hides it in all of them.
+
+    Every row runs from zero, as n_e, T_e and p_e are not negative, to a top that **the points set and a fit that runs
+    away cannot** (:func:`y_limits`, the rule of the density scan's PDF). The top is 1.1 times the larger of the 98th
+    percentile of the row's points measured to better than 2σ (all of them when fewer than 5 are) and the fit's largest
+    value where it stays within 3 times the median of the 10 points nearest it on the axis drawn, so a runaway fit
+    leaves through the top instead of squashing the points against zero. That is why the range is not left to
+    autorange: one such fit (1091216034's n_e reaches 1.3e23 m⁻³, 1110201014's T_e 51 keV) set the range and left the
+    points flat against zero. The rows open on that range, and autoscale (a double-click, the modebar) returns to it. A
+    row says how many of its points lie above its top ("▲ 3 points above") in its corner, and says nothing when none
+    does. Error bars are not part of the rule, as in the PDF, so a bar can leave through the top as well. A bar that
+    reaches below zero ends at the axis.
     """
     if axis not in AXES:
         raise ValueError(f"axis is one of {', '.join(AXES)}, not {axis!r}")
@@ -702,8 +804,36 @@ def figure(profiles, axis="rho_pol"):
                 row=row,
                 col=1,
             )
-        # From zero, and no lower: a bar that reaches below zero ends at the axis, and does not drag the range negative.
-        fig.update_yaxes(title_text=title, autorangeoptions=dict(minallowed=0), row=row, col=1)
+        limits = y_limits(profiles, name, axis, scale)
+        if limits is None:
+            # Nothing above zero to set a top by. From zero, and no lower: a bar that reaches below zero ends at the axis,
+            # and does not drag the range negative.
+            fig.update_yaxes(title_text=title, autorangeoptions=dict(minallowed=0), row=row, col=1)
+            continue
+        # From zero to the top the points set, which a fit that runs away cannot move. The range is given outright, so the
+        # row opens on it, and as ``autorangeoptions`` too, so that autoscale (a double-click, the modebar) returns to it
+        # and not to the runaway fit: ``minallowed`` and ``maxallowed`` are used exactly as the autorange's ends.
+        bottom, top = limits
+        fig.update_yaxes(
+            title_text=title,
+            range=[bottom, top],
+            autorangeoptions=dict(minallowed=bottom, maxallowed=top),
+            row=row,
+            col=1,
+        )
+        above = points_above(profiles, name, axis, top, scale)
+        if above:  # nothing is left out silently: the points the top leaves out are counted, in the row's corner
+            fig.add_annotation(
+                text=f"▲ {above} point{'s' * (above > 1)} above",
+                xref="paper",
+                yref=f"{'y' if row == 1 else f'y{row}'} domain",
+                x=0.99,
+                y=0.985,
+                xanchor="right",
+                yanchor="top",
+                showarrow=False,
+                font=dict(size=11),
+            )
 
     fig.update_xaxes(title_text=AXES[axis][0], row=len(rows), col=1)
     fig.update_layout(

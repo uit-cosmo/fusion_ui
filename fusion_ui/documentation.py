@@ -304,13 +304,19 @@ def facts():
     """``{name: text}``: the numbers the prose quotes, read from the code that uses them.
 
     The fusion_scripts constants of preprocessing, the puff window and the dead-pixel estimate; the
-    Fields page's default cuts; and the defaults of the older single-shot specs.
+    Fields page's default cuts; the defaults of the older single-shot specs; and the constants of the rule
+    that sets the range of a Thomson scattering row.
     """
     import_config()  # density_scan reads its settings by the bare name `config`
     from density_scan import dead_pixels, preprocess, puff
 
     from fusion_ui.core import loader
-    from fusion_ui.plots import two_dca, velocity_contour, velocity_tde
+    from fusion_ui.plots import (
+        thomson_profiles,
+        two_dca,
+        velocity_contour,
+        velocity_tde,
+    )
 
     contour = velocity_contour.ContourVelocityParams()
     tde = velocity_tde.TdeVelocityParams()
@@ -348,6 +354,12 @@ def facts():
         "older.estimator": _number(contour.velocity.estimator),
         "older.tde_threshold": _number(tde.min_threshold),
         "older.tde_ccf_min_lag": _number(tde.ccf_min_lag),
+        "thomson.margin": _number(thomson_profiles.MARGIN),
+        "thomson.percentile": f"{_ordinal(thomson_profiles.WHOLE_PERCENTILE)} percentile",
+        "thomson.sigmas": _number(1 / thomson_profiles.WELL_MEASURED),
+        "thomson.min_well": _number(thomson_profiles.MIN_WELL),
+        "thomson.fit_factor": _number(thomson_profiles.FIT_FACTOR),
+        "thomson.nearest": _number(thomson_profiles.NEAREST),
     }
 
 
