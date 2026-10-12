@@ -98,8 +98,8 @@ The cleanup is done (2026-10-12, at the user's word):
     L14 regresses against;
   - mfe's `~/fusion_ts/`, which the TS retriever uses.
 
-J12e is under way: J12c's PDF remade with C-Mod_Analysis's head, 24e1499, to
-compare with d6a6466.
+J12e was stopped by the user at about 11:20, while mfe refused ssh. Its work is
+committed on `phase06/j12e` (4863bba) and is not reviewed.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -2610,6 +2610,29 @@ answered "d6a6466, for now".
 - The production files and the existing PDF stay as they are.
 - The orchestrator regenerates the final PDFs from main after the merge, so
   that their provenance names main's code.
+
+**Stopped (2026-10-12, at about 11:20, by the user).** From 10:22, mfe's ssh
+port refused connections ("No route to host" on 9224), while ping answered. The
+orchestrator's own try failed at 10:41, and the agent's last at 11:14.
+
+- **Done on mfe:** head is cloned into `~/fusion_ts/C-Mod_Analysis-24e1499`,
+  and one probe fit ran on it.
+- **Committed on `phase06/j12e`,** in four commits up to 4863bba, in
+  `~/Git/fusion_scripts-j12e`. None is reviewed yet:
+  - the retriever runs head as well as d6a6466;
+  - `--ssh-option`, which sends every call through one connection;
+  - the PDF from any folder, with a tag;
+  - the comparison module.
+- **Its suites:** 262 passed and 8 skipped in the paper's venv, and 216
+  passed and 3 skipped in the app's.
+- **Left, all on mfe:**
+  - the d6a6466 remake check;
+  - the nine head files;
+  - head with d6a6466's settings.
+- **The separatrix code is `/home/millerma/pysepest_kc`.** The permission
+  check would not let the agent read its git metadata (another user's
+  personal data), so the files record each loaded file's sha256 instead.
+- **No process was left behind:** no retry loop and no ssh control socket.
 
 ## Orchestration
 
