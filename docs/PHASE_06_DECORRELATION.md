@@ -98,6 +98,9 @@ The cleanup is done (2026-10-12, at the user's word):
     L14 regresses against;
   - mfe's `~/fusion_ts/`, which the TS retriever uses.
 
+J12e is under way: J12c's PDF remade with C-Mod_Analysis's head, 24e1499, to
+compare with d6a6466.
+
 ## Decisions (the user, 2026-10-07)
 
 | | |
@@ -736,6 +739,7 @@ Built, tested and pushed to main on 2026-10-07, and deployed the same day (JD).
 | J12b | `thomson_scattering` as a diagnostic, and its single-shot plot | **Sonnet 5.5** | fusion_ui + experimental_database | J12a's sample files | J9 |
 | J12c | The density scan's TS profiles (the nine 1160616 shots) as a PDF, for the user's PI | **Sonnet 5.5** | fusion_scripts | J12a | J9, J12b |
 | J12d | The TS view's y-range: J12c's rule, so a runaway fit leaves through the top | **Sonnet 5.5** | fusion_ui | J12b, J12c | — |
+| J12e | The density scan's TS profiles with C-Mod_Analysis's head, against d6a6466, and a recommendation | **Opus 5.5** | fusion_scripts + mfe | J12c; the user's request (2026-10-12) | — |
 
 **Why these models.** `PLAN.md` splits work by how expensive a wrong decision
 is to undo, not by how hard it is, and so does this table.
@@ -2526,6 +2530,86 @@ the same fix before the deploy (2026-10-12), so that the page and the PDF agree.
     stamp in `read()` would end it.
   - **A fit that passes its check but leaves through the top** is not noted on
     the figure, as in the PDF.
+
+#### J12e — The density scan's TS profiles with C-Mod_Analysis's head · Opus 5.5 · fusion_scripts + mfe
+
+**The request (the user, 2026-10-12).** J12c's PDF of the nine 1160616
+shots, remade from files made with GitHub's head of C-Mod_Analysis instead of
+mfe's d6a6466. The user wants to see how much it changes, and whether head
+should make the TS files from now on. That is open question 6, which the user
+answered "d6a6466, for now".
+
+**What J12a found at head.** Head is 24e1499, on `main`, still so on
+2026-10-12. A branch `better_mapping` (3e5b712) is not head, and is not used.
+
+- It moves Te_sep by up to 20%, and the profiles by up to 0.007 in ρ.
+- It fixes `create_pe`, whose mixed units make d6a6466's p_e fit overshoot.
+- It finds the separatrix with unversioned code in another user's home on
+  mfe.
+
+**Deliver:**
+
+1. **The nine files, made with head.**
+   - Clone GitHub's `main` at 24e1499 into `~/fusion_ts/` on mfe. Leave
+     `~/C-Mod_Analysis` as it is (J12a's rules).
+   - Run it with `~/C-Mod_Analysis/.venv`. If head needs a package that venv
+     lacks, stop and ask: install nothing on mfe.
+   - Run `tools/get_thomson_scattering.py` with `--cmod-analysis` pointing at
+     the clone, for the nine 1160616 shots. Write into a laptop folder of
+     their own, `~/Data/thomson_scattering_24e1499/`, never into
+     `~/Data/alcator/thomson_scattering/` nor onto the server.
+   - **Settings.** Use head's `run_db.py` settings. If they differ from
+     d6a6466's, say how, and also make the files with d6a6466's settings, so
+     that the change of code and the change of settings can be told apart.
+   - **The mfe script.** If it needs changes for head (a signature, a return
+     value), make them so that it still makes d6a6466's files unchanged.
+   - **The separatrix code.** Name the unversioned code's path, and record it
+     in the files' attributes with its sha256, as the C-Mod_Analysis commit
+     is recorded.
+2. **J12c's PDF, from those files.**
+   - `density_scan/thomson_profiles.py` takes the input folder and a tag for
+     the output's name as options. Without them it does what it does now.
+   - It writes `thomson_profiles_1160616_24e1499.pdf` beside the existing PDF,
+     which stays as it is.
+3. **The comparison, as a PDF of its own,**
+   `thomson_profiles_1160616_d6a6466_vs_24e1499.pdf`. It is drawn by
+   `@provenance` functions with docstrings and saved through the module's
+   `save` (the user's figure rules). It has:
+   - **an overview.** For each shot: Te_sep_2pm, lambda_q_2pm and R_mid_sep
+     under both commits, with their change; the `fit_check` outcome under
+     each; and, under each, the p_e fit against e·n_e·T_e of the n_e and T_e
+     fits at the edge;
+   - **a page per shot:** n_e, T_e and p_e against ρ_pol, with the points and
+     both fits on the same axes, told apart (d6a6466 dashed, head solid). Add
+     the edge zoom, as J12c has it;
+   - where the points' ρ_pol differ between the two files (the mapping is
+     C-Mod_Analysis's), by how much.
+4. **What changed in the code** from d6a6466 to 24e1499, in the modules the mfe
+   script imports (`cmod_tools`, `data_access`, `fit_profiles`,
+   `power_balance`) and in `run_db.py`: a short list, each change with the
+   difference it makes in the files.
+5. **A recommendation:** should head make the TS files from now on? Weigh the
+   p_e fix, the size of the changes, and the unversioned code it depends on.
+
+**Accept when:**
+
+- the nine head files open, and their attributes carry the head commit and
+  the separatrix code's path and sha256;
+- one file remade with d6a6466 equals the production file except `created`
+  and `script_commit` (J12a's check);
+- both PDFs open;
+- on one shot, the overview's Te_sep under both commits equals the files'
+  attributes, read outside the script;
+- fusion_scripts' suites in both venvs are at their baselines, plus the new
+  tests.
+
+**Rules.**
+
+- J12a's on mfe: work only in `~/fusion_ts/`, and install nothing.
+- Nothing is written to the fusion server.
+- The production files and the existing PDF stay as they are.
+- The orchestrator regenerates the final PDFs from main after the merge, so
+  that their provenance names main's code.
 
 ## Orchestration
 
