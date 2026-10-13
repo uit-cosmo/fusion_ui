@@ -121,25 +121,34 @@ Documentation page's TS counts for the new files. It is deployed: fusion_ui
 was pushed and pulled at 9fc071c, which needs no restart for the page's text.
 
 J14, the PDF report of the TS findings, is merged into fusion_scripts' main
-at ecfb179 (3cca88f) and pushed. The report is the branch's build at
-3cca88f, whose tree main's merge has. It stays in `~/Git/fusion_scripts-j14`
-until it is regenerated in main (J14's Result says why).
+at ecfb179 (3cca88f) and pushed. The report is rebuilt in main's checkout
+at 030314e, and its manifest is committed in 12b8543 and pushed (J14's
+Result).
 
-The second cleanup is done (2026-10-13, at the user's word), after both
+The second cleanup (2026-10-13, at the user's word) came after both
 repositories were pushed:
 
 - **Removed:**
-  - the agent worktrees of J12f, J12i, J13a and J13b, and fusion_scripts'
-    worktrees of J12f and J12h;
+  - every job worktree: the agent worktrees of J12f, J12i, J13a and J13b,
+    and fusion_scripts' of J12f, J12h and J14;
   - their `phase06/*` branches, every one merged, and the four
     `worktree-agent-*` branches the agent worktrees came with.
+- **Left for the user to delete.** The user's word covered them, but the
+  session's permission check refused these deletions, which cannot be
+  undone:
+  - the laptop's `~/Data/thomson_scattering_24e1499_all/`, J12g's first
+    step 1, superseded;
+  - the laptop's `~/Data/thomson_scattering_24e1499_d6a6466_settings/`, J12e's
+    middle variant and an input of J12e's comparison PDFs;
+  - `phase06/j9` (080a054) and `phase06/j9b` (93dff09), J9's two failed
+    attempts, unmerged;
+  - mfe's `~/fusion_ts/j12h_24e1499`, `j12h_d6a6466` and `j12h_diag`
+    (1.4 MB, no `.nc`). mfe's `j12e_*` folders were already gone.
 - **Kept:**
-  - `~/Git/fusion_scripts-j14` and `phase06/j14`, which hold the report's only
-    build;
-  - `phase06/j9` and `phase06/j9b`, still unmerged;
-  - the laptop's `~/Data/thomson_scattering_24e1499_all/` and
-    `~/Data/thomson_scattering_24e1499_d6a6466_settings/`, and mfe's
-    `~/fusion_ts/j12e_*` and `j12h_*`, which are not worktrees.
+  - `~/Data/thomson_scattering_24e1499/`, J12e's nine 24e1499 files and the
+    input of the `_24e1499` PDFs;
+  - mfe's `~/fusion_ts/check/` (15 `.nc` files) and the rest of
+    `~/fusion_ts/`, which the retriever uses.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -3674,20 +3683,35 @@ the nine changes asked for.
     for the commit, so the recount above holds. `mlp.py` is unchanged, and so
     is the port check.
   - **Every page read.**
-- **Not regenerated in main's checkout.** At the merge, that checkout held 13
-  uncommitted lines of `CLAUDE.md` from the power-balance work, which is not
-  this session's. A build there would list them as uncommitted, and the
-  report's title would read "with uncommitted changes".
-  - By the push those lines were gone. Instead, two `provenance.json` files
-    were staged there, also not this session's: power_balance's, and the one
-    in `density_scan/figures/thomson_scattering/`, where the report is
-    written. `figure_provenance` lists staged files as uncommitted too, and a
-    build would also write its entries into a manifest someone else has
-    staged.
-  - Main's tree equals 3cca88f's, so the branch's build stands for it, in
-    `~/Git/fusion_scripts-j14/density_scan/figures/thomson_scattering/`. That
-    worktree was kept in the cleanup for this reason.
-  - Regenerate in main once its checkout is clean, then remove the worktree.
+- **Regenerated in main's checkout (2026-10-13),** when the user asked for
+  fusion_scripts to be committed. Until then that checkout held work that is
+  not this session's: first 13 uncommitted lines of `CLAUDE.md` from the
+  power-balance work, then two staged `provenance.json` files, power_balance's
+  and the TS folder's. `figure_provenance` and the report's `commit()` count
+  modified and staged tracked files as uncommitted, so a build there would
+  have read "with uncommitted changes".
+  - **A tracked manifest lists itself.** Once a folder's `provenance.json` is
+    tracked, a build modifies it with its first save. Every later save then
+    lists it in `uncommitted`, and the report's title, written after the
+    figures, would read "with uncommitted changes".
+  - **So the order was:**
+    1. the TS manifest unstaged, so it was untracked;
+    2. a `.gitignore` rule for the report's generated `.tex` files, dc6e77f;
+    3. power_balance's manifest committed as it stood, 030314e;
+    4. the report built;
+    5. the TS manifest committed with the report's entries, 12b8543.
+
+    All of it is pushed.
+  - **The build:** exit 0 and 16 pages. The generated numbers, scatter and
+    pages files equal the branch's build but for the commit. The 11 entries
+    are at 030314e with nothing uncommitted.
+  - **power_balance's entries** name cmod_functions'
+    `tools/power_balance_figure.py`, which is untracked there, beside two
+    modified files of that repository.
+  - **The next rebuild in main** will list the TS manifest as uncommitted,
+    and its title will say so, unless `figure_provenance` and `commit()`
+    leave the manifests out. That holds for the 13 tracked manifests.
+  - The worktree is removed.
 - **Sent to the user.** Whether it goes to the PI is the user's call.
 
 ## Orchestration
