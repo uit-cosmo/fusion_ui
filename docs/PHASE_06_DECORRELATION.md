@@ -120,10 +120,9 @@ TS, MLP and every other page open on the server. J12i (2c303de) refreshed the
 Documentation page's TS counts for the new files. It is deployed: fusion_ui
 was pushed and pulled at 9fc071c, which needs no restart for the page's text.
 
-J14, the PDF report of the TS findings, is on fusion_scripts' branch
-`phase06/j14`, not merged. At 981fb2d it passes every check on the
-orchestrator's rerun. It is back with its agent for one round of text and
-figure fixes, to the user's paper style, before the merge.
+J14, the PDF report of the TS findings, is merged into fusion_scripts' main
+at ecfb179 (3cca88f), not pushed. The report is the branch's build at
+3cca88f, whose tree main's merge has.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -770,7 +769,7 @@ Built, tested and pushed to main on 2026-10-07, and deployed the same day (JD).
 | J12i | The Documentation page's TS counts and claims, on the 116 24e1499 files | **Sonnet 5.5** | fusion_ui | J12g's swap | — |
 | J13a | MLP profiles as a single-shot plot, checked against the density-scan paper | **Opus 5.5** | fusion_ui | the user's request (2026-10-12) | J12h, J12g |
 | J13b | MLP profiles on the TS plots, where the probe scans: a spec's companion diagnostics | **Opus 5.5** | fusion_ui | J13a, J12f | — |
-| J14 | A PDF report of the TS findings, with the TS and MLP profiles of the nine 1160616 shots (under review: one fix round) | **Opus 5.5** | fusion_scripts | J12i, J13b; the user's request (2026-10-13) | — |
+| J14 | A PDF report of the TS findings, with the TS and MLP profiles of the nine 1160616 shots (merged, ecfb179) | **Opus 5.5** | fusion_scripts | J12i, J13b; the user's request (2026-10-13) | — |
 
 **Why these models.** `PLAN.md` splits work by how expensive a wrong decision
 is to undo, not by how hard it is, and so does this table.
@@ -3636,6 +3635,36 @@ figure with all nine shots, only the means and no scatter, TS+MLP, no core
   - the levels, as ratios of medians;
   - the quadrature test. The median relative error is a linear stand-in for
     the spread of ln y, rough where σ/y nears 1, as in the 15 eV bins.
+
+**Result (2026-10-13).** Merged locally into fusion_scripts' main at ecfb179,
+not pushed. The fix round is one commit, 3cca88f, which made the nine
+changes asked for.
+
+- **The fixes:**
+  - Figure 2 is `fig_spread`. Per bin it draws the TS spread (filled) and
+    the expected spread (open) against the probe's spread, with the line of
+    equality.
+  - Table 1 is now Appendix C. The pages stay Appendix B, because a table
+    put first left B's introduction alone on a nearly empty page.
+  - The PDF is now 16 pages.
+  - There are 3 new tests.
+- **The orchestrator's rerun at 3cca88f:**
+  - **The suites:** 314 passed and 9 skipped in the paper's venv. The app's
+    venv has only the three known gaps.
+  - **A fresh clone's build:** exit 0, 16 pages, and all 11 entries at
+    3cca88f with nothing uncommitted.
+  - **The numbers and the scatter table** are identical to 981fb2d's but
+    for the commit, so the recount above holds. `mlp.py` is unchanged, and so
+    is the port check.
+  - **Every page read.**
+- **Not regenerated in main's checkout.** That checkout holds 13 uncommitted
+  lines of `CLAUDE.md` from the power-balance work, which is not this
+  session's. A build there would list them as uncommitted, and the report's
+  title would read "with uncommitted changes".
+  - Main's tree equals 3cca88f's, so the branch's build stands for it, in
+    `~/Git/fusion_scripts-j14/density_scan/figures/thomson_scattering/`.
+  - Regenerate in main once those lines are committed.
+- **Sent to the user.** Whether it goes to the PI is the user's call.
 
 ## Orchestration
 
