@@ -765,6 +765,7 @@ Built, tested and pushed to main on 2026-10-07, and deployed the same day (JD).
 | J12i | The Documentation page's TS counts and claims, on the 116 24e1499 files | **Sonnet 5.5** | fusion_ui | J12g's swap | — |
 | J13a | MLP profiles as a single-shot plot, checked against the density-scan paper | **Opus 5.5** | fusion_ui | the user's request (2026-10-12) | J12h, J12g |
 | J13b | MLP profiles on the TS plots, where the probe scans: a spec's companion diagnostics | **Opus 5.5** | fusion_ui | J13a, J12f | — |
+| J14 | A PDF report of the TS findings, with the TS and MLP profiles of the nine 1160616 shots | **Opus 5.5** | fusion_scripts | J12i, J13b; the user's request (2026-10-13) | — |
 
 **Why these models.** `PLAN.md` splits work by how expensive a wrong decision
 is to undo, not by how hard it is, and so does this table.
@@ -3414,6 +3415,173 @@ step 4).
     ASP file, read whole.
   - 1150618021 (`mlp_mode` 'none') is offered the overlay: its probe plunges
     in the window.
+
+### J14 — A PDF report of the TS findings · Opus 5.5 · fusion_scripts
+
+**The request (the user, 2026-10-13).** "Make a pdf report of the TS
+findings. It should include the TS+MLP profiles from the edge region to the
+far SOL for each shot (n and Te is enough). In addition to the MLP 1ms
+average, add a scatter of the signal (a few random signal points from the
+window) to see if their scatter matches the scatter from the TS data. Add a
+figure with all nine shots, only the means and no scatter, TS+MLP, no core
+(edge+SOL)."
+
+**Facts (the orchestrator, 2026-10-13).**
+
+- **The nine shots** are the density scan, run day 1160616: 009, 011, 016,
+  017, 018, 022, 025, 026 and 027. J12c's and J12e's PDFs order them by
+  f_GW, from the discharge DB (`density_scan/thomson_profiles.py`).
+- **TS:** the app's files, made with C-Mod_Analysis 24e1499, in
+  `~/Data/alcator/thomson_scattering/` (116 files, the nine among them).
+  `density_scan/thomson_profiles.py` reads them, and its docstring and the
+  plan's J12a, J12e, J12f, J12h and J12i records say what each variable and
+  attribute is.
+- **MLP:** `~/Data/alcator/asp/asp_<shot>.nc` holds all nine; the
+  orchestrator copied 026 and 027 from the server on 2026-10-13.
+  - Each quantity at each pin has its own time axis, sampled every 0.3 µs.
+  - ρ is in `rho_<q>_<i>` on `rho_time_<q>_<i>`, at 10 kHz.
+  - The probe's track is in the attributes `plunge_time` and
+    `plunge_depth`.
+  - The units, and what ρ is, are in J13a's record and on the
+    Documentation page's MLP section (`fusion_ui/data/documentation.md`).
+  - No attribute names the EFIT tree that ρ was mapped with.
+- **The reduction** is fusion_ui's `core/mlp.py` (J13a): the paper's 1 ms
+  means, the four pins combined, ρ as the window mean of its companion, and
+  each stroke, in and out, told apart.
+  - fusion_scripts' venv has no fusion_ui, and fusion_scripts must not
+    depend on the app.
+  - The probe plunges in the windows of 009, 011, 016, 017 and 022, and
+    holds still in those of 018 and 025 (J13b). 026 and 027 have not been
+    read.
+- **The tools:** pdflatex, latexmk and pdfunite are installed. The paper's
+  venv (`~/Git/fusion_scripts/.venv`) has figure_provenance, matplotlib 3.10
+  and scipy.
+- **fusion_scripts' main checkout has someone else's uncommitted work:**
+  12 lines of `CLAUDE.md` and two untracked `tools/` scripts. Work in a
+  worktree, and leave the main checkout and `CLAUDE.md` alone. The `.env` is
+  not in a worktree: set `FUSION_DATA_FOLDER` and `FUSION_DISCHARGE_DB` in
+  the environment, from the main checkout's `.env`.
+
+**Deliver:**
+
+- **A module, `density_scan/thomson_report.py`,** run in the paper's venv
+  from the repository's root, beside `thomson_profiles.py`.
+  - Each figure is a `@provenance` function with a docstring, saved through
+    `figure_provenance.save` into `density_scan/figures/thomson_scattering/`.
+  - One command draws the figures and compiles the report,
+    `thomson_report_1160616.pdf`, from a LaTeX source kept in the
+    repository.
+  - The numbers the module computes reach the text through a LaTeX file of
+    macros that the run writes, so that a rerun updates them.
+  - No new Python package.
+- **The MLP's 1 ms means, read by the module.**
+  - Port from `fusion_ui/core/mlp.py` only what the report needs, and say
+    where it comes from.
+  - **Check it:** on the nine shots, its means equal fusion_ui's
+    `mlp.read`. Run that in the app's venv, `~/Git/fusion_ui/.venv`, as a
+    check, not as an import of the module.
+- **A page per shot,** lowest f_GW first, with n_e and T_e against
+  R_mid − R_mid,sep in cm.
+  - **The range:** from the edge inside the separatrix to the far SOL past
+    the probe's outermost point, the same on every page. Log y.
+  - **TS:** the edge points in the discharge window with n_e > 0, with their
+    ±1σ bars, light.
+    - Each sits at its own R_mid, from EFIT at its pulse, minus `R_mid_sep`.
+      They are not moved with a fit.
+    - The stored fit is a thin line, marked where only the fictitious points
+      of `force_to_zero` hold it.
+    - 017's fit was moved (+0.0071 in ρ_pol). Draw it where the file puts
+      it, and say so.
+    - No core points.
+  - **MLP:**
+    - The 1 ms means on the strokes in the window, in and out told apart,
+      at their ρ, not shifted. The paper shifts by +0.61–0.69 cm (J13a), and
+      the text says so.
+    - **The signal's scatter:** a few raw samples per 1 ms window, drawn at
+      random with a fixed seed from the four pins, each at the ρ of its own
+      time. They should be about as many as the TS points, small and faint
+      under the means.
+    - Where the probe holds still, its means and samples sit at the ρ they
+      have, as a cluster, and the page says so.
+    - The page says how many samples were left out because they were not
+      finite or not positive.
+  - **The scatter, in numbers.** In bins of R − R_sep where both have enough
+    points, give the spread of ln n_e and ln T_e of the TS points and of the
+    probe's samples. Beside them, give the TS points' median relative error,
+    which tells their measurement noise apart from the plasma's own scatter.
+    Print it on the page, and gather it in a table in the report.
+- **One figure of all nine shots:** n_e and T_e, log y, edge and SOL only,
+  means only, with no scatter and no error bars.
+  - **TS:** binned means of the edge points, over bins of a fixed width in
+    R − R_sep, each with enough points. Lines with markers.
+  - **MLP:** the 1 ms means, as markers. A shot where the probe holds still
+    gets one marker, the mean over the window.
+  - One colour per shot, in f_GW order, and a legend with f_GW.
+- **The report,** in LaTeX, short and in the user's style. Read
+  `~/Dropbox/Obsidian Vault/Papers/paper_style.md` first, and follow it.
+  - **The findings, each with its number and its source:**
+    - how the TS files are made: one fit per window, `frac_err`,
+      `force_to_zero` and the separatrix finder;
+    - the counts over the 116 files (J12i);
+    - 24e1499 against d6a6466 (J12e, J12g and J12i);
+    - the seven fits on stale equilibria (J12h);
+    - C-Mod_Analysis' four bugs and three design notes. The orchestrator
+      checked them on 2026-10-13 against GitHub's 24e1499; J12g's record and
+      the list below give them;
+    - what the new figures show of TS against the MLP, said from the
+      figures and the scatter table.
+  - **The figures:** the nine-shot figure, then the pages.
+  - **Open questions.**
+  - Every number in the text is either computed by the run or quoted from a
+    named plan record.
+- **Tests,** hermetic: the port on a synthetic ASP file of the real layout
+  (as fusion_ui's `tests/mlp_fixtures.py` builds one), the binning, the
+  scatter and the sampling.
+
+**C-Mod_Analysis' bugs (the orchestrator, 2026-10-13, read on GitHub's
+24e1499).**
+
+1. **`power_balance.py: single_pysepest`'s fallback never runs** (lines
+   735–756).
+   - A root finder is given EFIT's separatrix ±1 mm. When it finds nothing,
+     a wider bounded search (±5 mm) is set up and never called, so x_sep is
+     NaN.
+   - `find_separatrix` then prints "Separatrix estimation failed somewhere"
+     and the fit is not moved: 37 of the 39 unmoved fits print it. The same
+     message also covers other failures.
+2. **`power_balance.py: shift_profs`' guard is one-sided** (line 232).
+   - `np.abs(shift > 0.05)` takes the absolute value of the comparison. An
+     outward move over 0.05 is refused; an inward move of any size passes.
+   - On a refusal it replaces the result array with the scalar 1.
+   - No effect on the 116 files: their moves are −0.013 to +0.010.
+3. **`cmod_tools.py: create_pe` cannot pair repeated ρ_pol values** (lines
+   806–873).
+   - It averages so as to even the two lists only where a value occurs once
+     on one side. With 2 against 3, the lists come out one apart, and the
+     product at line 873 raises.
+   - 7 shots lose their fit. Under ANALYSIS, 86–91% of their points share a
+     ρ_pol, against a median of 33% on the fitted shots.
+   - d6a6466 has the same code.
+4. **`cmod_tools.py: assemble_dict_for_2pm`'s separatrix guess** (line 937).
+   - `interp1d(ne_rhop, ne_R)(1)` raises where the n_e points end inside
+     ρ_pol 1. The comment above the line calls the value only a guess.
+   - 2 shots lose their fit.
+5. **The design notes:**
+   - `force_to_zero` holds the n_e and T_e fits, not the p_e fit;
+   - the separatrix code is imported from another user's home on mfe;
+   - `get_cmod_kin_profs` maps with ANALYSIS, where `run_db.py` takes R_sep
+     from EFIT20.
+
+**Accept when:**
+
+- the fusion_scripts suites pass: the paper's venv as before, with the new
+  tests, and the app's venv with only the three known gaps;
+- the port's 1 ms means equal fusion_ui's `mlp.read` on the nine shots;
+- the PDF builds with one command from a clean checkout of the branch, and
+  every figure's provenance entry names the branch's commit, with nothing
+  uncommitted;
+- the orchestrator reads every page, and finds each number in the text in
+  the run's output or in the plan record it cites.
 
 ## Orchestration
 
