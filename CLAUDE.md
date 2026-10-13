@@ -116,7 +116,9 @@ survey of the imports the app has, is
 `fusion_scripts/MIGRATION_TO_IMAGING_METHODS.md`).
 
 On the dev machine the checkouts are under `/home/sosno/Git` and the data is
-`~/Data/alcator` (45 APD shots, raw + preprocessed, and one ASP shot).
+`~/Data/alcator`: 20 APD shots (20 preprocessed files, 9 raw), one phantom
+file, eight ASP files (1150618021 and seven of 1160616), and the 116 TS files,
+with d6a6466's beside them in `thomson_scattering_d6a6466/` (2026-10-13).
 
 ## Configuration
 

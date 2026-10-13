@@ -108,11 +108,16 @@ production files and swaps them in.
 J12f (8a2140a) and J12h (fusion_scripts dd4b2d8) are merged and pushed, with
 fusion_ui at 20327db, and the server's fusion_ui is pulled to 20327db. J12g's
 final run made 116 files with 95 fits, staged on the server with their
-checksums checked. The swap waits for the user's restart. J13a (1d0bdea) and
-J13b (233f59e) are merged locally: the MLP profiles as a single-shot plot,
-checked against the density-scan paper's Fig. 2, and on the TS plots on
-request. They are not pushed, and go out after the user's word, with a
-restart.
+checksums checked. J13a (1d0bdea) and J13b (233f59e) are merged: the MLP
+profiles as a single-shot plot, checked against the density-scan paper's
+Fig. 2, and on the TS plots on request.
+
+**Deployed on 2026-10-13:** J12f, J13a and J13b, with fusion_ui pushed and
+pulled at ce44c25, and the service restarted by the user at 09:33:26. J12g's
+swap followed: the app's TS files are 24e1499's, 116 of them, and d6a6466's
+are kept in `thomson_scattering_d6a6466/`, on the server and the laptop. The
+TS, MLP and every other page open on the server. J12i refreshes the
+Documentation page's TS counts for the new files.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -756,6 +761,7 @@ Built, tested and pushed to main on 2026-10-07, and deployed the same day (JD).
 | J12f | The TS view on 24e1499's files, and the retriever's defaults | **Opus 5.5** | fusion_ui + fusion_scripts | J12e; the user's decision (2026-10-12) | J12g |
 | J12g | The production TS files remade with 24e1499, and swapped in on the server | orchestrator | mfe + server | J12e; swap after J12f's deploy | J12f |
 | J12h | The mfe script keeps every file: mapping errors, J12e's point check, 1140619014's stamps | **Opus 5.5** | fusion_scripts + mfe | J12g's step 1 | J12f |
+| J12i | The Documentation page's TS counts and claims, on the 116 24e1499 files | **Sonnet 5.5** | fusion_ui | J12g's swap | — |
 | J13a | MLP profiles as a single-shot plot, checked against the density-scan paper | **Opus 5.5** | fusion_ui | the user's request (2026-10-12) | J12h, J12g |
 | J13b | MLP profiles on the TS plots, where the probe scans: a spec's companion diagnostics | **Opus 5.5** | fusion_ui | J13a, J12f | — |
 
@@ -3010,7 +3016,80 @@ J12g's step 1 was rerun with dd4b2d8 into `~/Data/thomson_scattering_24e1499_fin
   - The server's fusion_ui is pulled to 20327db.
   - Its fusion_scripts stays at 9417aa9, under which the Fields page's
     results were computed, so that they carry no commit-mismatch badge.
-- **Step 4 waits for the user's restart.**
+- **Step 4 waited for the user's restart.**
+
+**Step 4 (2026-10-13).** The user chose one restart for J12f, J13a and J13b.
+fusion_ui was pushed and pulled at ce44c25, and the user restarted the service
+at 09:33:26.
+
+- **Before the swap,** the 116 staged files' sha256 equal the laptop's.
+- **The server:**
+  - `thomson_scattering/` became `thomson_scattering_d6a6466/` (115 files),
+    and `thomson_scattering_24e1499/` became `thomson_scattering/` (116).
+  - The rescan saw 618 files: +1, ~115. The index holds 116 TS files, all
+    curated.
+- **Checked on the server** through AppTest, from `~/fusion_ui` with the
+  service's venv, in a process of its own:
+  - **the TS plot** of 1160616017, 1140827029, 1160616027, 1091216034 and
+    1140619014, on both axes: one chart each and no exception.
+    - 017 and 1140619014 carry the move's caption.
+    - 1140827029 carries the `fit_points_check` warning, and 027 the
+      fit-check warning.
+  - **the MLP overlay** on 022 and 011, on both axes: 190 and 155 MLP points
+    on each row, over the laptop's x ranges. Not offered on 018.
+  - **the MLP profiles plot** on 022, with L_n 5.39 cm as on the laptop, and
+    on 018, which says "No plunge in the window". The probe trace draws on
+    both.
+  - **every page** opens without an exception.
+- **The laptop's mirror:**
+  - `~/Data/alcator/thomson_scattering` became `thomson_scattering_d6a6466`,
+    and `~/Data/thomson_scattering_24e1499_final` became
+    `~/Data/alcator/thomson_scattering`. Its checksums equal the server's.
+  - The dev ledger's rescan also dropped 61 APD rows. Those files left
+    `~/Data/alcator/apd` on 2026-10-05, and the ledger had not been
+    rescanned since.
+- **The d6a6466 folders stay** until the user says to delete them.
+
+#### J12i — The Documentation page's TS counts, on 24e1499's files · Sonnet 5.5 · fusion_ui
+
+**Why.** Since 2026-10-13 the app's TS files are the 116 that 24e1499 made
+(J12g). The Documentation page's section "Thomson scattering profiles"
+(`fusion_ui/data/documentation.md`) still counts over d6a6466's 115 files of
+2026-10-09, or generalises from the nine 1160616 files, which J12e made.
+J12f left this for after J12g.
+
+- **Counts over d6a6466's files:**
+  - 15 cores that are an extrapolation, five of which passed the check;
+  - 12 fits failing run_db.py's check on axis, and 8 at the outer end.
+- **Claims from the nine 1160616 files:**
+  - "the separatrix finder often fails": on the 116 files, 56 of the 95 fits
+    were moved (J12g);
+  - all fits end at 5 eV;
+  - the p_e fit reaches 11 to 1213 times e·n_e·T_e in the SOL.
+
+**Deliver:**
+
+- **Each such count or claim, read off the 116 files** in
+  `~/Data/alcator/thomson_scattering/`, the laptop's mirror, which equals the
+  server's.
+  - Keep d6a6466's number beside it where the comparison says something.
+    The 115 d6a6466 files are in `~/Data/alcator/thomson_scattering_d6a6466/`.
+  - Correct a sentence that the 116 files contradict. Keep a per-shot
+    statement unless the files contradict it.
+  - Say where a count cannot be read off the files.
+- **The numbers come from a script's output,** not by hand. Give the script
+  and its output in the report, and write the date read into the page, as the
+  section does.
+- **Nothing else changes:** no code, and no other section. The section's
+  structure stays as it is.
+
+**Accept when:**
+
+- the suite passes, with `tests/test_documentation.py` among it;
+- every number changed is reproduced by the orchestrator's own count from the
+  files;
+- the Documentation page opens through AppTest with no exception, and the
+  section reads correctly.
 
 ### J13 — MLP profiles
 
@@ -3121,8 +3200,8 @@ J12g's step 1 was rerun with dd4b2d8 into `~/Data/thomson_scattering_24e1499_fin
     difference explained;
 - screenshots, read by eye.
 
-**Result (2026-10-12).** Merged locally at 1d0bdea (dd34d90). It is not pushed
-or deployed, and goes out with J13b.
+**Result (2026-10-12).** Merged locally at 1d0bdea (dd34d90). Deployed with
+J13b on 2026-10-13.
 
 - **What it added:**
   - `core/mlp.py`, the pure reduction;
@@ -3209,8 +3288,9 @@ or deployed, and goes out with J13b.
 - a TS plot without the overlay is drawn exactly as before, on every TS file;
 - screenshots, read by eye.
 
-**Result (2026-10-12).** Merged locally at 233f59e (0a555f3). It is not pushed
-or deployed, and goes out with J13a after the user's word, with a restart.
+**Result (2026-10-12).** Merged locally at 233f59e (0a555f3). Deployed with
+J13a and J12f on 2026-10-13 at ce44c25, and checked on the server (J12g,
+step 4).
 
 - **What it added:**
   - **`PlotSpec.companions`.** A live spec names other diagnostics of the
