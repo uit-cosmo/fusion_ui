@@ -116,8 +116,8 @@ Fig. 2, and on the TS plots on request.
 pulled at ce44c25, and the service restarted by the user at 09:33:26. J12g's
 swap followed: the app's TS files are 24e1499's, 116 of them, and d6a6466's
 are kept in `thomson_scattering_d6a6466/`, on the server and the laptop. The
-TS, MLP and every other page open on the server. J12i refreshes the
-Documentation page's TS counts for the new files.
+TS, MLP and every other page open on the server. J12i (2c303de) refreshed the
+Documentation page's TS counts for the new files, and is merged locally.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -3090,6 +3090,46 @@ J12f left this for after J12g.
   files;
 - the Documentation page opens through AppTest with no exception, and the
   section reads correctly.
+
+**Result (2026-10-13).** Merged locally at 2c303de (0d72ba3).
+
+- **What it changed,** in the TS section only, read off the files on
+  2026-10-13, with d6a6466's numbers beside 24e1499's:
+  - **the fits:** 95 of the 116 files hold one. 12 have core TS only, and 9
+    lost theirs to an error in 24e1499's own code. d6a6466 fitted 103 of 115.
+  - **the separatrix finder** fails on 39 of the 95 fits. It moved the other
+    56 by −0.013 to +0.010 in ρ_pol, to a T_e,sep of 43 to 131 eV. That
+    corrects "often fails", which came from the nine 1160616 shots.
+  - **the p_e fit in the SOL** reaches 2.3 to 1213.5 times e·n_e·T_e. That
+    is over 10 times on 74 fits and over 100 on three. d6a6466's reached
+    33.5 at most.
+  - **the core an extrapolation:** 12 of the 95 fits, ten of which pass the
+    check. d6a6466 had 15 of 103, five of which passed.
+  - **`fit_check`:** 4 of the 95 fail on axis and none at the outer end,
+    against 12 and 8 of d6a6466's 103.
+  - **the grid's end:** 81 of the 95 fits end at exactly 5 eV, and the other
+    14 between 5.003 and 42 eV.
+- **One test changed.**
+  `test_the_section_says_what_24e1499_changes_and_what_to_distrust_there`
+  pinned the lead "The separatrix finder often fails", which the files
+  contradict. It now holds the lead as "fails on N of the M fits", a pattern.
+  This is no relaxation: the lead is still held, and the count is the
+  files'.
+- **The orchestrator's rerun:**
+  - **Suite on the branch:** 1277 passed.
+  - **Every number changed** was recounted with the orchestrator's own
+    script, written from the page's wording, on the 116 and the 115 files.
+    All are equal, down to the d6a6466 outer-end ratios (×4.23, ×4.47 and
+    ×6.46) and 027's 1.70 and 3.77.
+  - **The Documentation page** opens through AppTest with no exception and
+    no unresolved placeholder, and shows the new sentences.
+- **Deploying it needs no restart.** The page reads the prose through a 60 s
+  cache, and no code changed.
+- **Open, for the user:**
+  - the section still says it was read against fusion_scripts 721c1ad,
+    while the files carry `script_commit` dd4b2d8;
+  - "The core is often an extrapolation" stays as it was. It is 12 of 95
+    fits (13%), the same share as before.
 
 ### J13 — MLP profiles
 
