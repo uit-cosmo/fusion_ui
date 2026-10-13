@@ -120,6 +120,11 @@ TS, MLP and every other page open on the server. J12i (2c303de) refreshed the
 Documentation page's TS counts for the new files. It is deployed: fusion_ui
 was pushed and pulled at 9fc071c, which needs no restart for the page's text.
 
+J14, the PDF report of the TS findings, is on fusion_scripts' branch
+`phase06/j14`, not merged. At 981fb2d it passes every check on the
+orchestrator's rerun. It is back with its agent for one round of text and
+figure fixes, to the user's paper style, before the merge.
+
 ## Decisions (the user, 2026-10-07)
 
 | | |
@@ -765,7 +770,7 @@ Built, tested and pushed to main on 2026-10-07, and deployed the same day (JD).
 | J12i | The Documentation page's TS counts and claims, on the 116 24e1499 files | **Sonnet 5.5** | fusion_ui | J12g's swap | — |
 | J13a | MLP profiles as a single-shot plot, checked against the density-scan paper | **Opus 5.5** | fusion_ui | the user's request (2026-10-12) | J12h, J12g |
 | J13b | MLP profiles on the TS plots, where the probe scans: a spec's companion diagnostics | **Opus 5.5** | fusion_ui | J13a, J12f | — |
-| J14 | A PDF report of the TS findings, with the TS and MLP profiles of the nine 1160616 shots | **Opus 5.5** | fusion_scripts | J12i, J13b; the user's request (2026-10-13) | — |
+| J14 | A PDF report of the TS findings, with the TS and MLP profiles of the nine 1160616 shots (under review: one fix round) | **Opus 5.5** | fusion_scripts | J12i, J13b; the user's request (2026-10-13) | — |
 
 **Why these models.** `PLAN.md` splits work by how expensive a wrong decision
 is to undo, not by how hard it is, and so does this table.
@@ -3582,6 +3587,55 @@ figure with all nine shots, only the means and no scatter, TS+MLP, no core
   uncommitted;
 - the orchestrator reads every page, and finds each number in the text in
   the run's output or in the plan record it cites.
+
+**The orchestrator's review of 981fb2d (2026-10-13).** The branch is
+`phase06/j14` in `~/Git/fusion_scripts-j14`, on dd4b2d8, with three commits
+(230a567, 17dd459, 981fb2d).
+
+- **What it adds:**
+  - `density_scan/mlp.py`, the port, for n_e, T_e and ρ, plus the raw
+    samples (`allot`, `draw`) and the held windows;
+  - `density_scan/thomson_report.py` and `thomson_report.tex`;
+  - tests: 19 of the port and 18 of the report.
+- **Every check passes:**
+  - the suites: 311 passed and 9 skipped in the paper's venv, and only the
+    three known gaps in the app's;
+  - the port equals `mlp.read` to the bit on all nine shots, from a fresh
+    clone, in the drawn means and in every window;
+  - a fresh clone builds the PDF in one command, in 33 s at 1.07 GB peak:
+    15 pages, and all 10 provenance entries are at 981fb2d with nothing
+    uncommitted.
+- **Every number recounted** with code written apart from the module, using
+  fusion_ui's own `mlp` for the probe. All equal:
+  - the TS points and pulses of each shot;
+  - the 15 eV floor (361 readings, 336 of them with the error, 40 deep);
+  - the fit's T_e at the separatrix;
+  - where `force_to_zero` alone holds the fit;
+  - 017's move (2.75 mm inward);
+  - all 23 rows of the scatter table, both sides;
+  - the levels, the spread ratios and the quadrature test.
+
+  Every drawn sample was checked against the file, read with netCDF4: its
+  value, its pin, its window, and its ρ interpolated from the companion. The
+  quoted numbers all trace to the records they cite. The C-Mod_Analysis
+  README line is J12's Facts; the 11 cm is J13's record.
+- **Sent back for one round** (the user's paper style, to apply before a
+  draft is shown):
+  - "where the paper puts the limiter shadow" has no record behind it;
+  - Table 1 becomes a figure, with the table moved to an appendix;
+  - cross-references come pointer first;
+  - EFIT20 is defined at first use;
+  - the probe's spread is said to bound the plasma's fluctuations from
+    above;
+  - "72 1 ms means" is reworded;
+  - f_GW in Figure 1's legend is set in mathtext;
+  - a page's legend lists only what it draws.
+- **Methods to put to the user:**
+  - the spread, the standard deviation of ln y around a line within each
+    0.5 cm bin;
+  - the levels, as ratios of medians;
+  - the quadrature test. The median relative error is a linear stand-in for
+    the spread of ln y, rough where σ/y nears 1, as in the 15 eV bins.
 
 ## Orchestration
 
