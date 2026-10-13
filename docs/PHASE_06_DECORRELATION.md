@@ -2887,9 +2887,17 @@ against d6a6466, from the mfe logs:
     `data_access._getRmidSpline` raises "x must be increasing if s > 0"
     outside the fit's `try`.
 - **9 shots keep the file and lose the fit, both through 24e1499's own code:**
-  - **7 in `create_pe`'s new p_e error,** whose n_e and T_e arrays differ by one
-    or two in length: 1120814016, 019, 025 and 026, and 1140613007, 026 and
-    027;
+  - **7 in `create_pe`'s pairing of the n_e and T_e points by ρ_pol,** whose
+    lists come out one to three apart in length: 1120814016, 019, 025 and 026,
+    and 1140613007, 026 and 027.
+    - The line that raises is the product of the two (`cmod_tools.py`:873),
+      not the new p_e error, as this record first said. d6a6466 has the same
+      code.
+    - The pairing evens the lists out only where a ρ_pol value occurs once on
+      one side. Read on GitHub's 24e1499 on 2026-10-13, and checked on a
+      transcription.
+    - Under ANALYSIS, 86–91% of these shots' points share their ρ_pol with
+      another point, against a median of 33% on the fitted shots.
   - **2 in `assemble_dict_for_2pm`,** which interpolates at ρ_pol 1 where the
     data end at 0.97 to 0.99: 1091216034 and 1140605024.
 - **Otherwise as with d6a6466:**
