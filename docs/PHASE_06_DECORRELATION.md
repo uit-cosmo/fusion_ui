@@ -121,8 +121,25 @@ Documentation page's TS counts for the new files. It is deployed: fusion_ui
 was pushed and pulled at 9fc071c, which needs no restart for the page's text.
 
 J14, the PDF report of the TS findings, is merged into fusion_scripts' main
-at ecfb179 (3cca88f), not pushed. The report is the branch's build at
-3cca88f, whose tree main's merge has.
+at ecfb179 (3cca88f) and pushed. The report is the branch's build at
+3cca88f, whose tree main's merge has. It stays in `~/Git/fusion_scripts-j14`
+until it is regenerated in main (J14's Result says why).
+
+The second cleanup is done (2026-10-13, at the user's word), after both
+repositories were pushed:
+
+- **Removed:**
+  - the agent worktrees of J12f, J12i, J13a and J13b, and fusion_scripts'
+    worktrees of J12f and J12h;
+  - their `phase06/*` branches, every one merged, and the four
+    `worktree-agent-*` branches the agent worktrees came with.
+- **Kept:**
+  - `~/Git/fusion_scripts-j14` and `phase06/j14`, which hold the report's only
+    build;
+  - `phase06/j9` and `phase06/j9b`, still unmerged;
+  - the laptop's `~/Data/thomson_scattering_24e1499_all/` and
+    `~/Data/thomson_scattering_24e1499_d6a6466_settings/`, and mfe's
+    `~/fusion_ts/j12e_*` and `j12h_*`, which are not worktrees.
 
 ## Decisions (the user, 2026-10-07)
 
@@ -769,7 +786,7 @@ Built, tested and pushed to main on 2026-10-07, and deployed the same day (JD).
 | J12i | The Documentation page's TS counts and claims, on the 116 24e1499 files | **Sonnet 5.5** | fusion_ui | J12g's swap | — |
 | J13a | MLP profiles as a single-shot plot, checked against the density-scan paper | **Opus 5.5** | fusion_ui | the user's request (2026-10-12) | J12h, J12g |
 | J13b | MLP profiles on the TS plots, where the probe scans: a spec's companion diagnostics | **Opus 5.5** | fusion_ui | J13a, J12f | — |
-| J14 | A PDF report of the TS findings, with the TS and MLP profiles of the nine 1160616 shots (merged, ecfb179) | **Opus 5.5** | fusion_scripts | J12i, J13b; the user's request (2026-10-13) | — |
+| J14 | A PDF report of the TS findings, with the TS and MLP profiles of the nine 1160616 shots (merged and pushed, ecfb179) | **Opus 5.5** | fusion_scripts | J12i, J13b; the user's request (2026-10-13) | — |
 
 **Why these models.** `PLAN.md` splits work by how expensive a wrong decision
 is to undo, not by how hard it is, and so does this table.
@@ -3636,9 +3653,9 @@ figure with all nine shots, only the means and no scatter, TS+MLP, no core
   - the quadrature test. The median relative error is a linear stand-in for
     the spread of ln y, rough where σ/y nears 1, as in the 15 eV bins.
 
-**Result (2026-10-13).** Merged locally into fusion_scripts' main at ecfb179,
-not pushed. The fix round is one commit, 3cca88f, which made the nine
-changes asked for.
+**Result (2026-10-13).** Merged into fusion_scripts' main at ecfb179, and
+pushed at the user's word. The fix round is one commit, 3cca88f, which made
+the nine changes asked for.
 
 - **The fixes:**
   - Figure 2 is `fig_spread`. Per bin it draws the TS spread (filled) and
@@ -3657,13 +3674,20 @@ changes asked for.
     for the commit, so the recount above holds. `mlp.py` is unchanged, and so
     is the port check.
   - **Every page read.**
-- **Not regenerated in main's checkout.** That checkout holds 13 uncommitted
-  lines of `CLAUDE.md` from the power-balance work, which is not this
-  session's. A build there would list them as uncommitted, and the report's
-  title would read "with uncommitted changes".
+- **Not regenerated in main's checkout.** At the merge, that checkout held 13
+  uncommitted lines of `CLAUDE.md` from the power-balance work, which is not
+  this session's. A build there would list them as uncommitted, and the
+  report's title would read "with uncommitted changes".
+  - By the push those lines were gone. Instead, two `provenance.json` files
+    were staged there, also not this session's: power_balance's, and the one
+    in `density_scan/figures/thomson_scattering/`, where the report is
+    written. `figure_provenance` lists staged files as uncommitted too, and a
+    build would also write its entries into a manifest someone else has
+    staged.
   - Main's tree equals 3cca88f's, so the branch's build stands for it, in
-    `~/Git/fusion_scripts-j14/density_scan/figures/thomson_scattering/`.
-  - Regenerate in main once those lines are committed.
+    `~/Git/fusion_scripts-j14/density_scan/figures/thomson_scattering/`. That
+    worktree was kept in the cleanup for this reason.
+  - Regenerate in main once its checkout is clean, then remove the worktree.
 - **Sent to the user.** Whether it goes to the PI is the user's call.
 
 ## Orchestration
