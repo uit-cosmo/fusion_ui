@@ -1883,9 +1883,12 @@ def test_the_section_says_what_24e1499_changes_and_what_to_distrust_there():
     assert "**Where the fit was moved to a separatrix, the points are drawn moved with it**" in text
     assert "`fusion_ui/plots/thomson_profiles.py: Points.on`" in text
     assert "`/home/millerma/pysepest_kc/pysepest` (`separatrix_code`), so no C-Mod_Analysis commit pins it" in text
-    # What to distrust: the finder that leaves the fit unmoved, the p_e fit in the SOL, and 026's 5 eV.
+    # What to distrust: the finder that leaves the fit unmoved, with how many fits it fails on (a count the section's
+    # next reading of the files changes, so it is not pinned), the p_e fit in the SOL, and 026's 5 eV.
+    assert re.search(
+        r"\*\*The separatrix finder fails on \d+ of the \d+ fits, and then leaves the fit unmoved\.\*\*", text
+    )
     for said in (
-        "**The separatrix finder often fails, and then leaves the fit unmoved.**",
         "**The p_e fit in the SOL.**",
         "**026's separatrix T_e of 5 eV.**",
         "**A file made with d6a6466**",

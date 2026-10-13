@@ -676,10 +676,14 @@ has no such attribute, and gets no warning.
 `tools/mfe/get_thomson_scattering.py: fit_profiles` calls `cmod_tools.py: get_cmod_kin_profs` of C-Mod_Analysis
 with the settings of that repository's `run_db.py`, which the file keeps as `fit_settings`. It fits Osborne mtanh
 profiles to the edge and core points of the discharge window together: **one profile for the whole window**, not
-one per pulse, on a grid of 1000 values of ρ_pol from 0 to 1.1, with R_mid on it. The window is the discharge
-DB's, in `window_t_start` and `window_t_end`: the legend gives it, and the caption says when the page's window is
-another. A shot whose fit failed has no fit and says why in `fit_status`; every shot with core TS only reads
-"No edge Thomson data!". The page draws the fit over its whole range, with no band. Each row's range is set by the
+one per pulse, on a grid of 1000 values of ρ_pol from 0 to 1.1 (moved with the fit where the fit was moved, below),
+with R_mid on it. The window is the discharge DB's, in `window_t_start` and `window_t_end`: the legend gives it, and
+the caption says when the page's window is another. A shot whose fit failed has no fit and says why in
+`fit_status`; every shot with core TS only reads "No edge Thomson data!". Of the 116 files made with 24e1499, 95
+hold a fit: 12 have core TS only, and nine lost the fit to an error that `fit_status` quotes (arrays of different
+lengths on seven, an interpolation above the range of its data on two) and that mfe's log of 2026-10-12 puts in
+24e1499's own code. Of the 115 made with d6a6466, 103 do: the same 12 have none, and the nine were fitted. The page
+draws the fit over its whole range, with no band. Each row's range is set by the
 points and not by the fit (`fusion_ui/plots/thomson_profiles.py: y_limits`, the rule of the density scan's PDF): it
 runs from 0 to {{value:thomson.margin}} times the larger of the {{value:thomson.percentile}} of the points measured
 to better than {{value:thomson.sigmas}}σ (all of them where fewer than {{value:thomson.min_well}} are) and the fit's
@@ -706,42 +710,54 @@ home on mfe, `/home/millerma/pysepest_kc/pysepest` (`separatrix_code`), so no C-
 file keeps the sha256 of each of its files that were loaded (`separatrix_code_sha256`), and the list under the
 figure names the folder.
 
-What to distrust in it:
+What to distrust in it, with the counts of 2026-10-13: those over the 95 fits in the app's 116 files, made with
+24e1499 on 2026-10-12, and, beside them, over the 103 in the 115 files made with d6a6466 on 2026-10-09, which are
+kept apart:
 
-- **The separatrix finder often fails, and then leaves the fit unmoved.** On the density scan's nine 1160616
-  shots it found a separatrix only on 017, which it moved by +0.0071 to T_e,sep = 42.9 eV. On the other eight it
-  gave up, and the fit stays where EFIT's mapping put it, with no `Te_sep_fit`: its T_e at ρ_pol 1 is wherever
-  EFIT's separatrix falls on it. When its root finder fails, the code sets up a wider search and never runs it
-  (read on mfe on 2026-10-12).
-- **The p_e fit in the SOL.** The fictitious points do not hold it, so beyond the separatrix it can run away. On
-  the nine 1160616 shots it reaches 11 to 1213 times e·n_e·T_e of the file's own n_e and T_e fits (1213 on 022),
-  where d6a6466's reached 1.1 to 34 times. Compare it with the pressure points drawn from the measurements, not
-  with the other two fits.
+- **The separatrix finder fails on 39 of the 95 fits, and then leaves the fit unmoved.** On the other 56 it found a
+  separatrix and moved the fit to it, by −0.013 to +0.010 in ρ_pol, to a T_e,sep of 43 to 131 eV. On the 39 it gave
+  up, and the fit stays where EFIT's mapping put it, with no `Te_sep_fit`: its T_e at ρ_pol 1 is wherever EFIT's
+  separatrix falls on it. The density scan's nine 1160616 shots fared worse: it found a separatrix only on 017, which
+  it moved by +0.0071 to T_e,sep = 42.9 eV, and on the other eight it gave up. When its root finder fails, the code
+  sets up a wider search and never runs it (read on mfe on 2026-10-12). The files keep only the message the finder
+  printed (in `fit_separatrix`: "Separatrix estimation failed somewhere" on 37 of the 39, "2-point model separatrix
+  estimation failed using Te fit" on two), so how many of the 39 are the root finder's failure cannot be read off
+  them.
+- **The p_e fit in the SOL.** The fictitious points do not hold it, so beyond the separatrix it can run away. Over
+  the 95 fits, its largest value between ρ_pol 1 and 1.1 of the file's own grid is 2.3 to 1213.5 times e·n_e·T_e of
+  the file's own n_e and T_e fits: over 10 times on 74 of them, and over 100 on three (022 at 1213.5, 1150618037 at
+  611.0 and 1090826015 at 350.6). d6a6466's 103 reached 33.5 times at most, and over 10 on three. On the nine
+  1160616 shots it is 11.4 to 1213.5 times (1213.5 on 022), where d6a6466's was 1.1 to 33.5. Compare it with the
+  pressure points drawn from the measurements, not with the other two fits.
 - **026's separatrix T_e of 5 eV.** On 1160616026 the fit's T_e is 5.0 eV at ρ_pol 1, where d6a6466's fit read
   26.6 eV and the two-point model gives 17.1 eV. 5 eV is the fictitious point's value, not a measurement: it holds
   the fit there, and the finder found no separatrix to move the fit to.
 - **The core is often an extrapolation.** The fit drops core T_e below 1 keV, and n_e below 0.5e20 m⁻³, inside
   ρ_pol 0.2 (`cmod_tools.py: prefit_filter`), so where the core points are lower the fit has none to rest on.
   `fit_note` says so when no core T_e inside ρ_pol 0.2 reaches 1 keV, and the page captions it whether or not the
-  check below passed. Of the 115 files made with d6a6466 on 2026-10-09 that was 15, five of which passed the check;
-  of the nine 1160616 files it is 026 and 027, under either commit. On 1160616027 the fit reads 104 eV on axis (134
-  eV with d6a6466) where the core points read about 900 eV.
+  check below passed. Of the 95 fits made with 24e1499 that is 12, ten of which passed the check; of d6a6466's 103
+  it was 15, five of which passed it. (The same 15 files hold the note under either commit, but three of those made
+  with 24e1499 have no fit to caption.) Of the nine 1160616 files it is 026 and 027, under either commit. On
+  1160616027 the fit reads 104 eV on axis (134 eV with d6a6466) where the core points read about 900 eV.
 - **`fit_check`** is run_db.py's own test (`tools/mfe/get_thomson_scattering.py: run_db_check`): T_e above 100 eV
   at the grid's outer end, or T_e below 0.5 keV or n_e below 0.5e20 m⁻³ on axis, means "something must have
   silently failed". A fit that does not pass is drawn all the same, with a warning above the figure that quotes the
-  check and says what the clause that failed means. **On axis**, the core is an extrapolation (12 of the 115 files
-  made with d6a6466). **At the outer end**, the outer end is not credible (8 of those files): there the fit's T_e at
-  ρ_pol 0.95 to 1.05 was 4 to 6 times the median of the points on three of them, and on one it ran on to about 51
-  keV past the last point. At 24e1499 the fictitious T_e point holds the outer end down: all nine 1160616 fits end
-  at 5 eV. The page takes nothing it cannot read for a pass: a file with a fit is warned about unless its check
-  says `passed`, whether the attribute is empty, missing, spelt another way or an outcome the page does not know.
+  check and says what the clause that failed means. **On axis**, the core is an extrapolation (4 of the 95 fits made
+  with 24e1499, those of 1091216009, 1120712027, 1160616025 and 1160616027; 12 of d6a6466's 103). **At the outer
+  end**, the outer end is not credible (none of the 95; 8 of d6a6466's): there d6a6466's fit's median T_e at ρ_pol
+  0.95 to 1.05 was 4.2 to 6.5 times the median of the points on three of them, and on one it ran on to about 51 keV
+  past the last point. At 24e1499 the fictitious T_e point holds the outer end down: 81 of the 95 fits end at
+  exactly 5 eV, all nine 1160616 fits among them, and the other 14 between 5.003 and 42 eV, none above 100 eV, where
+  d6a6466's all ended at 20 eV or more. The page takes nothing it cannot read for a pass: a file with a fit is warned
+  about unless its check says `passed`, whether the attribute is empty, missing, spelt another way or an outcome the
+  page does not know.
 - **The errors.** With `frac_err`, which `cmod_tools.py: get_cmod_kin_profs` is given (`fit_settings` keeps it),
   the fit's n_e and T_e errors are 20% of the fit by construction, and `fit_pe_err` adds a density to a
   temperature, so it is no error of p_e. That is why the page draws no band.
 - **The pressure fit**, `fit_pe`, is a fit of its own and not e·n_e·T_e of the other two, so compare it with the
   pressure points drawn from the measurements. 24e1499 fixes C-Mod_Analysis' `create_pe`, whose mixed units gave
   the pressure points the wrong weights in d6a6466's fit. On 1160616027, at ρ_pol 0.97 to 1, the fit's median is 1.7
-  times that of the edge pressure points, where d6a6466's was 3.8 times (read on 2026-10-12).
+  times that of the edge pressure points, where d6a6466's was 3.8 times (read on 2026-10-13).
 - **The scrape-off layer** is no measurement: `fit_reg` names the mtanh coefficients the fit sets to zero, which
   make its outer side flat or linear by construction, and at 24e1499 the fictitious points hold it as well.
 - **The two-point model.** `Te_sep_2pm` and `lambda_q_2pm` come from `power_balance.py: Teu_2pt_model`, which falls
