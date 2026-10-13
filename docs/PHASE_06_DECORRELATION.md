@@ -117,7 +117,8 @@ pulled at ce44c25, and the service restarted by the user at 09:33:26. J12g's
 swap followed: the app's TS files are 24e1499's, 116 of them, and d6a6466's
 are kept in `thomson_scattering_d6a6466/`, on the server and the laptop. The
 TS, MLP and every other page open on the server. J12i (2c303de) refreshed the
-Documentation page's TS counts for the new files, and is merged locally.
+Documentation page's TS counts for the new files. It is deployed: fusion_ui
+was pushed and pulled at 9fc071c, which needs no restart for the page's text.
 
 ## Decisions (the user, 2026-10-07)
 
