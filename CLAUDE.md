@@ -6,8 +6,9 @@ Guidance for Claude Code working in this repository.
 
 **Shot Explorer** — a Streamlit web app that gives the research group
 point-and-click access to fusion diagnostic data (Alcator C-Mod GPI imaging and
-Langmuir probes) and to the analyses in `imaging_methods`, `fusion_scripts` and
-`velocity_estimation`. It runs as a hosted service on the group server, next to
+Langmuir probes) and to the analyses in `imaging_methods` and `velocity_estimation`
+(and the hand-made 1160616 mask in `experimental_database`). It imports nothing
+from `fusion_scripts`. It runs as a hosted service on the group server, next to
 the data.
 
 **Read `docs/PLAN.md` before starting work.** It is the source of truth for the
@@ -26,8 +27,8 @@ the Streamlit process, so a slow compute must never start from a page. That is
 what `batch_only` is for (see the contract below).
 
 Phase 06 (decorrelation fields: every method's velocity field and every
-pixel's average, computed in batch through `fusion_scripts`'
-`decorrelation/pipeline.py`) is **done**. Its follow-ups, J12 (the Thomson
+pixel's average, computed in batch through `imaging_methods.decorrelation`,
+which L14 moved there from fusion_scripts) is **done**. Its follow-ups, J12 (the Thomson
 scattering profiles, `plots/thomson_profiles.py`) and J13 (the MLP profiles,
 `plots/mlp_profiles.py`, and their overlay on the TS view), are merged; the
 plan's Status says what is deployed. The plan, with a record of each job, is
@@ -44,7 +45,8 @@ remain open, except that four of the twelve names went with `velocity_field`
 `two_sided_exp`. The multi-shot view now puts these quantities on an axis, so
 the eight names and four behaviours decide what people will see there.
 
-`core/registry.py`, `core/params_ui.py`, `core/store.py`, `core/seed.py`,
+`core/registry.py`, `core/params_ui.py`, `core/store.py`, `core/seed.py` (the
+names of the retired seed import, no importer),
 `core/multishot.py` and `core/precompute.py` are in,
 `pages/2_single_shot.py` is a thin dispatcher over the registry,
 `pages/3_multi_shot.py` draws the scalar scatter (its pure logic lives in
@@ -57,7 +59,7 @@ phase-06 products (`pixel_averages`, `method_fields`, `blob_parameters`; see
 | module | spec | |
 |---|---|---|
 | `raw.py` | `raw_frames` | live: frames, click-a-pixel trace, mp4 export |
-| `dead_pixels.py` | `dead_pixels` | cached, raw files only, **`whole_record`**: the dead-pixel mask preprocessing uses, judged over the analysis window (the discharge window cut to the gas puff, `density_scan.puff`, found on the whole record), with every pixel's PDF and spectrum to check it by eye and, above them, the array mean with both windows, the baseline, threshold and level marked, so the cut can be checked too. A result stored before J6e has none of it and says so; `precompute dead_pixels --force` recomputes it. **The dead-pixel words**, which both dead-pixel views show through `explain()`: a plain summary, hand-written Markdown in `fusion_ui/data/dead_pixels_in_plain_words.md` beside `run_days.md` and read at every rerun, and `METHOD`, the technical text, in this module's expander |
+| `dead_pixels.py` | `dead_pixels` | cached, raw files only, **`whole_record`**: the dead-pixel mask preprocessing uses, judged over the analysis window (the discharge window cut to the gas puff, `imaging_methods.puff`, found on the whole record), with every pixel's PDF and spectrum to check it by eye and, above them, the array mean with both windows, the baseline, threshold and level marked, so the cut can be checked too. A result stored before J6e has none of it and says so; `precompute dead_pixels --force` recomputes it. **The dead-pixel words**, which both dead-pixel views show through `explain()`: a plain summary, hand-written Markdown in `fusion_ui/data/dead_pixels_in_plain_words.md` beside `run_days.md` and read at every rerun, and `METHOD`, the technical text, in this module's expander |
 | `stored_mask.py` | `stored_mask` | live, preprocessed files only: the mask the file was made with (`dead`, `dead_shot`, `dead_evidence`, `dead_psd_ratio`), where the run day's mask overrides the shot's own verdict, its source, and the window preprocessing cropped to |
 | `probe.py` | `probe_trace` | live: the ragged ASP/FSP trace |
 | `thomson_profiles.py` | `thomson_profiles` | live, `thomson_scattering` files only (raw): n_e, T_e and p_e against ρ_pol or R_mid, with the edge and core points in the window (only n_e > 0: a 0 is no measurement), the stored fit over its whole range **without a band**, and the separatrix. **A row's range is set by the points, not by the fit**: from 0 to a top that `y_limits` takes from the points and from the fit where it stays near them (the rule of the density scan's PDF in fusion_scripts, `density_scan/thomson_profiles.py`, ported with its constants and not imported), so a fit that runs away leaves through the top, the points above it are counted in the row's corner, and autoscale returns to the range. A fit with anything but the outcome `passed` in its `fit_check` gets a warning quoting it, that advises by the clause that failed (the core on axis, the outer end at ρ_pol 1.10); a `fit_note` that calls the core an extrapolation gets a caption; and the file's caveat is under the figure. The files are made with C-Mod_Analysis 24e1499, whose fit may move itself to a separatrix it finds: **where `fit_rho_shift` is not 0, the points are drawn moved with the fit, where it saw them** (their ρ_pol plus the shift; on R_mid the fit's own `fit_R_mid` of that), the separatrix is the fit's ρ_pol 1 and its R_mid there, the range is set by the points as drawn, and a caption gives the move and `Te_sep_fit`. `force_to_zero` gets a caption (fictitious points hold the n_e and T_e fits' outer side, not the p_e fit's), and the "About this file" list gives `Te_sep_fit` beside `Te_sep_2pm` and the folder of the separatrix code, which no commit pins. A `fit_points_check` that does not begin with `equal` gets a warning above the figure (the points drawn may not be where the fit saw them), and a `mapping_failure` is quoted where the points with no place are counted. A d6a6466 file, with no `fit_rho_shift`, is drawn as it always was. **On request, the MLP's profiles** on the n_e, T_e and p_e rows: the ASP file is its companion (`companions=("asp",)`), and the sidebar offers the overlay, off, only where the probe plunges in the window, judged from its track alone (`mlp.strokes_in`), with the DB's `mlp_mode` beside the offer as a hint. Switched on, it reads the probe's data with `core/mlp.py`'s reduction, reused, and places each 1 ms mean at R_mid,sep + ρ and at the ρ_pol of that through `fit_R_mid`, unmoved, so that both sets are on EFIT's mapping, unless the file's `Te_sep_2pm` or `Te_sep_fit` is chosen; a caption says how, and each row's range stays the TS points'. Off, the view is what it was without the ASP file. It reads the files and imports nothing from fusion_scripts |
@@ -84,9 +86,12 @@ The old `velocity_field` spec, a different estimator from the paper's, is gone
 no longer registered and counts what it would delete before it deletes. The
 server's were pruned on 2026-10-08 (J7).
 
-The `density_scan/results.json` seed is imported with `fusion-ui
-import-results`: 50 shots, 3880 pixels, 46 560 scalars (twelve names) under the
-plot key `density_scan_import`. The file holds fifteen names. Three are not
+The `density_scan/results.json` seed was imported once with `fusion-ui
+import-results`, which is **retired** (L14; the batch products replaced it):
+50 shots, 3880 pixels, 46 560 scalars (twelve names) under the plot key
+`density_scan_import`. Those rows stay in a ledger that holds them, shown on the
+multi-shot axis and removable with `prune`; `core/seed.py` keeps `IMPORT_PLOT`,
+`RECORD_NAMES` and `NOT_IMPORTED`. The file held fifteen names. Three were not
 imported (`core/seed.py: NOT_IMPORTED`): the seed stored the ellipse fitted to
 the contour under `lx_f`, `ly_f` and `theta_f`, not the Gaussian fit those names
 mean here, and its `theta_f` is in an older angle convention. `fusion-ui prune
@@ -104,16 +109,22 @@ python -m venv .venv
 # not on PyPI — install each editable from its local checkout first
 .venv/bin/pip install -e ../imaging-methods -e ../experimental_database \
   -e ../fusion_scripts -e ../velocity-estimation -e ../fpp-analysis-tools
+# (the app no longer imports fusion_scripts: it is here until step 6 of L14 takes
+#  it out, and only preprocessing, which writes the files, still needs it)
 .venv/bin/pip install -e ".[dev]"
 cp .env.example .env        # then edit for this machine
 .venv/bin/fusion-ui init-db && .venv/bin/fusion-ui rescan
 .venv/bin/streamlit run fusion_ui/app.py
 ```
 
-New code adds no import from `fusion_scripts`, whose ripe methods are to move to
-`imaging_methods` (L14 in `docs/PHASE_06_DECORRELATION.md`; the plan, with a
-survey of the imports the app has, is
-`fusion_scripts/MIGRATION_TO_IMAGING_METHODS.md`).
+**The app imports nothing from `fusion_scripts`**, and
+`tests/test_no_fusion_scripts.py` enforces it over every module of `fusion_ui/`
+and `tests/` (its list of forbidden top-level names is `tests/import_guard.py`).
+The ripe methods moved to `imaging_methods` (the decorrelation pipeline, the
+dead-pixel estimate, the puff window, the LCFS spline, the two-sided fit), and the
+hand-made 1160616 mask to `experimental_database` (L14, `docs/PHASE_06_DECORRELATION.md`;
+the plan is `fusion_scripts/MIGRATION_TO_IMAGING_METHODS.md`). New methods go to
+`imaging_methods`. The suite passes in a venv without fusion_scripts.
 
 On the dev machine the checkouts are under `/home/sosno/Git` and the data is
 `~/Data/alcator`: 20 APD shots (20 preprocessed files, 9 raw), one phantom
@@ -166,8 +177,9 @@ the hash, the blob path and the ledger consistent.
 hashing it would invalidate every result on every commit. It is shown under the
 figure with a Recompute button, and the person looking at the plot decides
 whether the version matters. It holds the commit of four repositories:
-`fusion_ui`, `imaging_methods`, `fusion_scripts` and `velocity_estimation`
-(`core/versions.py`).
+`fusion_ui`, `imaging_methods`, `velocity_estimation` and `experimental_database`
+(`core/versions.py`; the last holds the hand-made 1160616 mask). Rows stored
+before L14 name `fusion_scripts` instead of the last, as history.
 
 ## The catalog
 
@@ -406,14 +418,16 @@ shot, and is `batch_only`. `plots/method_fields.py` and `plots/blob_parameters.p
 declare `requires="pixel_averages"` and read the stored averages back, in
 minutes a shot, so a change of tracking or TDE settings does not pay for the
 2DCA again. All three set `preprocessed=True` and are thin adapters over
-`decorrelation.pipeline` in `fusion_scripts`. **Their keys, and the module and
+`imaging_methods.decorrelation` (moved there from fusion_scripts' `decorrelation/pipeline.py`).
+**Their keys, and the module and
 class names of their params, are permanent**, since they are part of the cache
 key: `test_the_default_keys_are_stable` in `tests/test_products.py` pins the
 three default hashes. `plots/_pipeline.py` is the only module that imports the
-API (a test fails on a second one). It imports `fusion_ui.config` first, because
-fusion_scripts' `config` fills any `FUSION_*` variable still unset from its own
-`.env`, and calls `core.fusion_scripts.import_config()` before the API, because
-under Streamlit the bare name `config` finds `fusion_ui/config.py`.
+API (a test fails on a second one), and passes `hand_made=experimental_database.
+hand_made_dead_pixel_masks()` to `dead_mask` for the nine 1160616 files, which
+store no mask. The import-order rule it had while the API lived in fusion_scripts
+(whose `config` filled the `FUSION_*` variables, and which the bare name `config`
+shadowed under Streamlit) is gone: the library reads no `config`.
 
 **Scalars.** `method_fields` writes 20 names and `blob_parameters` 12, per live
 pixel as `(x, y, name)`: each module's `SCALARS` maps a name to its blob
@@ -459,8 +473,9 @@ when its input changed (only a `rescan` refreshes `shots.mtime`), when its
 upstream row was deleted or recomputed in place, or when its upstream is stale
 itself. A run with no `input_mtime`, written before v4, is unknown and never
 listed, so legacy results are not recomputed wholesale. The Fields page badges a
-stale result, and one made under another `fusion_scripts` commit than the
-checkout's; both are information, and nothing recomputes by itself.
+stale result, and one made under another `imaging_methods` commit than the
+checkout's, or before the methods moved to it (a `code_version` that names
+`fusion_scripts`, whose regression found the stored products bit-equal); both are information, and nothing recomputes by itself.
 `fusion-ui precompute … --stale` recomputes the stale ones in place, upstream
 first, each with the parameters it was stored with.
 
@@ -511,8 +526,7 @@ parameter. Extraction is memoised with `st.cache_data` on
 
 **`R−R_sep` is a horizontal distance to the separatrix at the pixel's own
 height, not a flux coordinate** — `core/geometry.py` reuses
-`plotting_scripts.figure_plots.calculate_splinted_LCFS` (imported inside the
-function; it pulls in matplotlib) and `np.interp`s the pixel's Z into the
+`imaging_methods.calculate_splinted_LCFS` and `np.interp`s the pixel's Z into the
 outboard leg, whose hardcoded C-Mod numbers will not carry to another machine.
 Anything unexpected returns `None` and the label falls back to `R, Z`. Probe
 `ρ` is the window mean of the `rho_<quantity>_<position>` companion, and the

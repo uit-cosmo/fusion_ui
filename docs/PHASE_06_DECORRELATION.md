@@ -2,8 +2,10 @@
 
 Every method's velocity field for every shot, and every pixel's conditional
 average at several lags, computed in batch on the group server and browsed in
-Shot Explorer. The physics stays in `fusion_scripts` (the paper's code); Shot
-Explorer owns the parameters, the cache, the batch and the views.
+Shot Explorer. The physics lives in `imaging_methods`: it was written to stay in
+`fusion_scripts` (the paper's code), and L14 moved it, with the paper's own
+runs now calling it from there. Shot Explorer owns the parameters, the cache,
+the batch and the views.
 
 This file is written for an **orchestrating session** that launches one agent
 per job (see [Orchestration](#orchestration)). A job's agent should need only
@@ -377,7 +379,10 @@ the record · 1–3 min/shot                 ~1 min/shot
   limitation in `PLAN.md`).
 - The page never computes. A cache miss shows the command that would fill it.
 
-### The physics API: `fusion_scripts/decorrelation/pipeline.py`
+### The physics API: `imaging_methods.decorrelation`
+
+*L14 moved it here from `fusion_scripts/decorrelation/pipeline.py`; the job records below
+keep the names they were written under.*
 
 This is the only module fusion_ui imports from the decorrelation code. It is
 pure: arguments in, `xr.Dataset` out. No caching, no paths, no `config` at call
@@ -701,9 +706,10 @@ Neither is in the cache key, on purpose.
    `PIXEL_VIEWS`.
 4. Run `fusion-ui precompute <key> --workers 7`. The banks are reused.
 
-Step 1 changes with L14. Once the pipeline has moved to `imaging_methods`, the
-new function goes there instead, and until then it adds no new import from
-fusion_scripts to the app: `plots/_pipeline.py` stays the only importer.
+Step 1 changed with L14. The pipeline has moved to `imaging_methods`
+(`imaging_methods/decorrelation.py`), so a new function goes there, with its
+test, and `plots/_pipeline.py` stays the only module of the app that imports
+it. The app imports nothing from fusion_scripts, and a test enforces it.
 
 ### Dead pixels (done, 2026-10-07)
 

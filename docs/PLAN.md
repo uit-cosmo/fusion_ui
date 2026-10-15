@@ -251,7 +251,8 @@ consumers rather than one imagined one.
 params hash, the netCDF blob store and the scalar writer. Retrofit phase 01's
 views onto it and delete the bespoke wiring. Import
 `density_scan/results.json` through `ResultManager` as seed rows so the
-multi-shot view has data before any heavy compute runs.
+multi-shot view has data before any heavy compute runs. (*The importer was
+retired in L14; the rows stay under `density_scan_import`.*)
 
 **Ships: adding a plot becomes a one-file job.**
 **On landing: write the `PlotSpec` contract into `CLAUDE.md`.** — done; it is
@@ -479,7 +480,8 @@ and of the physics (J8) are closed.
 Every method's velocity field (2DCA by maximum and by centroid, 2DCC, the TDEs)
 and every pixel's conditional average at several lags. The 2DCA at every pixel
 is computed once per shot in batch, and the methods are derived from it. The
-physics stays in `fusion_scripts` behind a pure API, and a Fields page browses
+physics was written to stay in `fusion_scripts` behind a pure API (L14 moved it to
+`imaging_methods`), and a Fields page browses
 the results. The plan, written for an orchestrator that launches one agent per
 job, with a record of each job, is
 [`docs/PHASE_06_DECORRELATION.md`](PHASE_06_DECORRELATION.md). The batch has run
@@ -488,8 +490,8 @@ of 1140827. The other shots wait for a fill (L5 in the plan).
 
 What landed:
 
-- **The physics API,** `decorrelation/pipeline.py` in `fusion_scripts`, which the
-  paper's `cmod_scan.py` calls too (J1). On the server the products of the nine
+- **The physics API,** `decorrelation/pipeline.py` in `fusion_scripts` (J1), now
+  `imaging_methods.decorrelation` (L14), which the paper's `cmod_scan.py` calls too. On the server the products of the nine
   1160616 shots equal the paper's own results, frozen before the refactor, bit
   for bit (J0, J7).
 - **The store** (J2a): `PlotSpec.batch_only`, `store.lookup` and
@@ -536,9 +538,16 @@ What came out differently from the plan:
 - **Three pieces came after the plan.** The trajectory on the lag strip (J8a)
   and the Documentation page (J11) were asked for at J8, and the Thomson
   scattering profiles (J12) on 2026-10-09.
-- **The app is to come off `fusion_scripts`.** After J8 the user asked that it
-  not depend on it, so the ripe methods are to move to `imaging_methods`: L14,
-  planned in `fusion_scripts/MIGRATION_TO_IMAGING_METHODS.md` and not started.
+- **The app came off `fusion_scripts`** (L14). After J8 the user asked that it
+  not depend on it, so the ripe methods moved to `imaging_methods` and the
+  hand-made 1160616 mask to `experimental_database`. Step 3, in this repository,
+  switched the imports, retired the seed import and the copies, and added the
+  tests that no default hash moved and that nothing imports fusion_scripts. It is
+  planned in `fusion_scripts/MIGRATION_TO_IMAGING_METHODS.md`; the regression on
+  the server and the deploy are still to come. `code_version` now names `fusion_ui`,
+  `imaging_methods`, `velocity_estimation` and `experimental_database`; stored
+  rows keep their `fusion_scripts=` label, and the Fields page says that such a
+  run predates the move.
 
 What was left for later is the plan's "Later" table.
 

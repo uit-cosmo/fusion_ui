@@ -4,9 +4,10 @@ A browser UI over the group's fusion diagnostic data. Pick a shot and a plot,
 get the plot; pick a scalar and an x-axis, get it across every shot.
 
 It runs as a hosted service on the group server, next to the data, and drives
-the analysis code in [`imaging_methods`](https://github.com/Sosnowsky/imaging-methods),
-[`fusion_scripts`](https://github.com/Sosnowsky/fusion_scripts) and
-`velocity_estimation`.
+the analysis code in [`imaging_methods`](https://github.com/Sosnowsky/imaging-methods)
+and `velocity_estimation`. It imports nothing from
+[`fusion_scripts`](https://github.com/Sosnowsky/fusion_scripts) (a test enforces it), which
+still writes the preprocessed files the app reads.
 
 ## Views
 
@@ -251,7 +252,9 @@ example.
 python -m venv .venv
 # imaging_methods, experimental_database, fusion_scripts, velocity_estimation
 # and fppanalysis are not on PyPI — install each editable from its checkout
-# first, then the pinned versions below are already satisfied.
+# first, then the pinned versions below are already satisfied. The app no
+# longer imports fusion_scripts (it stays in the line below until it is taken
+# out of the dependencies; it still writes the preprocessed files).
 .venv/bin/pip install -e ../imaging-methods -e ../experimental_database \
   -e ../fusion_scripts -e ../velocity-estimation -e ../fpp-analysis-tools
 .venv/bin/pip install -e ".[dev]"
@@ -266,7 +269,6 @@ cp .env.example .env          # then edit for your machine
 ```bash
 fusion-ui init-db          # create or migrate the app's SQLite database
 fusion-ui rescan           # index the data tree into `shots` (cron this)
-fusion-ui import-results   # seed `scalars` from density_scan/results.json (once)
 fusion-ui precompute PLOT [PLOT …]  # run plots' compute over the shots that have a file they accept, to warm the cache
     --shot N               #   only this shot (repeatable; adds to --run-day)
     --run-day D            #   only the shots of this run day, its first 7 digits (repeatable; adds to --shot)
