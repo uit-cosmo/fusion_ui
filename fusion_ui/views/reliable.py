@@ -1,7 +1,7 @@
 """The paper's cut: the pixels ``reliable()`` keeps, the same ones for every method.
 
-``fusion_scripts/decorrelation/apd_check/figures.py`` (``reliable``, line 127) is how the paper decides
-which pixels of a velocity field to believe, once, for all the methods together::
+``imaging_methods.decorrelation.reliable`` (moved there from fusion_scripts' ``apd_check/figures.py`` in L14)
+is how the paper decides which pixels of a velocity field to believe, once, for all the methods together::
 
     ok = (nlags_com >= MIN_LAGS) & (nevents >= min_events)
     for v in (vr_com, vz_com, vr3_tde, vz3_tde, vr2_tde, vz2_tde):
@@ -14,17 +14,20 @@ figure can be held against the paper's: with it on, every panel shows only these
 panel's own method did there. The page's own thresholds stand in for ``MIN_LAGS`` and ``MIN_EVENTS``; their
 defaults, 8 and 200, are the paper's.
 
-The rule is a pure function of a ``method_fields`` dataset, and ``tests/test_views_reliable.py`` holds it
-equal to ``reliable()`` itself on a real result. ``reliable()``'s ``ca`` argument, which also asks for
-``vr`` of the ``_ca`` group to be finite, is left out: that group is not part of phase 06.
+The rule is a pure function of a ``method_fields`` dataset: the pixels it keeps are the library's own
+``reliable`` (called with the page's thresholds), and this module adds the reason for each one it leaves
+out. ``reliable()``'s ``ca`` argument, which also asks for ``vr`` of the ``_ca`` group to be finite, is left
+out: that group is not part of phase 06. ``tests/test_views_reliable.py`` holds the reasons to the library's
+verdict.
 """
 
 from dataclasses import dataclass
 
 import numpy as np
 
-#: The 2DCA track the paper's rule reads (``figures.TRACK``): the contour's centroid. The maximum sticks
-#: to the reference pixel for a few lags where the pulse passes close to its centre.
+#: The 2DCA track the paper's rule reads (the library's ``TRACK``, ``"_com"``, which a test holds this to):
+#: the contour's centroid. The maximum sticks to the reference pixel for a few lags where the pulse passes
+#: close to its centre.
 TRACK = "com"
 #: What must be a number besides the track's own lags and the events, in the order the paper lists it, with
 #: the method each belongs to, for the reason a pixel is left out.
@@ -36,6 +39,8 @@ FINITE = (
     ("vr2_tde", "2TDE"),
     ("vz2_tde", "2TDE"),
 )
+#: Every variable the library's ``reliable`` reads of a ``method_fields``.
+READ = (f"nlags_{TRACK}", "nevents", *(name for name, _ in FINITE))
 PREFIX = "cut (paper's rule): "
 
 
@@ -62,7 +67,7 @@ def rule(fields, shape, min_lags, min_events):
     """The pixels the paper's ``reliable()`` keeps of ``fields``, and why it leaves the others out.
 
     ``fields`` is a ``method_fields`` dataset (or ``None``, or one that lacks a variable: a variable that
-    is not there is read as all-NaN, so nothing is kept, where the paper's code would raise).
+    is not there is read as all-NaN, so nothing is kept, where the library's ``reliable`` would raise).
     ``shape`` is ``(ny, nx)``. A NaN count of lags or events is below any minimum, as in the paper's
     comparison, and the dead pixels are left out by the velocities they do not have, as there.
     """
@@ -77,9 +82,18 @@ def rule(fields, shape, min_lags, min_events):
         enough_lags, enough_events = lags >= min_lags, events >= min_events
     finite = {name: np.isfinite(read(name)) for name, _ in FINITE}
     inside = interior(shape)
-    ok = enough_lags & enough_events & inside
-    for isnumber in finite.values():
-        ok = ok & isnumber
+    # Imported here: ``fusion_ui.plots`` imports ``fusion_ui.views``, which imports this module.
+    from fusion_ui.plots._pipeline import pipeline
+
+    if fields is not None and all(name in fields for name in (*READ,)):
+        ok = np.asarray(
+            pipeline.reliable(
+                fields, min_lags=min_lags, min_events=min_events, track="_" + TRACK
+            ),
+            dtype=bool,
+        )
+    else:
+        ok = np.zeros(shape, dtype=bool)
 
     reason = np.full(shape, "", dtype=object)
     for y, x in zip(*np.nonzero(~ok)):

@@ -13,7 +13,7 @@ conditional average and the pixel's own series (what each is, and its unit, is
 - ``taud`` [s] and ``lam``: the duration time and the asymmetry of the two-sided exponential pulse (in
   [0, 1]), fitted to the PSD of the pixel's own record.
 
-``compute`` is ``decorrelation.pipeline.blobs``, returned unchanged (variable names as in the paper's
+``compute`` is ``imaging_methods.decorrelation.blobs``, returned unchanged (variable names as in the paper's
 ``apd<shot>_blobs.nc``; R and Z in metres; the ``units`` attribute reads "m, m^2, s, rad"). It takes about a
 minute a shot once the bank exists.
 

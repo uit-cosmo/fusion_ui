@@ -41,29 +41,17 @@ from fusion_ui.core import loader, registry
 #: fwhm_sizes.py do. (This is also, concretely, upstream's own ``/ 100``.)
 CM = 100.0
 
-#: The C-Mod APD camera's dead-pixel mask: 9 pixels wide (x) by 10 tall (y).
-#: Copied from ``fusion_scripts/density_scan/dead_pixel_mask.py`` rather than
-#: imported -- importing ``density_scan`` pulls in its package ``__init__``,
-#: which reads ``config`` (and hence the environment) at import time. Rows
-#: are listed top-to-bottom in Z as upstream wrote them; upstream reverses the
-#: list when building its DataArray, so :func:`_dead_pixel_mask` does the same.
-_DEAD_PIXEL_ROWS = [
-    [True, True, False, True, False, False, True, True, True],
-    [False, False, False, False, False, False, False, True, True],
-    [True, False, False, False, True, False, False, False, True],
-    [False, False, False, True, False, False, False, False, False],
-    [True, False, False, False, False, False, False, False, True],
-    [False, False, False, False, False, False, False, False, True],
-    [False, False, False, False, False, False, False, True, False],
-    [False, True, False, True, False, False, False, False, True],
-    [True, True, False, False, False, False, False, False, False],
-    [False, False, True, False, False, False, False, False, False],
-]
+#: The C-Mod APD camera's dead-pixel mask is 9 pixels wide (x) by 10 tall (y): the
+#: hand-made 1160616 one, held by ``experimental_database`` (moved there from
+#: fusion_scripts' ``density_scan/dead_pixel_mask.py``). It is applied to any shot
+#: whose array has that shape, whatever the run day (a quirk kept as it was).
 
 
 def _dead_pixel_mask():
-    """The mask as a ``(y, x)`` boolean array, oriented as upstream builds it."""
-    return np.asarray(_DEAD_PIXEL_ROWS[::-1], dtype=bool)
+    """The mask as a ``(y, x)`` boolean array, as ``experimental_database`` builds it (y = 0 the bottom row)."""
+    from experimental_database import hand_made_dead_pixel_mask
+
+    return np.asarray(hand_made_dead_pixel_mask(1160616).values, dtype=bool)
 
 
 @dataclass

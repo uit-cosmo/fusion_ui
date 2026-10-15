@@ -33,7 +33,6 @@ from dataclasses import dataclass
 from fractions import Fraction
 
 from fusion_ui.core import params_ui, registry, scalar_labels, seed
-from fusion_ui.core.fusion_scripts import import_config
 from fusion_ui.core.scalar_labels import NO_UNIT
 from fusion_ui.plots import blob_parameters, method_fields
 from fusion_ui.views import products as product_views
@@ -58,7 +57,7 @@ SEED = seed.IMPORT_PLOT
 
 #: What every source but the products writes: each single-shot spec that writes scalars, by plot key, and
 #: the seed. A test runs every registered spec's ``scalars`` and holds this to it; the seed's names are the
-#: fields of ``density_scan.discharge.BlobParameters`` but the three of ``seed.NOT_IMPORTED``.
+#: fields of the seed record (``seed.RECORD_NAMES``) but the three of ``seed.NOT_IMPORTED``.
 OLDER_SOURCES = {
     "two_dca": ("number_events",),
     "taud_psd": ("taud_psd", "lambda_psd"),
@@ -116,9 +115,9 @@ TABLES = ("products", "settings", "scalars", "cuts")
 #: computation was checked. Update it whenever the text is read against the code again.
 CHECKED_AGAINST = {
     "fusion_scripts": "9e14f01",
-    "imaging-methods": "8a9bc07",
+    "imaging-methods": "5816550",
     "velocity-estimation": "b3b6945",
-    "experimental_database": "47b2d6b",
+    "experimental_database": "9140930",
     "fpp-analysis-tools": "6f98750",
 }
 
@@ -303,12 +302,12 @@ def _ordinal(n):
 def facts():
     """``{name: text}``: the numbers the prose quotes, read from the code that uses them.
 
-    The fusion_scripts constants of preprocessing, the puff window and the dead-pixel estimate; the
+    The imaging_methods constants of preprocessing, the puff window and the dead-pixel estimate; the
     Fields page's default cuts; the defaults of the older single-shot specs; the constants of the rule
     that sets the range of a Thomson scattering row; and those of the MLP profiles' reduction.
     """
-    import_config()  # density_scan reads its settings by the bare name `config`
-    from density_scan import dead_pixels, preprocess, puff
+    import imaging_methods as im
+    from imaging_methods import dead_pixels, puff
 
     from fusion_ui.core import loader, mlp
     from fusion_ui.plots import (
@@ -318,13 +317,14 @@ def facts():
         velocity_tde,
     )
 
+    radius = im.get_default_apd_method_params().preprocessing.radius
     contour = velocity_contour.ContourVelocityParams()
     tde = velocity_tde.TdeVelocityParams()
     cuts = Cuts()
     return {
-        "preprocess.radius": _number(preprocess.RADIUS),
-        "preprocess.window": _number(2 * preprocess.RADIUS + 1),
-        "preprocess.trimmed": _number(2 * preprocess.RADIUS),
+        "preprocess.radius": _number(radius),
+        "preprocess.window": _number(2 * radius + 1),
+        "preprocess.trimmed": _number(2 * radius),
         "puff.smooth": _ms(puff.SMOOTH),
         "puff.baseline": _ms(puff.BASELINE_SPAN),
         "puff.min_on": _ms(puff.MIN_ON),
@@ -702,7 +702,7 @@ def diagram():
   edge [color="#666666", arrowsize=0.6, fontname="Helvetica", fontsize=9, fontcolor="#555555"];
 
   subgraph cluster_files {{
-    label="preprocessing (fusion_scripts, density_scan)"; style="rounded,dashed"; color="#999999"; fontcolor="#444444";
+    label="preprocessing (fusion_scripts)"; style="rounded,dashed"; color="#999999"; fontcolor="#444444";
     raw [label="raw APD file", {data}];
     window [label="discharge window\\n(discharge database)", {data}];
     puff [label="analysis window\\npuff.find_puff"];

@@ -11,7 +11,7 @@ hundred bytes each, so there is nothing to compute and nothing to cache.
 ``dead_shot`` (y, x)
     This shot's own verdict, before the run day's rule.
 ``dead_evidence`` and ``dead_psd_ratio`` (y, x)
-    What that verdict rests on: ``density_scan.dead_pixels``' evidence codes (-1 no data, 0 dead, 1 live through a
+    What that verdict rests on: ``imaging_methods.dead_pixels``' evidence codes (-1 no data, 0 dead, 1 live through a
     neighbour, 2 live by a red spectrum) and the PSD ratio the red-spectrum test compares with its threshold.
 attributes
     ``dead_mask_source`` says where the mask came from, in words. ``analysis_window`` and ``discharge_window`` (each
@@ -19,7 +19,7 @@ attributes
     ``dead_thresholds``, ``preprocess_radius``, ``fusion_scripts_commit`` and ``created`` say how the file was made.
 
 A file made before masks were stored has none of it. On 1160616 the analyses read the hand-made mask for such a file
-(``decorrelation.pipeline.dead_mask``), and so does this view, and says so. Anywhere else the mask the file was made
+(``imaging_methods.decorrelation.dead_mask``), and so does this view, and says so. Anywhere else the mask the file was made
 with is unknown, possibly another run day's, and the view says that instead of drawing a guess.
 
 Every variable and attribute is optional but ``dead``: a file that stores only part of it draws what it has.
@@ -34,7 +34,7 @@ import plotly.graph_objects as go
 from fusion_ui.core import loader, registry
 from fusion_ui.plots import dead_pixels
 
-# Why a pixel is dead or live. The first four are density_scan.dead_pixels' evidence codes, the codes the file stores
+# Why a pixel is dead or live. The first four are imaging_methods.dead_pixels' evidence codes, the codes the file stores
 # in dead_evidence; the other three are classes of this view's own.
 NO_DATA, DEAD, NEIGHBOUR, RED = -1, 0, 1, 2
 LIVE = 3  # live, and the file does not say how it was found
@@ -141,7 +141,7 @@ def read(ds, target):
     """The :class:`StoredMask` of an open preprocessed file.
 
     ``target`` names the shot, which decides the fallback: a file that stores no ``dead`` is on the hand-made mask
-    for 1160616, as ``decorrelation.pipeline.dead_mask`` reads it, and has none anywhere else.
+    for 1160616, as ``imaging_methods.decorrelation.dead_mask`` reads it, and has none anywhere else.
     """
     out = StoredMask()
     attrs = ds.attrs

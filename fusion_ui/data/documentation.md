@@ -52,7 +52,9 @@ there.
 
 The raw file `apd_<shot>.nc` holds the digitizer's voltage at every pixel, `frames` (y, x, time), and each
 pixel's R and Z. The products read the preprocessed file, `apd_<shot>_preprocessed.nc`, which
-`density_scan/preprocess.py: preprocess_shot` (fusion_scripts) makes from the raw file:
+`density_scan/preprocess.py: preprocess_shot` makes from the raw file. Preprocessing itself still runs in
+fusion_scripts, which writes the files; the methods it calls (the dead-pixel estimate, the puff window) and every
+analysis below live in imaging_methods:
 
 1. **Running normalisation** (`experimental_database/preprocessing.py: run_norm_ds`, through
    `fppanalysis.run_norm`). Each pixel's series has its running mean subtracted and is divided by its running
@@ -79,16 +81,16 @@ draws them.
 
 **Older files.** The nine 1160616 files predate this step. They were made by
 `density_scan/data_processing.py: preprocess_data`, through an earlier version of `preprocess_dataset` that
-kept the frames in float64, with the hand-made 1160616 mask (`density_scan/dead_pixel_mask.py`), over the
+kept the frames in float64, with the hand-made 1160616 mask (`density_scan/dead_pixel_mask.py` in fusion_scripts; now `experimental_database.hand_made_dead_pixel_mask`), over the
 discharge window and with no cut to the puff. They store no mask, and the analyses use the hand-made one for
-them (`decorrelation/pipeline.py: dead_mask`). Any other file that stores no mask is refused: it may have
+them (`imaging_methods.decorrelation.dead_mask`, given the table of `experimental_database`). Any other file that stores no mask is refused: it may have
 been made with another run day's mask, and must be preprocessed again.
 
 ### The analysis window
 
 The discharge window, `t_start..t_end` in the discharge database, often starts before the gas puff, while
 the live pixels still read the dark level; on many shots it is the whole record. That dark stretch distorts
-every statistic taken over the window. `density_scan/puff.py: find_puff` cuts the window to the puff:
+every statistic taken over the window. `imaging_methods.puff.find_puff` (moved there from fusion_scripts' `density_scan/puff.py`) cuts the window to the puff:
 
 1. The signal is the mean over the pixels of the raw frames, smoothed by a running mean over
    {{value:puff.smooth}}.
@@ -119,8 +121,8 @@ edited later, the stored result and a recompute disagree, and nothing marks the 
 
 ### Dead pixels
 
-A pixel is *dead* when its channel carries no plasma signal. `density_scan/dead_pixels.py: estimate_shot`
-judges every pixel of a raw file over the shot's analysis window (`estimate`):
+A pixel is *dead* when its channel carries no plasma signal. `imaging_methods.dead_pixels.estimate` (moved there from fusion_scripts' `density_scan/dead_pixels.py`, whose `estimate_shot` finds the window and calls it)
+judges every pixel of a raw file over the shot's analysis window:
 
 1. **Red spectrum.** The pixel's Welch power spectrum gives a ratio: its median over {{value:dead.red_band}}
    divided by its median over {{value:dead.noise_band}}, where only digitizer noise is left. Noise is white,
@@ -158,8 +160,8 @@ with. Both carry the method in full.
 `pixel_averages`, `method_fields` and `blob_parameters` read preprocessed files only. Each takes the file
 sliced to the discharge window, with R and Z in metres and the whole record loaded into memory
 (`fusion_ui/plots/_pipeline.py: record`, which refuses an R that is not a major radius in centimetres). The
-physics is `decorrelation/pipeline.py` in fusion_scripts. The paper's own runs
-(`decorrelation/apd_check/cmod_scan.py`) call the same functions, so the app and the paper read the same
+physics is `imaging_methods.decorrelation`, which moved there from fusion_scripts' `imaging_methods.decorrelation` (L14). The paper's own runs
+(`cmod_scan` in fusion_scripts) call the same functions, so the app and the paper read the same
 numbers.
 
 ## How the quantities depend on one another
@@ -180,7 +182,7 @@ paper's code could read them as they are.
 
 ### pixel_averages
 
-For each live pixel in turn as the reference, `decorrelation/pipeline.py: average` runs the
+For each live pixel in turn as the reference, `imaging_methods.decorrelation.average` runs the
 two-dimensional conditional average (2DCA), `imaging_methods/cond_av.py: find_events_and_2dca`, on the
 record:
 
@@ -213,7 +215,7 @@ everything else reads it back.
 
 ### method_fields
 
-`decorrelation/pipeline.py: fields` reads seven velocities at every live pixel: three 2DCA tracks through
+`imaging_methods.decorrelation.fields` reads seven velocities at every live pixel: three 2DCA tracks through
 the pixel's own conditional average, and three- and two-point time-delay estimation (TDE) twice, off the
 record and on the average. A pixel without events has no tracks and no TDE on the average; the TDE off the
 record needs no events.
@@ -248,7 +250,7 @@ average lag by lag, and fit a velocity to its path.
   average, one step out from the peak. The brightest pixel is normally the reference: `check_max` makes the
   reference the largest of its neighbourhood in every event.
 
-**The fit** (`decorrelation/pipeline.py: track`, through
+**The fit** (`imaging_methods.decorrelation.track`, through
 `imaging_methods/velocity_estimates.py: get_combined_mask` and `get_averaged_velocity_from_position`):
 
 1. A lag at which the tracker found no position is filled by linear interpolation between the lags around
@@ -271,7 +273,7 @@ For each track T the product stores `vr_T` and `vz_T`, `nlags_T` (the number of 
 lag, NaN where the tracker found nothing) and `fit_T` (true at the lags the slope rests on). A lag filled in
 step 1 can be in `fit_T`, and counted in `nlags_T`, with no position.
 
-**TDE off the record** (`decorrelation/pipeline.py: tde_fields`, with `velocity_estimation`'s
+**TDE off the record** (`imaging_methods.decorrelation.tde_fields`, with `velocity_estimation`'s
 cross-correlation method, `TDEMethod.CC`). The delay from a pixel to a neighbour is the lag at which the
 cross-correlation of the neighbour's series with the pixel's, over the whole record, peaks
 (`velocity_estimation/time_delay_estimation.py: estimate_time_delay_ccf`):
@@ -299,16 +301,16 @@ array, two on an edge, one in a corner. The pixel's velocity is the mean over th
 
 `cc_tde` is the mean, over the pairs used, of the smaller of the two cross-correlation peaks of a pair.
 
-**TDE on the conditional average** (`decorrelation/pipeline.py: ca_tde`). The same two estimates, with each
+**TDE on the conditional average** (`imaging_methods.decorrelation.ca_tde`). The same two estimates, with each
 delay read off the pixel's own `cond_av` instead of off the record: the lag at which `cond_av` peaks at the
 pixel and at each live neighbour, the maximum of a quartic spline through the lags
-(`density_scan/peak_time.py: get_maximum_time`). The delay along the row is the mean of t(x+1) − t(x) and
+(`imaging_methods.get_maximum_time`, from fusion_scripts' `density_scan/peak_time.py`). The delay along the row is the mean of t(x+1) − t(x) and
 t(x) − t(x−1), over the neighbours there are; the delay along the column likewise. The pitches are read off
 the array's first pixels. The two-point estimate is NaN, not 0, for a delay of exactly 0.
 
 ### blob_parameters
 
-`decorrelation/pipeline.py: blobs` (`pixel_blob` at each pixel) gives thirteen numbers at every live pixel,
+`imaging_methods.decorrelation.blobs` (`pixel_blob` at each pixel) gives thirteen numbers at every live pixel,
 from the pixel's own conditional average at lag 0 and from its series in the record:
 
 - `nevents`, the events behind the average, which `method_fields` writes as the scalar `number_events`;
@@ -327,8 +329,8 @@ entries under *Every scalar name* say how each is computed.
 
 Before phase 06, each quantity had a spec of its own on the Single shot page, computed at one reference
 pixel, most of them from a `two_dca` run. Four write names the products also write (`two_dca`,
-`taud_psd`, `fwhm_sizes`, `gaussian_sizes`), and so does the seed imported from `density_scan/results.json`
-(`density_scan_import`).
+`taud_psd`, `fwhm_sizes`, `gaussian_sizes`), and so does the seed once imported from `density_scan/results.json`
+(`density_scan_import`; the importer is retired, the rows stay).
 They use the same functions with other settings, except where an entry below says otherwise. Those built on
 `two_dca` use a 2DCA threshold of {{value:older.two_dca_threshold}} by default, where the products use
 `averages.threshold` ({{default:averages.threshold}} by default), and `velocity_contour` and
@@ -345,7 +347,7 @@ computed in minutes from the bank already stored.
 {{table:settings}}
 
 The defaults are the twodca deck's C-Mod settings (`twodca_manuscript/datasets/cmod.py: params` and `SPEC`,
-which `decorrelation/pipeline.py` reads), the same for every shot. A shot they do not suit shows up as
+which `imaging_methods.decorrelation` reads), the same for every shot. A shot they do not suit shows up as
 failed pixels; it is not retuned.
 
 To compute with other settings, name the part that changes in a JSON file, such as
@@ -375,7 +377,7 @@ lag, in R and in Z, and the number of lags the slope rests on (*method_fields* a
 whole pixels, refined by at most half a pixel. Where a structure passes close to the centre of the
 reference pixel, the maximum can stay on that pixel for several lags, and the slope then reads low. The
 paper's figures and its `reliable()` cut use the centroid track for this reason
-(`decorrelation/apd_check/figures.py: TRACK`).
+(`imaging_methods.decorrelation.TRACK`).
 
 ### `vr_com`, `vz_com`, `nlags_com`, `level_com`
 
@@ -503,7 +505,7 @@ the lx axis, turning towards Z, between 0 and π.
   the Gaussian fit, and its `theta_f` was in an older angle convention. Two quantities under one name would
   have shared an axis, so the three were deleted from the ledger (`fusion_ui/core/store.py:
   prune_scalars`, through `fusion-ui prune --plot density_scan_import --scalar lx_f --scalar ly_f --scalar
-  theta_f`) and `fusion-ui import-results` no longer writes them (`fusion_ui/core/seed.py: NOT_IMPORTED`).
+  theta_f`) and the importer (since retired) no longer wrote them (`fusion_ui/core/seed.py: NOT_IMPORTED`).
   The seed's other twelve names stay. On the Multi shot page these three names have no seed source any
   more.
 - The older `gaussian_sizes` runs this fit, with the same defaults, on a `two_dca` average.
@@ -608,7 +610,7 @@ nothing and changes no stored number.
 - **The paper's cut** keeps the same pixels in every panel: those whose centroid track rests on at least the
   minimum of lags and events, whose centroid and both TDEs off the record gave a velocity, and which are not
   on the border (`fusion_ui/views/reliable.py: rule`, which a test holds equal to
-  `decorrelation/apd_check/figures.py: reliable`).
+  `imaging_methods.decorrelation.reliable`).
 
 A pixel the cuts leave out keeps its value in the product and in the ledger, and the Multi shot page's means
 include it. All seven panels share one arrow scale, set by the three 2DCA tracks. The arrows of the TDEs off

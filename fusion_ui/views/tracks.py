@@ -9,7 +9,7 @@ plausible whatever it is; a track that latched onto the array edge or never stra
 obvious here.
 
 **A fitted lag can have no position.** The tracker fills a lag it lost by interpolation before the
-slope is fitted (``decorrelation.pipeline.track``): that lag is in ``fit_*`` and counted in
+slope is fitted (``imaging_methods.decorrelation.track``): that lag is in ``fit_*`` and counted in
 ``nlags_*``, but there is no stored position to draw at it. Only the lags that are both fitted and
 tracked are highlighted, so there can be fewer highlighted points than lags counted.
 

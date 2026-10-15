@@ -9,7 +9,7 @@ Seven ways to read a velocity at every live pixel, on one record:
 - the same TDE applied to the conditional average itself (``_catde``): the field sliced the other way, so
   that a difference from the 2DCA tracks is the slicing alone, with the conditioning taken out.
 
-``compute`` is ``decorrelation.pipeline.fields``, and its Dataset is returned unchanged: the variable names
+``compute`` is ``imaging_methods.decorrelation.fields``, and its Dataset is returned unchanged: the variable names
 are those of the paper's ``apd<shot>_velocities.nc``, which the regression compares by name, and the
 paper's figure code could read a blob as it is. All velocities are in m/s, R and Z in metres, lags in
 seconds. 1 to 3 minutes a shot once the bank exists, so it can be recomputed from the single-shot page

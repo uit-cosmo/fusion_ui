@@ -17,7 +17,7 @@ it. Nothing here prints or reports progress: a compute stays pure.
 the dead-pixel mask is the one preprocessing stored: the raw file has neither. Without this, ``precompute
 --run-day`` would also try every raw file of the day.
 
-The blob, as ``decorrelation.pipeline.stack`` makes it (R and Z in metres)::
+The blob, as ``imaging_methods.decorrelation.stack`` makes it (R and Z in metres)::
 
     dims    ref_y, ref_x, y, x, time (the lags, in seconds)
     cond_av, cond_repr, cross_corr   (ref_y, ref_x, y, x, time)  float64, NaN at skipped references
@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from fusion_ui.core import registry
-from fusion_ui.plots._pipeline import Averages, pipeline, record
+from fusion_ui.plots._pipeline import Averages, hand_made, pipeline, record
 from fusion_ui.views import lag_strip
 from fusion_ui.views.bundle import Bundle
 from fusion_ui.views.figures import message_figure
@@ -70,7 +70,7 @@ def compute(ds, params):
     ``nevents`` 0.
     """
     record_m = record(ds)
-    dead = pipeline.dead_mask(record_m)
+    dead = pipeline.dead_mask(record_m, hand_made=hand_made())
     found = {
         (x, y): pipeline.average(record_m, params.averages, x, y)
         for x, y in pipeline.references(dead.values)

@@ -50,11 +50,19 @@ def cache(monkeypatch, tmp_path):
 
 
 def test_the_dead_pixel_mask_is_9_wide_by_10_tall():
-    """The literal copied from density_scan/dead_pixel_mask.py -- if this
-    ever drifts from the real camera's shape, every test below that relies on
-    the mismatch path silently stops exercising it."""
+    """The hand-made mask of ``experimental_database`` -- if this ever drifts
+    from the real camera's shape, every test below that relies on the mismatch
+    path silently stops exercising it."""
     mask = vt._dead_pixel_mask()
     assert mask.shape == (10, 9)  # (y, x)
+
+
+def test_the_dead_pixel_mask_is_experimental_databases_1160616_mask():
+    from experimental_database import hand_made_dead_pixel_mask
+
+    np.testing.assert_array_equal(
+        vt._dead_pixel_mask(), hand_made_dead_pixel_mask("1160616").values
+    )
 
 
 def test_the_9x9_fixture_takes_the_mask_mismatch_path(blobs):

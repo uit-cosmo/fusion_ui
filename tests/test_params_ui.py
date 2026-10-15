@@ -92,9 +92,13 @@ def test_the_plot_key_is_part_of_the_hash():
 
 
 def test_a_subclass_does_not_hash_like_its_base():
-    """SEParameters extends MethodParameters, so their defaults share a prefix
-    and values alone do not identify the parameter set."""
-    from individual_events.parameters import SEParameters
+    """A subclass such as fusion_scripts' ``SEParameters`` extends
+    ``MethodParameters``, so their defaults share a prefix and values alone do
+    not identify the parameter set."""
+
+    @dataclasses.dataclass
+    class SEParameters(im.MethodParameters):
+        pass
 
     assert (
         params_ui.hash_params("p", im.MethodParameters())[0]

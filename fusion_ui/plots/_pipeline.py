@@ -1,32 +1,27 @@
 """What the three product specs share: the physics API, and the record it takes.
 
 ``pixel_averages``, ``method_fields`` and ``blob_parameters`` are thin adapters over
-``decorrelation.pipeline`` in ``fusion_scripts`` (the paper's code, which ``cmod_scan`` calls too), so the
-paper and the app read the same numbers. This module is the one place fusion_ui imports it, and the one
-place that prepares what it is called with.
+``imaging_methods.decorrelation``, which holds the paper's pipeline (``fusion_scripts``' ``cmod_scan`` calls
+it too, so the paper and the app read the same numbers). It moved there from ``fusion_scripts`` in L14.
+This module is the one place fusion_ui imports it, and the one place that prepares what it is called with.
 
-**Import order.** ``decorrelation.pipeline`` imports ``fusion_scripts``' own ``config``, which fills every
-``FUSION_*`` variable still unset from ``fusion_scripts/.env`` the moment it is imported -- and on the
-group server that file names a folder that does not exist (``/hdd1/alcator``). ``fusion_ui.config`` fills
-the same variables the same way, from its own ``.env``, and whichever is imported first wins. So
-``fusion_ui.config`` is imported first, below, and every module that needs the API imports it from here.
-The API also reads its settings by the bare name ``config``, which under Streamlit finds
-``fusion_ui/config.py`` instead; ``fusion_scripts.import_config`` settles which module that name is
-before the API is imported (:mod:`fusion_ui.core.fusion_scripts`).
+**No import order to keep.** The pipeline used to live in ``fusion_scripts``, whose own ``config`` filled
+every unset ``FUSION_*`` variable from its ``.env`` on import (naming a folder the server does not have),
+and which the bare name ``config`` found instead of ``fusion_ui/config.py`` under Streamlit. So
+``fusion_ui.config`` had to be imported first and ``import_config()`` called before the API. The library
+reads no ``config`` and no environment variable, so neither is needed and nothing here depends on the
+order of imports.
+
+The 1160616 files store no dead-pixel mask; ``dead_mask`` takes the hand-made one from
+``experimental_database`` as an argument (:func:`hand_made`).
 
 Nothing in this module touches Streamlit, the database or the filesystem.
 """
 
-# Before decorrelation.pipeline, always: see the module docstring.
-from fusion_ui import config  # noqa: F401 - imported for what it does to os.environ
-from fusion_ui.core import fusion_scripts
-
 import numpy as np
 
-fusion_scripts.import_config()
-
-from decorrelation import pipeline  # noqa: E402 - after import_config, see above
-from decorrelation.pipeline import Averages, Blobs, Tde, Tracking  # noqa: E402
+from imaging_methods import decorrelation as pipeline
+from imaging_methods.decorrelation import Averages, Blobs, Tde, Tracking
 
 __all__ = [
     "Averages",
@@ -35,6 +30,7 @@ __all__ = [
     "Tracking",
     "average_at",
     "bank_mask",
+    "hand_made",
     "live_scalars",
     "pipeline",
     "record",
@@ -49,7 +45,7 @@ CENTIMETRES = (10.0, 700.0)
 
 
 def record(ds):
-    """The record as ``decorrelation.pipeline`` takes it: R and Z in metres, loaded into memory.
+    """The record as ``imaging_methods.decorrelation`` takes it: R and Z in metres, loaded into memory.
 
     The APD files hold R and Z in centimetres and the frames' time axis in seconds, so a velocity
     computed off them as they are would come out in cm/s. The API's outputs are all in SI units, which
@@ -79,6 +75,13 @@ def record(ds):
     # The same expression as the paper's own loader (``apd_check.fields.load``), so that the two prepare
     # a record bit for bit alike: R and Z keep the dtype they have on disk (float32 for C-Mod).
     return ds.assign_coords(R=ds.R / 100, Z=ds.Z / 100).load()
+
+
+def hand_made():
+    """The hand-made dead-pixel masks by run day (``experimental_database``), for ``dead_mask``'s ``hand_made``."""
+    from experimental_database import hand_made_dead_pixel_masks
+
+    return hand_made_dead_pixel_masks()
 
 
 def bank_mask(bank):

@@ -281,7 +281,7 @@ def canonical(params):
     """``{"__type__": ..., "values": {...}}`` for a params dataclass instance.
 
     The class name is recorded because values alone do not identify a parameter
-    set: ``fusion_scripts.SEParameters`` extends ``MethodParameters``, so their
+    set: a subclass such as fusion_scripts' ``SEParameters`` extends ``MethodParameters``, so their
     defaults share a prefix and would otherwise be indistinguishable.
     """
     if isinstance(params, type) or not dataclasses.is_dataclass(params):

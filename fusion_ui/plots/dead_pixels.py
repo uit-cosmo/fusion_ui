@@ -1,6 +1,6 @@
 """Dead pixels: every pixel's PDF and spectrum, drawn against the mask estimated from them.
 
-The mask comes from ``density_scan.dead_pixels`` (fusion_scripts), the step preprocessing uses to choose which
+The mask comes from ``imaging_methods.dead_pixels`` (moved there from fusion_scripts' ``density_scan``), the step preprocessing uses to choose which
 pixels to interpolate. This spec runs it on the raw file and draws what it looked at, laid out as the array is,
 so a mask can be checked by eye the way masks used to be made: one PDF per pixel. Raw files only -- the
 preprocessed file has its dead pixels interpolated from their neighbours, so nothing is left to judge there. What
@@ -14,7 +14,7 @@ The PDFs are histograms aligned on the digitizer's levels. A dead pixel spans a 
 finer than a level would draw it as a comb of spikes. One bin per level draws it as the narrow Gaussian it is.
 
 **The window.** The mask is judged over the *analysis window*: the discharge window cut to the gas puff
-(``density_scan.puff``), the window preprocessing crops its files to. On many shots the discharge window starts
+(``imaging_methods.puff``), the window preprocessing crops its files to. On many shots the discharge window starts
 before the puff, and the live pixels' dark stretch there gives bimodal PDFs and dilutes the spectra. The puff is
 found against the dark level at the *start of the record*, so this spec declares ``whole_record``: it is handed the
 whole record, with the discharge window in its attributes (``loader.discharge_window``), finds the puff on it, and
@@ -29,7 +29,7 @@ and ``std`` (all over the analysis window), the search for the puff: the smoothe
 and ``record_window`` (each ``[start, end]`` in seconds), ``puff_found``, ``puff_start``, ``puff_end``,
 ``puff_baseline``, ``puff_level``, ``puff_level_quantile``, ``puff_threshold``, ``puff_note``, ``puff_rule`` and,
 when the signal dips below the threshold inside the window, ``puff_dips`` (start, end, start, end, ...). The four
-that ``density_scan.dead_pixels.estimate_shot`` also gives its result carry its names. A result computed before this
+that fusion_scripts' ``estimate_shot`` also gives its result carry its names. A result computed before this
 has none of it: :func:`puff_of` says so, and the view says that it predates the puff window.
 """
 
@@ -41,7 +41,7 @@ import plotly.graph_objects as go
 import xarray as xr
 from plotly.subplots import make_subplots
 
-from fusion_ui.core import fusion_scripts, loader, registry
+from fusion_ui.core import loader, registry
 
 N_BINS = 120  # most PDF bins per pixel; fewer when it spans fewer digitizer levels
 N_FREQ = 200  # log-spaced PSD points kept for drawing
@@ -116,8 +116,8 @@ overrides the shot's own verdict.
 Checked on the 111 raw APD shots on the server. It reproduces the hand-made 1160616 mask on all nine shots. From
 2012-02 to 2015-09 it gives the same 18 pixels on every run day; the four extra dead pixels of 2016 died between
 1150916 and 1160616. Cut to the gas puff, every one of the 111 shots gets the verdict it got over the whole
-discharge window, and so every run day gets the same mask. The code is `density_scan/dead_pixels.py` and
-`density_scan/puff.py` in fusion_scripts.
+discharge window, and so every run day gets the same mask. The code is `imaging_methods.dead_pixels` and
+`imaging_methods.puff` (moved there from fusion_scripts' `density_scan` in L14).
 """
 
 
@@ -158,10 +158,9 @@ def compute(ds, params):
 
     ``ds`` is the whole record with its discharge window in its attributes (``whole_record``): the puff is found
     on all of it, against the dark level at its start, and everything else is judged over the analysis window.
-    This is ``density_scan.dead_pixels.estimate_shot(shot, window="puff")``, step for step, on a record in hand.
+    This is fusion_scripts' ``estimate_shot(shot, window="puff")``, step for step, on a record in hand.
     """
-    fusion_scripts.import_config()  # density_scan reads its settings by the bare name `config`
-    from density_scan import dead_pixels, puff
+    from imaging_methods import dead_pixels, puff
 
     discharge = loader.discharge_window(ds)
     variable = loader.image_variable(ds)
@@ -606,10 +605,9 @@ def hand_made(target):
     """The hand-made 1160616 mask as a ``(y, x)`` bool array, for that run day only; ``None`` for any other."""
     if target.shot // 1000 != 1160616:
         return None
-    fusion_scripts.import_config()  # as in compute
-    from density_scan.dead_pixel_mask import get_dead_pixel_mask
+    from experimental_database import hand_made_dead_pixel_mask
 
-    return get_dead_pixel_mask().values
+    return hand_made_dead_pixel_mask(1160616).values
 
 
 def explain(red=DeadPixelParams.red, gain=DeadPixelParams.gain):

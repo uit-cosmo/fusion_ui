@@ -1,32 +1,29 @@
-"""The paper's cut on the Fields page: ``reliable()`` of ``apd_check/figures.py``, as a checkbox.
+"""The paper's cut on the Fields page: ``reliable()`` of ``imaging_methods.decorrelation``, as a checkbox.
 
-The rule (``views.reliable``) is held to the paper's own ``reliable()`` on a real ``method_fields``
-result: the three real specs run on J3's synthetic record through the store (``tests/real_fixtures``), and
-the same fields go through both. ``decorrelation.apd_check.figures`` cannot be imported in the app's venv
-(it imports ``figure_provenance``, a plotting helper the venv does not have, and nothing may be added to
-it), so the paper's function is read out of the file with ``ast`` and run as written: the source of
-``reliable()`` (``figures.py:127``) and the three constants it reads, nothing else of the module. A change
-to the paper's rule fails these tests; a rename or a move of the function fails them loudly.
+The rule (``views.reliable``) is held to the library's own ``reliable`` on a real ``method_fields`` result:
+the three real specs run on J3's synthetic record through the store (``tests/real_fixtures``), and the same
+fields go through both, with the page's thresholds as ``min_lags`` and ``min_events``. ``reliable`` moved to
+imaging_methods from fusion_scripts' ``apd_check/figures.py`` (L14), so this reads nothing of fusion_scripts:
+the view calls the library, and what these tests add is that the thresholds reach it, that the constants the
+page defaults to are the library's ``MIN_LAGS``, ``MIN_EVENTS`` and ``TRACK``, and that the reasons the view
+gives for a pixel it leaves out agree, pixel for pixel, with the library's verdict.
 
 The panels' use of the rule is tested on the synthetic products of ``tests/fields_fixtures`` (a 10 x 9
 array with dead pixels and failed fits), which has what a 3 x 3 record does not: many interior pixels.
 """
 
-import ast
-import importlib.util
-from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
+from imaging_methods import decorrelation as library
 from fusion_ui.views import methods, panels, reliable
 from fusion_ui.views.bundle import Bundle, Cuts
 from fusion_ui.views.methods import METHODS, Status
 from tests import fields_fixtures as ff
 from tests import real_fixtures as real
 
-FIGURES = "decorrelation.apd_check.figures"
 #: What the paper's rule reads of a ``method_fields``, as its source lists it: stated here, and not read off
 #: ``reliable.FINITE``, so that a name dropped from the rule is a name still tried.
 READ = (
@@ -51,50 +48,21 @@ def fields(products):
     return products["method_fields"]
 
 
-def _assigned(node):
-    """The names an assignment binds, ``MIN_LAGS, MIN_EVENTS = 8, 200`` included."""
-    names = set()
-    for target in node.targets:
-        for part in ast.walk(target):
-            if isinstance(part, ast.Name):
-                names.add(part.id)
-    return names
-
-
 @pytest.fixture(scope="module")
 def paper():
-    """The paper's ``reliable()``, run as written: ``paper(fields, min_lags, min_events) -> (y, x) bool``.
-
-    ``MIN_LAGS`` is a constant the function reads when it is called and ``min_events`` an argument, so the
-    page's two thresholds reach it by the one and the other.
-    """
-    spec = importlib.util.find_spec(FIGURES)
-    assert (
-        spec is not None and spec.origin
-    ), f"{FIGURES} is not installed, so there is no paper's rule to hold the page's to"
-    path = Path(spec.origin)
-    wanted = {"MIN_LAGS", "MIN_EVENTS", "TRACK"}
-    body = [
-        node
-        for node in ast.parse(path.read_text()).body
-        if (isinstance(node, ast.FunctionDef) and node.name == "reliable")
-        or (isinstance(node, ast.Assign) and _assigned(node) & wanted)
-    ]
-    namespace = {"np": np}
-    exec(compile(ast.Module(body=body, type_ignores=[]), str(path), "exec"), namespace)
-    missing = (wanted | {"reliable"}) - set(namespace)
-    assert not missing, f"{path} no longer defines {sorted(missing)}"
+    """The library's ``reliable``: ``paper.call(fields, min_lags, min_events) -> (y, x) bool``, with the library's
+    constants beside it."""
 
     def call(fields, min_lags, min_events):
-        namespace["MIN_LAGS"] = min_lags
-        return np.asarray(namespace["reliable"](fields, min_events=min_events))
+        return np.asarray(
+            library.reliable(fields, min_lags=min_lags, min_events=min_events)
+        )
 
     return SimpleNamespace(
         call=call,
-        TRACK=namespace["TRACK"],
-        MIN_LAGS=namespace["MIN_LAGS"],
-        MIN_EVENTS=namespace["MIN_EVENTS"],
-        path=path,
+        TRACK=library.TRACK,
+        MIN_LAGS=library.MIN_LAGS,
+        MIN_EVENTS=library.MIN_EVENTS,
     )
 
 
@@ -177,6 +145,21 @@ def test_each_clause_of_the_papers_rule_is_this_rules(fields, paper):
     # The maximum and the 2DCC are not read: a pixel without them is as reliable as it was.
     for name in ("vr_max", "vz_2dcc", "vr3_catde", "cc_tde"):
         assert agree(with_values(fields, name, np.nan))[1, 1], name
+
+
+def test_every_pixel_the_rule_leaves_out_has_a_reason_and_every_one_it_keeps_has_none(fields):
+    """The reasons are the view's own, the verdict the library's: they must agree on every pixel, for each
+    count of lags and events there is, one below and one above."""
+    stand_ins = ff.make_products(failed=((7, 4),), no_events=((6, 7),)).fields
+    for data in (fields, stand_ins):
+        for lag in (0, 5, 8, 19, 10_000):
+            for count in (0, 100, 450, 10_000):
+                kept = rule(data, lag, count)
+                said = np.array(
+                    [bool(r.removeprefix(reliable.PREFIX)) for r in kept.reason.ravel()]
+                ).reshape(kept.ok.shape)
+                np.testing.assert_array_equal(~kept.ok, said, f"{lag} lags, {count} events")
+                np.testing.assert_array_equal(kept.reason == "", kept.ok)
 
 
 def test_the_rule_is_the_papers_on_a_larger_array_with_dead_pixels_and_failed_fits(

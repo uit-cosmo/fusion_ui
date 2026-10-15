@@ -1,6 +1,6 @@
 """Asymmetric two-sided exponential fits to the cuts through the 2DCA average.
 
-Ported from ``waveform_analysis.fit_two_sided`` as
+Ported from ``imaging_methods.fit_two_sided`` (moved there from fusion_scripts' ``waveform_analysis`` in L14) as
 ``individual_events/ca_two_sided_exp.py:estimate_parameters`` drives it, with
 one deliberate change of subject: upstream only ever fits synthetic 1D pulse
 superpositions. Here the same fit is applied to the two cuts through a real
@@ -41,7 +41,6 @@ from dataclasses import dataclass, field
 import imaging_methods as im
 import numpy as np
 import plotly.graph_objects as go
-import waveform_analysis as wf
 import xarray as xr
 from imaging_methods.method_parameters import TwoDcaParams
 from plotly.subplots import make_subplots
@@ -74,7 +73,7 @@ def upstream_params(params):
     return two_dca.TwoDcaSpecParams(two_dca=params.two_dca)
 
 
-#: The box ``waveform_analysis.fit_two_sided`` optimises inside, mirrored here
+#: The box ``imaging_methods.fit_two_sided`` optimises inside, mirrored here
 #: so a result resting on one of its walls can be recognised. Kept as a literal
 #: rather than imported because upstream does not export it; if upstream ever
 #: widens the box this stays merely conservative, never wrong.
@@ -96,7 +95,7 @@ def _on_a_bound(sigma, offset):
 
 
 def _fit_normalized(coords, values, peak, ref_index):
-    """Normalise ``values`` by ``peak`` and fit ``wf.fit_two_sided`` to it.
+    """Normalise ``values`` by ``peak`` and fit ``im.fit_two_sided`` to it.
 
     The model is pinned to amplitude 1 at ``x=0``, so the caller's ``peak`` --
     the conditional average at the reference pixel / zero lag -- has to be
@@ -130,7 +129,7 @@ def _fit_normalized(coords, values, peak, ref_index):
     if int(np.argmax(normalized)) != ref_index:
         return failed
 
-    popt, y_fit = wf.fit_two_sided(coords, normalized)
+    popt, y_fit = im.fit_two_sided(coords, normalized)
     scale, sigma, offset = (float(v) for v in popt)
     if not np.isfinite((scale, sigma, offset)).all():
         return failed

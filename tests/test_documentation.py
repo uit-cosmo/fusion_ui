@@ -13,7 +13,6 @@ What these tests hold the page to:
 """
 
 import ast
-import dataclasses
 import shutil
 import subprocess
 from pathlib import Path
@@ -173,8 +172,7 @@ def test_every_older_source_listed_is_a_registered_spec_or_the_seed():
 
 
 def test_the_seeds_names_are_the_fields_of_its_records_but_the_three_it_leaves_out():
-    discharge = pytest.importorskip("density_scan.discharge")
-    fields = {field.name for field in dataclasses.fields(discharge.BlobParameters)}
+    fields = set(seed.RECORD_NAMES)
     assert len(fields) == 15 and set(seed.NOT_IMPORTED) <= fields
     assert set(documentation.OLDER_SOURCES[seed.IMPORT_PLOT]) == fields - set(
         seed.NOT_IMPORTED
@@ -227,12 +225,12 @@ def test_every_placeholder_and_table_in_the_text_resolves(doc):
 
 
 def test_the_numbers_quoted_are_the_codes():
-    import_config = documentation.import_config
-    import_config()
-    from density_scan import dead_pixels, preprocess, puff
+    import imaging_methods as im
+    from imaging_methods import dead_pixels, puff
 
     values = documentation.facts()
-    assert values["preprocess.window"] == str(2 * preprocess.RADIUS + 1)
+    radius = im.get_default_apd_method_params().preprocessing.radius
+    assert values["preprocess.window"] == str(2 * radius + 1)
     assert values["dead.red"] == f"{dead_pixels.RED:g}"
     assert values["dead.gain"] == f"{dead_pixels.GAIN:g}"
     assert values["puff.min_on"] == f"{puff.MIN_ON * 1e3:g} ms"

@@ -20,7 +20,7 @@ import xarray as xr
 from streamlit.testing.v1 import AppTest
 
 import fusion_ui.plots  # noqa: F401 - registers the real specs
-from fusion_ui.core import catalog, db, fusion_scripts, loader, precompute, registry, store
+from fusion_ui.core import catalog, db, loader, precompute, registry, store
 from fusion_ui.plots import dead_pixels
 from tests import precompute_toys as toys
 from tests import puff_fixtures as pf
@@ -245,8 +245,7 @@ def raw_record(monkeypatch, tmp_path, request):
 
 
 def whole_and_cut(raw):
-    fusion_scripts.import_config()
-    from density_scan import puff
+    from imaging_methods import puff
 
     window = raw.case.window
     cut = raw.record.sel(time=slice(*window))

@@ -41,6 +41,7 @@ from plotly.subplots import make_subplots
 
 from fusion_ui.core import registry
 from fusion_ui.plots import two_dca
+from fusion_ui.plots._pipeline import Tracking
 
 #: R and Z are stored in centimetres; a slope through them (a velocity) is
 #: cm/s, and the group reports m/s -- convert once, here.
@@ -77,9 +78,10 @@ class CrossCorrParams:
     #: track only. The 2D cross-correlation sits on a pedestal well above zero
     #: rather than decaying to it like cond_av does, so the fraction-of-max
     #: mask needs its own floor to bind at all -- upstream's own datasets keep
-    #: it at the default 0.75 while lowering cond_av's; see
-    #: ``fusion_scripts/twodca_manuscript/datasets/{w7x,cmod}.py``.
-    mask_signal_factor: float = 0.75
+    #: it at the default 0.75 while lowering cond_av's. The default is the library's:
+    #: ``imaging_methods.decorrelation.Tracking.cross_corr_mask_signal_factor``, 0.75, which a test pins
+    #: (it is part of the cache key).
+    mask_signal_factor: float = Tracking.cross_corr_mask_signal_factor
 
 
 @dataclass

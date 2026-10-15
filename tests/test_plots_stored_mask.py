@@ -196,7 +196,7 @@ def test_a_hand_made_mask_that_does_not_fit_the_array_is_not_drawn():
 
 
 def test_a_mask_with_no_recorded_source_says_so_in_the_pipelines_words():
-    """``decorrelation.pipeline.dead_mask`` calls it "stored in the preprocessed file"."""
+    """``imaging_methods.decorrelation.dead_mask`` calls it "stored in the preprocessed file"."""
     assert read(preprocessed(ESTIMATED_SHOT, drop=("dead_mask_source",))).source == "stored in the preprocessed file"
 
 
@@ -314,15 +314,12 @@ def test_the_evidence_classes_keep_the_dead_pixel_views_words_and_colours():
 
 @pytest.fixture(scope="module")
 def estimated():
-    """``density_scan.dead_pixels``, and what ``estimate`` returns for a 3 x 4 record with one white-noise pixel
+    """``imaging_methods.dead_pixels``, and what ``estimate`` returns for a 3 x 4 record with one white-noise pixel
     (0, 3) and one with no samples (2, 0), the rest sharing one red signal: the file's evidence as the estimator
     writes it, and the estimator's own codes."""
     from scipy import signal
 
-    from fusion_ui.core import fusion_scripts
-
-    fusion_scripts.import_config()
-    from density_scan import dead_pixels as scan
+    from imaging_methods import dead_pixels as scan
 
     rng = np.random.default_rng(1)
     n, dt = 60_000, 5e-7

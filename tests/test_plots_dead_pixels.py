@@ -14,7 +14,7 @@ import xarray as xr
 from scipy import signal
 
 import fusion_ui.plots  # noqa: F401 - registers every spec
-from fusion_ui.core import fusion_scripts, loader, registry
+from fusion_ui.core import loader, registry
 from fusion_ui.plots import dead_pixels
 from tests import puff_fixtures as pf
 
@@ -135,8 +135,7 @@ def test_a_record_cut_to_its_window_is_refused(record):
 def scenarios():
     """Each scenario of ``tests/puff_fixtures``, as the page hands it over (the whole record, with the discharge
     window) and computed, with the puff window found on the whole record and on the record cut to the window."""
-    fusion_scripts.import_config()
-    from density_scan import puff
+    from imaging_methods import puff
 
     spec = registry.get("dead_pixels")
     out = {}
@@ -167,7 +166,7 @@ def test_the_analysis_window_is_the_one_found_on_the_whole_record(scenarios, nam
     assert found.note == s.whole.note and found.rule == s.whole.rule
     assert (found.start, found.end) == pytest.approx((s.whole.start, s.whole.end), nan_ok=True)
     assert found.dips == s.whole.dips
-    # The attributes carry the names ``density_scan.dead_pixels.estimate_shot`` gives its own.
+    # The attributes carry the names fusion_scripts' ``estimate_shot`` gives its own.
     assert list(s.result.attrs["analysis_window"]) == list(s.whole.analysis_window)
     assert list(s.result.attrs["discharge_window"]) == list(s.case.window)
     assert s.result.attrs["puff_found"] == int(s.whole.found) and s.result.attrs["puff_rule"] == s.whole.rule
@@ -197,8 +196,8 @@ def test_a_window_that_starts_in_the_dark_gap_keeps_the_gap_as_a_dip(scenarios):
 
 @pytest.mark.parametrize("name", NAMES)
 def test_the_mask_and_its_evidence_are_those_of_the_analysis_window(scenarios, name):
-    """``density_scan.dead_pixels.estimate`` on the analysis window of the same record: what ``estimate_shot`` does."""
-    from density_scan import dead_pixels as scan
+    """``imaging_methods.dead_pixels.estimate`` on the analysis window of the same record: what ``estimate_shot`` does."""
+    from imaging_methods import dead_pixels as scan
 
     s = scenarios[name]
     expected = scan.estimate(s.record.sel(time=slice(*s.whole.analysis_window)), keep_psd=True)
@@ -226,7 +225,7 @@ def test_the_pdfs_and_their_moments_are_over_the_analysis_window_only(scenarios,
 def test_the_dark_stretch_before_the_puff_is_left_out_of_the_judgement(scenarios):
     """On the control the window starts 40 ms before the puff. Judged over the whole discharge window, the live
     pixels' spectra carry that stretch and the PSD ratio differs; the view judges what the puff window leaves."""
-    from density_scan import dead_pixels as scan
+    from imaging_methods import dead_pixels as scan
 
     s = scenarios["from the start"]
     assert s.whole.analysis_window[0] == pytest.approx(0.040, abs=1e-3)
