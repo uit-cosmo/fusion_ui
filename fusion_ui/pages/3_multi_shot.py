@@ -12,7 +12,7 @@ opens the single-shot page on its exact run, since the Fields page would show
 other blob numbers than the one clicked.
 
 The page owns no analysis of its own: the scalar names come from whatever the
-store already holds -- the ``density_scan`` seed, or results computed through
+store already holds -- the retired ``density_scan`` seed (plot key ``density_scan_import``), or results computed through
 the single-shot view or ``fusion-ui precompute``. The scalar picker and the
 y-axis name a scalar by what it is when :mod:`fusion_ui.core.scalar_labels`
 knows it, and by its stored name otherwise.
@@ -137,8 +137,7 @@ def main():
     if frame.empty:
         st.warning(
             f"No results are stored for machine `{machine}` yet. Compute "
-            "something on the single-shot page, run `fusion-ui import-results` "
-            "to load the density_scan seed, or `fusion-ui precompute` to warm "
+            "something on the single-shot page, or run `fusion-ui precompute` to warm "
             "the cache overnight.",
             icon="⚠️",
         )

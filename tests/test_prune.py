@@ -597,12 +597,9 @@ def test_pruning_the_derived_plot_does_not_touch_what_it_was_built_on(
 # --scalar: some names of one plot, counted per name, then deleted
 # ---------------------------------------------------------------------------
 
-#: The fifteen names of the seed's records (``density_scan.discharge.BlobParameters``),
-#: all of which an earlier import wrote, and the three the importer leaves out now.
-SEED_NAMES = (
-    "vx_c vy_c area_c vx_2dca_tde vy_2dca_tde vx_tde vy_tde lx_f ly_f lr lz theta_f"
-    " taud_psd lambda_psd number_events"
-).split()
+#: The fifteen names of the seed's records, all of which an earlier import wrote, and the three the
+#: importer left out.
+SEED_NAMES = list(seed.RECORD_NAMES)
 ELLIPSE = ("lx_f", "ly_f", "theta_f")
 PIXELS = ((6, 6), (6, 5), (4, 6))
 SEED = seed.IMPORT_PLOT

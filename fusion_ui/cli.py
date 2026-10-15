@@ -1,8 +1,7 @@
 """``fusion-ui`` -- the commands that run outside the browser.
 
 ``rescan`` is the one that goes on cron; ``status`` is the one to run after
-deploying; ``import-results`` is run once, to seed the scalar store from
-``density_scan``; ``precompute`` (phase 04) warms the cache overnight, for
+deploying; ``precompute`` (phase 04) warms the cache overnight, for
 several plots and on several workers since phase 06. ``prune`` deletes every
 stored result of one plot, or with ``--scalar`` only the scalars of some names
 under it, and counts them first.
@@ -13,7 +12,7 @@ import os
 import sys
 
 from fusion_ui import config
-from fusion_ui.core import catalog, db, seed, shared, store
+from fusion_ui.core import catalog, db, shared, store
 
 
 def _resolve(attribute):
@@ -53,17 +52,6 @@ def cmd_rescan(args):
 
     conn = db.open_db(args.database)
     stats = catalog.rescan(conn, data_folder, args.machine, discharge_db)
-    print(stats.summary())
-    return 0
-
-
-def cmd_import_results(args):
-    conn = db.open_db(args.database)
-    try:
-        stats = seed.import_results(conn, args.results, args.machine)
-    except FileNotFoundError as error:
-        print(str(error), file=sys.stderr)
-        return 1
     print(stats.summary())
     return 0
 
@@ -578,19 +566,6 @@ def build_parser():
         help="re-measure even where a value is already stored",
     )
     backfill.set_defaults(func=cmd_backfill_dt)
-
-    seed_results = subparsers.add_parser(
-        "import-results",
-        help="seed `scalars` from a density_scan results.json (all but lx_f, ly_f"
-        " and theta_f, which it holds a contour ellipse under)",
-    )
-    seed_results.add_argument(
-        "--results",
-        default=None,
-        metavar="PATH",
-        help="results.json to import (default: fusion_scripts' DENSITY_SCAN_RESULTS)",
-    )
-    seed_results.set_defaults(func=cmd_import_results)
 
     status = subparsers.add_parser("status", help="resolved paths and index counts")
     status.set_defaults(func=cmd_status)

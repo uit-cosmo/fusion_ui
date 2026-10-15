@@ -1,6 +1,5 @@
 """The label table the multi-shot axis reads: the 32 names the phase-06 products write."""
 
-import dataclasses
 import re
 
 import pytest
@@ -151,8 +150,7 @@ def written_by(source):
     """The scalar names ``source`` writes: a spec's ``scalars`` on a result that has every variable any
     of the four older specs reads, or the fields of the seed's per-pixel record."""
     if source == seed.IMPORT_PLOT:
-        discharge = pytest.importorskip("density_scan.discharge")
-        return {f.name for f in dataclasses.fields(discharge.BlobParameters)}
+        return set(seed.RECORD_NAMES)
     result = xr.Dataset(
         {
             "refx": 3,
@@ -207,14 +205,13 @@ def test_the_gaussian_fit_names_are_no_longer_shared_with_the_seed():
     ``blob_parameters``, which fit the same Gaussian, and the label says so; their units are the
     blob parameters' (``test_the_units_of_the_blob_parameters_are_the_fields_pages``).
     """
-    discharge = pytest.importorskip("density_scan.discharge")
     names = {"lx_f", "ly_f", "theta_f"}
     assert set(seed.NOT_IMPORTED) == names
     assert not names & set(scalar_labels.SHARED)
     assert names <= written_by("gaussian_sizes")
     assert names <= set(blob_parameters.SCALARS)
     # The seed's records still have the fields; the import is what leaves them out.
-    assert names <= {f.name for f in dataclasses.fields(discharge.BlobParameters)}
+    assert names <= set(seed.RECORD_NAMES)
     for name in names:
         assert "Gaussian fit" in scalar_labels.LABELS[name].quantity, name
     assert {name: unit_of(name) for name in names} == {
