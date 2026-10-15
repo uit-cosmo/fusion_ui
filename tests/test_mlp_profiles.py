@@ -33,7 +33,7 @@ from fusion_ui import documentation
 from fusion_ui.core import catalog, db, loader, mlp, multipixel, params_ui, registry
 from fusion_ui.plots import mlp_profiles as mp
 from tests import mlp_fixtures as mf
-from tests.test_thomson_profiles import reaches_fusion_scripts
+from tests.import_guard import reaches_fusion_scripts
 
 REPO = Path(__file__).resolve().parent.parent
 SINGLE_SHOT = str(REPO / "fusion_ui" / "pages" / "2_single_shot.py")

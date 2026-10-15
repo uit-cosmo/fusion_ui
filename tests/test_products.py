@@ -1,9 +1,9 @@
 """The three decorrelation products: ``pixel_averages``, ``method_fields`` and ``blob_parameters``.
 
-They are thin adapters over ``decorrelation.pipeline``, so what is tested here is the adapting: that each
+They are thin adapters over ``imaging_methods.decorrelation``, so what is tested here is the adapting: that each
 spec hands the API what it takes (the record in metres, the bank's own mask, the settings as they are),
 returns its Dataset unchanged, stores it and gets it back bit for bit, writes the scalars the plan names, and
-hashes the way the plan says. The physics itself is the API's, tested in fusion_scripts against the paper's.
+hashes the way the plan says. The physics itself is the API's, tested in imaging_methods and, against the paper's, in fusion_scripts.
 
 The record is ``tests/product_fixtures``: 3 x 3 pixels in centimetres, like the real files. A product
 computed through the store is compared with the API called directly on the record in metres. The tests that
@@ -28,7 +28,7 @@ import pytest
 import xarray as xr
 
 import fusion_ui.plots  # noqa: F401 - registers the real specs
-from fusion_ui.core import catalog, db, params_ui, precompute, registry, store
+from fusion_ui.core import catalog, db, params_ui, precompute, registry, seed, store
 from fusion_ui.plots import _pipeline, blob_parameters, method_fields, pixel_averages
 from fusion_ui.plots._pipeline import pipeline
 from fusion_ui.views import products
@@ -396,6 +396,43 @@ def test_the_default_keys_are_stable():
     assert {k: _digest(k, registry.get(k).params()) for k in KEYS} == expected
 
 
+#: Every registered spec's default hash, measured at fusion_ui e99d216 before L14 and recorded in
+#: fusion_scripts' ``MIGRATION_TO_IMAGING_METHODS.md`` (Status, step 0). A stored result is found by it, so
+#: a moved one leaves every result of that spec unreachable.
+DEFAULT_HASHES = {
+    "raw_frames": "f29f91e6ac616c2ee2980872c988504bb9de8c51",
+    "dead_pixels": "c87bebadae3c0c04ac973bf608a4d6ea0571133b",
+    "stored_mask": "626cb4b048f79f5dc32209d0ac3e9cdd20b2fc98",
+    "probe_trace": "1cb53206d761fb519becfafebedce0c54e020a7a",
+    "thomson_profiles": "482534bb11949e3bff6fca56ff653e37328c9f89",
+    "mlp_profiles": "ba6d655e1fa2aab4c5319fb35080e79b66e96928",
+    "taud_psd": "7c56c709e582ced8ea0a30c3527804ba293b049c",
+    "two_dca": "4bd8190c48d36e19d376aa9ea2ebe9d9711c4772",
+    "velocity_contour": "021cdfba77e515bd7945ba277d9297da69c51734",
+    "fwhm_sizes": "98f558fa8c85b85fc7fb53e2a9e9e77e25dd3907",
+    "gaussian_sizes": "50b3384ff561d64cd0947a291ce795fcf54bad01",
+    "velocity_2dca_tde": "8138bc07cb4471d5af48ad04002f65cb6e4965ce",
+    "trajectories": "1df8d735e3ed74e0629148a7491a71ab72000fa5",
+    "two_sided_exp": "54a0ba03d55e42fbc36e8b5f719729a817c59d1c",
+    "velocity_tde": "02e50d35120403814b240a9276ed7787032caa9a",
+    "pixel_averages": "302e4217c137fa0d510a11f49500371362dfd4ae",
+    "method_fields": "d190bcb9d4f6d4b56debefcbdd8fc1a98e16a7ba",
+    "blob_parameters": "42728c93d43db7547a097156dd5c6d5edec0bccb",
+}
+
+
+def test_every_registered_specs_default_hash_is_the_one_before_the_move():
+    """All eighteen, not only the three products: the move to imaging_methods changed no field's name,
+    annotation or default."""
+    assert set(registry.REGISTRY) == set(DEFAULT_HASHES)
+    assert len(DEFAULT_HASHES) == 18
+    found = {
+        key: params_ui.hash_params(key, spec.params())[0]
+        for key, spec in registry.REGISTRY.items()
+    }
+    assert found == DEFAULT_HASHES
+
+
 @pytest.mark.parametrize("key", KEYS)
 def test_a_params_json_file_changing_the_window_fits_all_three(key, tmp_path):
     """J2b's ``--params-json {"averages": {"window": 30}}`` names every plot it is applied to."""
@@ -422,13 +459,13 @@ def test_params_survive_pickling_as_a_pool_worker_receives_them():
             assert _digest(key, again) == _digest(key, params)
 
 
-def test_a_fresh_interpreter_hashes_the_same_and_leaves_the_data_folder_to_fusion_ui(
+def test_a_fresh_interpreter_hashes_the_same_and_reads_the_data_folder_of_the_ui_dotenv(
     tmp_path,
 ):
-    """The import-order trap, for real: ``decorrelation.pipeline`` imports fusion_scripts' ``config``, which
-    fills every unset ``FUSION_*`` variable from its own ``.env`` -- on the server a folder that does not
-    exist. ``fusion_ui.config`` must have filled them first. The process is fresh, with a dotenv of its own
-    whose data folder is not fusion_scripts', and the params arrive pickled, as a pool worker gets them.
+    """A fresh process, with a dotenv of its own, hashes the three defaults as this one does and takes its data
+    folder from that dotenv, and the params arrive pickled, as a pool worker gets them. (Before L14 this was the
+    import-order trap: the pipeline imported fusion_scripts' ``config``, which filled the unset variables from
+    its own ``.env``. The library reads no ``config``, so nothing can win ahead of the UI's.)
     """
     folder = tmp_path / "the_data_folder_of_the_ui_dotenv"
     dotenv = tmp_path / "ui.env"
@@ -468,36 +505,6 @@ def test_a_fresh_interpreter_hashes_the_same_and_leaves_the_data_folder_to_fusio
     assert seen["registered"] == [True] * 3
 
 
-def test_importing_the_api_first_would_lose_the_data_folder(tmp_path):
-    """The trap the import order avoids, shown: with ``decorrelation.pipeline`` imported before
-    ``fusion_ui.config``, fusion_scripts' ``.env`` fills the data folder first and the UI's dotenv loses.
-    It needs a fusion_scripts ``.env`` that names a data folder, as every machine that runs the app has.
-    """
-    folder = tmp_path / "the_data_folder_of_the_ui_dotenv"
-    dotenv = tmp_path / "ui.env"
-    dotenv.write_text(f"FUSION_DATA_FOLDER={folder}\n")
-    environment = {k: v for k, v in os.environ.items() if not k.startswith("FUSION_")}
-    environment["FUSION_UI_DOTENV"] = str(dotenv)
-    child = (
-        "import json, os\n"
-        "import decorrelation.pipeline\n"
-        "scripts = os.environ.get('FUSION_DATA_FOLDER')\n"
-        "from fusion_ui import config\n"
-        "print(json.dumps([scripts, config.DATA_FOLDER if scripts else None]))\n"
-    )
-    done = subprocess.run(
-        [sys.executable, "-c", child],
-        env=environment,
-        cwd=REPO,
-        capture_output=True,
-        check=True,
-    )
-    scripts, seen = json.loads(done.stdout.decode().strip().splitlines()[-1])
-    if scripts is None:
-        pytest.skip("fusion_scripts has no .env naming a data folder here")
-    assert seen == os.path.expanduser(scripts) != str(folder)
-
-
 def _imports(path):
     tree = ast.parse(Path(path).read_text())
     for node in ast.walk(tree):
@@ -508,19 +515,35 @@ def _imports(path):
             yield node.lineno, node.module or ""
 
 
-def test_fusion_ui_config_is_imported_above_the_api_and_the_api_only_there():
-    lines = list(_imports(_pipeline.__file__))
-    config_line = min(n for n, m in lines if m == "fusion_ui")
-    api_line = min(n for n, m in lines if m.split(".")[0] == "decorrelation")
-    assert config_line < api_line
+def test_only_pipeline_imports_the_decorrelation_api():
+    """``imaging_methods.decorrelation`` is imported in one place, ``plots/_pipeline.py``, which prepares what
+    it is called with; nothing else in the app reaches the API but through it. The old import-order rule is
+    gone with the move to imaging_methods (``_pipeline`` imports no ``config`` and calls no ``import_config``).
+    """
 
-    # Nothing else in fusion_ui imports the API: a second import site is a second place to get the order
-    # wrong. The one exception is a test, which may need the API to say what it expects of it.
+    def reaches_api(module, name):
+        return module == "imaging_methods.decorrelation" or (
+            module == "imaging_methods" and name == "decorrelation"
+        )
+
+    def imports_api(path):
+        for node in ast.walk(ast.parse(Path(path).read_text())):
+            if isinstance(node, ast.ImportFrom):
+                if reaches_api(node.module or "", "") or any(
+                    reaches_api(node.module or "", a.name) for a in node.names
+                ):
+                    yield node.lineno
+            elif isinstance(node, ast.Import):
+                if any(a.name.startswith("imaging_methods.decorrelation") for a in node.names):
+                    yield node.lineno
+
+    assert list(imports_api(_pipeline.__file__))
     for path in (REPO / "fusion_ui").rglob("*.py"):
         if path == Path(_pipeline.__file__):
             continue
-        offenders = [m for _, m in _imports(path) if m.split(".")[0] == "decorrelation"]
-        assert not offenders, f"{path.relative_to(REPO)} imports {offenders}"
+        assert not list(imports_api(path)), str(path.relative_to(REPO))
+    names = {m.split(".")[0] for _, m in _imports(_pipeline.__file__)}
+    assert not names & {"config", "fusion_scripts"}
 
 
 @pytest.mark.parametrize(
@@ -910,7 +933,8 @@ def test_there_are_twenty_and_twelve_names_as_g2_settled_them():
 
 def test_the_three_renamed_scalars_are_the_names_the_store_already_has():
     """The point of renaming them: a number that two plots write under one name lines up on one axis. The
-    names are those ``two_dca`` and the ``taud_psd`` spec write, and the seeded ``density_scan`` rows carry.
+    names are those ``two_dca`` and the ``taud_psd`` spec write, and the seeded ``density_scan`` rows carry
+    (``seed.RECORD_NAMES``).
     """
     from fusion_ui.plots import spectra, two_dca
 
@@ -921,9 +945,7 @@ def test_the_three_renamed_scalars_are_the_names_the_store_already_has():
     written |= {name for _, _, name in spectra.scalars(stand_in)}
     assert written == set(RENAMED)
 
-    discharge = pytest.importorskip("density_scan.discharge")
-    seeded = set(discharge.BlobParameters().to_dict())
-    assert set(RENAMED) <= seeded
+    assert set(RENAMED) <= set(seed.RECORD_NAMES)
 
 
 def test_method_fields_writes_twenty_names_at_every_live_pixel_and_nothing_at_a_dead_one(

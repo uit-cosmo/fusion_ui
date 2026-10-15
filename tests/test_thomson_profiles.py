@@ -15,7 +15,6 @@ What these tests hold the view to, each on a synthetic file in the layout fusion
   describes it.
 """
 
-import ast
 import base64
 import dataclasses
 import inspect
@@ -33,6 +32,7 @@ from fusion_ui import documentation
 from fusion_ui.core import catalog, db, loader, multipixel, params_ui, registry, traces
 from fusion_ui.plots import thomson_profiles as tp
 from tests import thomson_fixtures as tf
+from tests.import_guard import reaches_fusion_scripts
 
 REPO = Path(__file__).resolve().parent.parent
 SINGLE_SHOT = str(REPO / "fusion_ui" / "pages" / "2_single_shot.py")
@@ -106,47 +106,9 @@ def test_the_spec_has_one_parameter_the_axis_and_it_is_not_a_many_pixel_view():
     assert params_ui.hash_params(spec.key, back)[0] == digest
 
 
-#: Where fusion_scripts' code is reached from: its own top-level packages, and the app's one door to them.
-FUSION_SCRIPTS = {"fusion_scripts", "density_scan", "decorrelation", "plotting_scripts", "tools"}
-
-
-def imported_names(source):
-    """Every name a module's source imports, dotted in full: ``from a.b import c`` is ``a.b`` and ``a.b.c``, so that
-    ``from fusion_ui.core import fusion_scripts`` is seen as the import of ``fusion_ui.core.fusion_scripts``."""
-    names = []
-    for node in ast.walk(ast.parse(source)):
-        if isinstance(node, ast.Import):
-            names += [alias.name for alias in node.names]
-        elif isinstance(node, ast.ImportFrom):
-            module = "." * node.level + (node.module or "")
-            names += [module] + [f"{module}.{alias.name}".lstrip(".") for alias in node.names]
-    return names
-
-
-def reaches_fusion_scripts(source):
-    """The imports of ``source`` that go to fusion_scripts, directly or through the app's ``core.fusion_scripts``."""
-    return [name for name in imported_names(source) if FUSION_SCRIPTS & set(name.split("."))]
-
-
 def test_the_module_imports_nothing_from_fusion_scripts():
     """L14: the app is moving off fusion_scripts, so new code reads the file and nothing else."""
     assert reaches_fusion_scripts(inspect.getsource(tp)) == []
-
-
-@pytest.mark.parametrize(
-    "line",
-    [
-        "import fusion_scripts",
-        "import density_scan.dead_pixels",
-        "from decorrelation import pipeline",
-        "from fusion_ui.core import fusion_scripts, loader",  # the way the codebase reaches it
-        "from fusion_ui.core.fusion_scripts import import_config",
-        "from ..core import fusion_scripts",
-    ],
-)
-def test_the_guard_sees_each_way_of_reaching_fusion_scripts(line):
-    assert reaches_fusion_scripts(line), line
-    assert reaches_fusion_scripts("from fusion_ui.core import loader, registry\nimport numpy as np") == []
 
 
 def test_the_catalog_indexes_the_thomson_scattering_folder_raw_only(conn, tmp_path):
