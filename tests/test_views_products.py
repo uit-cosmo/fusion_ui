@@ -623,25 +623,49 @@ def test_the_refresh_command_recomputes_each_settings_with_its_own_parameters_an
     }  # each bank has the lags its own settings gave it
 
 
-def test_a_product_computed_under_another_fusion_scripts_commit_is_marked(
+def test_a_product_computed_before_the_move_to_imaging_methods_says_so(
     stored, conn, monkeypatch
 ):
+    """A run whose code_version names fusion_scripts predates L14, whatever the checkout is now."""
     monkeypatch.setattr(
         store,
         "_code_version",
         lambda: "fusion_scripts=1111111 fusion_ui=aaaaaaa velocity_estimation=bbbbbbb",
     )
     stored.seed(conn, SHOT)
-    moved = {"fusion_scripts": "2222222", "fusion_ui": "ccccccc"}
+    sentence = (
+        "computed under fusion_scripts 1111111, before the methods moved to imaging_methods, "
+        "whose regression on the server found the stored products bit-equal"
+    )
+    for current in (
+        {"imaging_methods": "2222222", "fusion_ui": "ccccccc"},
+        {"imaging_methods": "unknown"},
+        None,
+    ):
+        notes = [p.code_note for p in collect(conn, current=current).values()]
+        assert notes == [sentence] * 3, current
+
+
+def test_a_product_computed_under_another_imaging_methods_commit_is_marked(
+    stored, conn, monkeypatch
+):
+    monkeypatch.setattr(
+        store,
+        "_code_version",
+        lambda: "imaging_methods=1111111 fusion_ui=aaaaaaa velocity_estimation=bbbbbbb",
+    )
+    stored.seed(conn, SHOT)
+    moved = {"imaging_methods": "2222222", "fusion_ui": "ccccccc"}
     notes = [p.code_note for p in collect(conn, current=moved).values()]
     assert (
         notes
-        == ["computed under fusion_scripts 1111111, the checkout is now at 2222222"] * 3
+        == ["computed under imaging_methods 1111111, the checkout is now at 2222222"]
+        * 3
     )
     # The same commit, dirty or not, is the same code.
     assert not any(
         p.code_note
-        for p in collect(conn, current={"fusion_scripts": "1111111-dirty"}).values()
+        for p in collect(conn, current={"imaging_methods": "1111111-dirty"}).values()
     )
     # Another repository moving on is not the page's business, and an unreadable checkout says nothing.
     assert not any(
@@ -649,7 +673,7 @@ def test_a_product_computed_under_another_fusion_scripts_commit_is_marked(
     )
     assert not any(
         p.code_note
-        for p in collect(conn, current={"fusion_scripts": "unknown"}).values()
+        for p in collect(conn, current={"imaging_methods": "unknown"}).values()
     )
     assert not any(p.code_note for p in collect(conn, current=None).values())
 
@@ -658,12 +682,12 @@ def test_runs_from_before_the_versions_were_recorded_are_not_marked(
     stored, conn, monkeypatch
 ):
     monkeypatch.setattr(
-        store, "_code_version", lambda: "fusion_ui=aaaaaaa imaging_methods=bbbbbbb"
+        store, "_code_version", lambda: "imported"
     )
     stored.seed(conn, SHOT)
     assert not any(
         p.code_note
-        for p in collect(conn, current={"fusion_scripts": "2222222"}).values()
+        for p in collect(conn, current={"imaging_methods": "2222222"}).values()
     )
 
 

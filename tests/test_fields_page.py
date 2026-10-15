@@ -358,7 +358,7 @@ def test_a_product_whose_input_changed_is_marked_stale_with_the_command_that_ref
     assert figures(app)  # still drawn: stale is information, not an error
 
 
-def test_a_product_computed_under_another_fusion_scripts_commit_is_marked(
+def test_a_product_computed_before_the_move_says_so_and_one_under_another_imaging_methods_commit_is_marked(
     deployment, monkeypatch
 ):
     import streamlit as st
@@ -370,18 +370,36 @@ def test_a_product_computed_under_another_fusion_scripts_commit_is_marked(
     monkeypatch.setattr(
         versions,
         "code_version",
-        lambda: {"fusion_scripts": "2222222-dirty", "fusion_ui": "ccccccc"},
+        lambda: {"imaging_methods": "2222222-dirty", "fusion_ui": "ccccccc"},
     )
     app = run(selection=SELECTION)
-    note = ":orange-badge[computed under fusion_scripts 1111111, the checkout is now at 2222222]"
+    note = (
+        ":orange-badge[computed under fusion_scripts 1111111, before the methods moved to "
+        "imaging_methods, whose regression on the server found the stored products bit-equal]"
+    )
     assert sum(note in m.value for m in app.markdown) == 3
     assert [e.proto.expanded for e in app.expander] == [True]
+
+    # A run of today's code compares imaging_methods' commit with the checkout's.
+    st.cache_data.clear()
+    conn = deployment.conn()
+    try:
+        conn.execute(
+            "UPDATE runs SET code_version = ?",
+            ("imaging_methods=1111111 fusion_ui=aaaaaaa",),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    app = run(selection=SELECTION)
+    note = ":orange-badge[computed under imaging_methods 1111111, the checkout is now at 2222222]"
+    assert sum(note in m.value for m in app.markdown) == 3
     # The same commit, however it was read, is the same code.
     st.cache_data.clear()
     monkeypatch.setattr(
         versions,
         "code_version",
-        lambda: {"fusion_scripts": "1111111", "fusion_ui": "ccccccc"},
+        lambda: {"imaging_methods": "1111111", "fusion_ui": "ccccccc"},
     )
     assert "orange-badge" not in " ".join(
         m.value for m in run(selection=SELECTION).markdown

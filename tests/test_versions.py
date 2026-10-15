@@ -213,42 +213,45 @@ def test_an_unimportable_module_has_no_checkout():
     assert versions.checkout("no_such_module_anywhere") is None
 
 
-def test_code_version_includes_fusion_scripts_even_when_git_refuses(
+def test_code_version_includes_experimental_database_even_when_git_refuses(
     tmp_path, monkeypatch, git_refuses
 ):
-    """fusion_scripts' modules are top-level: its checkout is the directory
-    holding the package it is found by (``decorrelation/`` for real)."""
-    root = fake_checkout(tmp_path / "fusion_scripts", loose={"refs/heads/main": SHA})
-    (root / "versions_probe_decorrelation").mkdir()
-    (root / "versions_probe_decorrelation" / "__init__.py").write_text("")
+    """experimental_database holds the hand-made 1160616 mask that those products
+    depend on: its checkout is the directory above the package it is found by."""
+    root = fake_checkout(
+        tmp_path / "experimental_database", loose={"refs/heads/main": SHA}
+    )
+    (root / "versions_probe_edb").mkdir()
+    (root / "versions_probe_edb" / "__init__.py").write_text("")
     monkeypatch.syspath_prepend(str(root))
     monkeypatch.setitem(
-        versions.REPOSITORIES, "fusion_scripts", "versions_probe_decorrelation"
+        versions.REPOSITORIES, "experimental_database", "versions_probe_edb"
     )
 
-    assert versions.code_version()["fusion_scripts"] == SHA[:7]
+    assert versions.code_version()["experimental_database"] == SHA[:7]
 
     store._code_version.cache_clear()
     try:
         recorded = versions.parse(store._code_version())
     finally:
         store._code_version.cache_clear()
-    assert recorded["fusion_scripts"] == SHA[:7]
+    assert recorded["experimental_database"] == SHA[:7]
+    # fusion_scripts is not one of them since L14 (stored rows keep the label, as history).
     assert set(recorded) == {
         "fusion_ui",
         "imaging_methods",
-        "fusion_scripts",
         "velocity_estimation",
+        "experimental_database",
     }
 
 
-def test_the_installed_fusion_scripts_is_found_through_decorrelation():
+def test_the_installed_experimental_database_is_found_through_its_package():
     """On a machine set up as the README says: the editable checkout."""
-    root = versions.checkout("decorrelation")
+    root = versions.checkout("experimental_database")
     if root is None:
-        pytest.skip("fusion_scripts is not installed from a checkout here")
-    assert (root / "decorrelation").is_dir()
-    assert versions.code_version()["fusion_scripts"] != versions.UNKNOWN
+        pytest.skip("experimental_database is not installed from a checkout here")
+    assert (root / "experimental_database").is_dir()
+    assert versions.code_version()["experimental_database"] != versions.UNKNOWN
 
 
 # ---------------------------------------------------------------------------

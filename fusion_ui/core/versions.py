@@ -5,11 +5,15 @@ computed by last month's code is the trap that makes people distrust the tool.
 It is never part of a cache key (see :mod:`fusion_ui.core.store`).
 
 Four repositories decide what a result is: this app, ``imaging_methods`` (the
-2DCA), ``fusion_scripts`` (the decorrelation API) and ``velocity_estimation``
-(the TDE). Each is found from where its code is imported from -- the editable
-checkout, or a worktree shadowing it from the current directory -- never from
-a hard-coded path. fusion_scripts has no package of its own (its modules are
-top-level), so its checkout is the directory holding ``decorrelation/``.
+2DCA and the decorrelation API), ``velocity_estimation`` (the TDE) and
+``experimental_database`` (the hand-made 1160616 dead-pixel mask, which that
+day's products depend on). Each is found from where its code is imported from --
+the editable checkout, or a worktree shadowing it from the current directory --
+never from a hard-coded path.
+
+Rows stored before L14 also name ``fusion_scripts``, whose ``decorrelation`` held
+the pipeline until it moved to ``imaging_methods``: that label stays in them, as
+history, and :func:`parse` reads it. New runs do not carry it.
 
 A version is the commit's first seven hex digits, plus ``-dirty`` when git
 reports modified tracked files. That is what ``git describe --always --dirty``
@@ -17,7 +21,7 @@ prints for a repository without tags, which is the form the stored rows have
 for fusion_ui and imaging_methods. The form is fixed on purpose: the same
 commit must read the same however it was found, because a page compares a
 stored version with the current one. ``git describe --tags`` would not do --
-fusion_scripts carries a tag, and would read ``<tag>-12-g7b761fd`` through git
+a repository that carries a tag would read ``<tag>-12-g7b761fd`` through git
 but ``7b761fd`` through the files.
 
 Two ways to find the commit, in that order:
@@ -47,8 +51,8 @@ UNKNOWN = "unknown"
 REPOSITORIES = {
     "fusion_ui": "fusion_ui",
     "imaging_methods": "imaging_methods",
-    "fusion_scripts": "decorrelation",
     "velocity_estimation": "velocity_estimation",
+    "experimental_database": "experimental_database",
 }
 
 #: Hex digits kept of a commit: git's own default abbreviation.

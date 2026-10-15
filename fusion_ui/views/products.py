@@ -54,7 +54,8 @@ class Product:
     dataset: Any = None
     #: Why the result may no longer be what a recompute gives (``store.stale_runs``' reason).
     stale: Optional[str] = None
-    #: A sentence when fusion_scripts has moved on since the result was computed.
+    #: A sentence when the result was computed before the methods moved to imaging_methods, or under another
+    #: imaging_methods commit than the checkout's.
     code_note: Optional[str] = None
     #: What fills it, when it is not ok.
     command: Optional[str] = None
@@ -261,11 +262,25 @@ def preprocessed_shots(conn, machine):
 
 
 def commit_note(run, current):
-    """A sentence when the run was made under another fusion_scripts commit than the current checkout's."""
-    stored = versions.commit(versions.parse(run["code_version"]).get("fusion_scripts"))
-    now = versions.commit((current or {}).get("fusion_scripts"))
-    if stored and now and stored != now:
-        return f"computed under fusion_scripts {stored}, the checkout is now at {now}"
+    """A sentence about the code a run was computed under, or ``None``.
+
+    A run whose ``code_version`` names ``fusion_scripts`` was computed before the methods moved from
+    fusion_scripts to imaging_methods (L14), and says so: the regression on the server found the stored
+    products bit-equal to what imaging_methods computes. Any other run compares imaging_methods' commit with
+    the checkout's. Information only: nothing is recomputed, and neither the cache key nor ``stale_runs``
+    reads ``code_version``.
+    """
+    stored = versions.parse(run["code_version"])
+    if "fusion_scripts" in stored:
+        before = versions.commit(stored["fusion_scripts"]) or stored["fusion_scripts"]
+        return (
+            f"computed under fusion_scripts {before}, before the methods moved to imaging_methods, "
+            "whose regression on the server found the stored products bit-equal"
+        )
+    then = versions.commit(stored.get("imaging_methods"))
+    now = versions.commit((current or {}).get("imaging_methods"))
+    if then and now and then != now:
+        return f"computed under imaging_methods {then}, the checkout is now at {now}"
     return None
 
 
