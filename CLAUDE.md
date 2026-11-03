@@ -480,8 +480,8 @@ checkout's, or before the methods moved to it (a `code_version` that names
 first, each with the parameters it was stored with.
 
 **`fusion_ui/api.py` reads the products from Python**, for the group's own
-scripts: `shots`, `blob_parameters`, `velocity_fields` (`method_fields`) and
-`table`, by shot and `(x, y)` pixels, under default or named `settings`. It
+scripts: `shots`, `blob_parameters`, `velocity_fields` (`method_fields`),
+`velocity_tde` (its per-pixel runs, gathered onto the grid) and `table`, by shot and `(x, y)` pixels, under default or named `settings`. It
 never computes and opens the database with `db.open_readonly`, which neither
 migrates nor writes; a missing product raises `api.NotStored` with the
 `precompute` command. Its names are what scripts call, so keep them stable.

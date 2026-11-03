@@ -283,7 +283,11 @@ ds = api.blob_parameters(1140827019)             # xarray, every pixel on (y, x)
 ds = api.blob_parameters(1140827019, pixels=[(4, 5), (5, 5)])  # (x, y) pairs, on "pixel"
 df = api.table()                                 # pandas, one row per stored shot and live pixel
 ds = api.velocity_fields(1140827019, pixels=[(4, 5)])          # every method's v_R, v_Z, tracks
+ds = api.velocity_tde(1160616009)                # the PPCF 2026 paper's TDE, gathered from its per-pixel runs
 ```
+
+`examples/garcia_velocity_2026_figs8_9.py` redraws Figs 8 and 9 of Garcia, Losada
+et al., PPCF 68 (2026) 055034 this way, and is the example to start from.
 
 Each variable of `blob_parameters` carries its `long_name` and `units`; `R` and
 `Z` are in metres, and `dead` marks the pixels the mask removed. The default

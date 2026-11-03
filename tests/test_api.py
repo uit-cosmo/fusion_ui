@@ -124,3 +124,71 @@ def test_an_older_schema_is_refused(tmp_path):
 def test_unknown_settings_fields_raise(served):
     with pytest.raises((TypeError, ValueError)):
         api.shots(settings={"no_such_knob": 1})
+
+
+# ---------------------------------------------------------------------------
+# velocity_tde: one run a reference pixel, gathered onto the grid
+# ---------------------------------------------------------------------------
+
+TDE_PIXELS = [(1, 1), (2, 1)]
+
+
+@pytest.fixture(scope="module")
+def with_tde(deployment, tmp_path_factory):
+    """A copy of the deployment with velocity_tde stored at two pixels of the shot, as precompute --pixel does."""
+    from fusion_ui.core import registry, store
+    from fusion_ui.plots.velocity_tde import TdeVelocityParams
+
+    copy = deployment.copy(tmp_path_factory.mktemp("with_tde"))
+    with pytest.MonkeyPatch.context() as patch:
+        copy.use(patch)
+        conn = db.open_db(copy.database)
+        target = registry.Target(
+            "cmod", SHOT, "apd", True, str(copy.path), float("nan"), float("nan"), "none"
+        )
+        results = {}
+        for x, y in TDE_PIXELS:
+            result, run = store.result(
+                conn,
+                registry.get("velocity_tde"),
+                target,
+                TdeVelocityParams(refx=x, refy=y),
+                deployment.record,
+            )
+            assert run["status"] == "ok", run["error"]
+            results[(x, y)] = result
+        conn.close()
+    return copy, results
+
+
+def test_velocity_tde_gathers_the_stored_pixels(with_tde, monkeypatch):
+    copy, results = with_tde
+    copy.use(monkeypatch)
+    assert api.shots("velocity_tde") == [SHOT]
+    ds = api.velocity_tde(SHOT)
+    assert int(ds["stored"].sum()) == len(TDE_PIXELS)
+    for (x, y), result in results.items():
+        assert ds["vx"].isel(y=y, x=x) == pytest.approx(float(result["vx"]), nan_ok=True)
+        assert float(ds["R"].isel(y=y, x=x)) == pytest.approx(float(result["R"].isel(y=y, x=x)) / 100)
+    assert np.isnan(ds["vx"].isel(y=0, x=0))
+    assert ds["vx"].attrs["units"] == "m/s"
+    picked = api.velocity_tde(SHOT, pixels=[(2, 1)])
+    assert float(picked["vx"][0]) == pytest.approx(float(results[(2, 1)]["vx"]), nan_ok=True)
+
+
+def test_velocity_tde_table_has_the_stored_pixels_only(with_tde, monkeypatch):
+    copy, _ = with_tde
+    copy.use(monkeypatch)
+    df = api.table("velocity_tde")
+    assert sorted(zip(df.x, df.y)) == sorted(TDE_PIXELS)
+    assert "stored" not in df
+
+
+def test_velocity_tde_settings_cannot_set_the_pixel(served):
+    with pytest.raises(ValueError, match="reference pixel"):
+        api.velocity_tde(SHOT, settings={"refx": 1})
+
+
+def test_velocity_tde_with_nothing_stored_says_how_to_fill_it(served):
+    with pytest.raises(api.NotStored, match="--pixel X Y"):
+        api.velocity_tde(SHOT)
