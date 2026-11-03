@@ -605,3 +605,13 @@ def test_the_page_survives_a_missing_text(deployment, monkeypatch, tmp_path):
     assert [e.value for e in app.error][0].startswith(
         "The text of this page could not be read"
     )
+
+
+def test_the_python_api_tab_shows_the_example_and_its_output(deployment):
+    app = run_page()
+    assert [t.label for t in app.tabs] == ["Quantities", "Python API"]
+    tab = app.tabs[1]
+    code = [c.value for c in tab.code]
+    assert any("from fusion_ui import api" in c and "def figs_8_and_9" in c for c in code)
+    assert any("V_R m/s (paper)" in c for c in code)
+    assert any(type(node).__name__ == "Image" for node in tab.children.values())

@@ -55,8 +55,9 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-# The hand-written prose the pages read: the run-day summaries, and the dead-pixel summary in plain words.
-fusion_ui = ["data/*.md"]
+# The hand-written prose the pages read (the run-day summaries, the dead-pixel summary in plain words, the
+# Python API), and the API example's output the Documentation page shows.
+fusion_ui = ["data/*.md", "data/examples/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
