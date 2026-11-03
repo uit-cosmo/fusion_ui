@@ -14,7 +14,9 @@ averaging off each pixel's record, with its own selection criteria (a Lorentzian
 stored velocity fields hold, among others, ``vr3_catde`` (the default here): the three-point time delay estimate
 on the 2DCA conditional average, also at 2.5 standard deviations. The paper's published averages are drawn as open
 black circles for comparison; ``vr3_catde`` agrees with them to within 7%, as does the app's own copy of the
-paper's method (``velocity_tde``, which the API does not read). ``--method`` picks another radial velocity of the
+paper's method (``velocity_tde``, which the API does not read). Its bars are wider than the paper's (up to
+1400 m/s at f_GW = 0.80, against about 1000): single pixels of the stored fields scatter more than the paper's
+selection. ``--method`` picks another radial velocity of the
 stored fields: ``vr3_tde``, ``vr2_catde``, ``vr_max``, ``vr_com``, ``vr_2dcc``.
 """
 
@@ -146,8 +148,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     rows = far_sol_velocity(args.method)
-    with pd.option_context("display.float_format", "{:.0f}".format):
-        print(rows.to_string(index=False))
+    print(rows.round({"v_r": 0, "low": 0, "high": 0}).to_string(index=False))
     fig = figure_12(rows, args.method)
     save(fig, args.out, figure_12, {"method": args.method})
     print(f"saved {args.out}")
