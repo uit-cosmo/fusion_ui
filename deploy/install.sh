@@ -416,6 +416,11 @@ if ! nginx -t; then
   echo "  as it was; fix /etc/nginx/sites-available/fusion-ui and re-run." >&2
   exit 1
 fi
+# Restart nginx when a start fails (deploy/nginx-restart.conf says why).
+mkdir -p /etc/systemd/system/nginx.service.d
+cp "$APP_DIR/deploy/nginx-restart.conf" \
+   /etc/systemd/system/nginx.service.d/fusion-ui-restart.conf
+systemctl daemon-reload
 # enable --now rather than reload: a previous failed `nginx -t` leaves the
 # service stopped, and reload cannot start a dead service.
 systemctl enable --now nginx

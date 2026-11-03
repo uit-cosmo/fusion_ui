@@ -214,6 +214,14 @@ works either way; `http://<host>` keeps going wherever it goes today.
 
 To take port 80 back, stop the other service and re-run the installer.
 
+The check runs at install time only. Apache here is enabled, and an unattended
+apache upgrade starts it again: on 2026-10-15 one did, it took port 80, and when
+the next nginx upgrade restarted nginx on 10-28 the site went down for six days
+(`bind() to 0.0.0.0:80 failed (98: Address already in use)` in
+`journalctl -u nginx`). The fix was removing the redirect block from
+`/etc/nginx/sites-available/fusion-ui`, as the installer would have; the
+deployed site now serves 443 only.
+
 ## 2. Environment
 
 ```bash
@@ -316,8 +324,16 @@ the name and re-running is enough.
 sudo cp "$APP_DIR/deploy/nginx.conf" /etc/nginx/sites-available/fusion-ui
 sudo ln -sf /etc/nginx/sites-available/fusion-ui /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default
+sudo mkdir -p /etc/systemd/system/nginx.service.d
+sudo cp "$APP_DIR/deploy/nginx-restart.conf" \
+  /etc/systemd/system/nginx.service.d/fusion-ui-restart.conf
+sudo systemctl daemon-reload
 sudo nginx -t && sudo systemctl reload nginx
 ```
+
+Ubuntu's nginx unit never restarts a failed start, and an unattended upgrade
+restarts nginx. The drop-in makes it retry every 30 s for as long as it fails,
+so a conflict that clears up (see below) brings the site back by itself.
 
 ## 6. Firewall
 
