@@ -613,5 +613,4 @@ def test_the_python_api_tab_shows_the_example_and_its_output(deployment):
     tab = app.tabs[1]
     code = [c.value for c in tab.code]
     assert any("from fusion_ui import api" in c and "def figs_8_and_9" in c for c in code)
-    assert any("V_R m/s (paper)" in c for c in code)
     assert any(type(node).__name__ == "Image" for node in tab.children.values())

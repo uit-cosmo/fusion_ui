@@ -9,7 +9,7 @@ name the text does not describe is named on the page rather than missed.
 
 A second tab, **Python API**, is how to read the stored results from a script (``fusion_ui.api``): the
 hand-written ``fusion_ui/data/python_api.md``, then the example ``examples/garcia_velocity_2026_figs8_9.py``
-and its output as it was last run on the group server (``fusion_ui/data/examples/``), not computed here.
+and the figure it saved when last run on the group server (``fusion_ui/data/examples/``), not computed here.
 """
 
 from pathlib import Path
@@ -95,8 +95,7 @@ def show_block(block, doc, values, settings, unknown):
 DATA = Path(__file__).resolve().parent.parent / "data"
 API_TEXT = DATA / "python_api.md"
 EXAMPLE = Path(__file__).resolve().parents[2] / "examples" / "garcia_velocity_2026_figs8_9.py"
-#: The example's output, as it was last run on the group server: what it printed, and the figure it saved.
-EXAMPLE_TABLE = DATA / "examples" / "garcia_velocity_2026_figs8_9.txt"
+#: The example's output, the figure it saved when last run on the group server.
 EXAMPLE_FIGURE = DATA / "examples" / "garcia_velocity_2026_figs8_9.png"
 
 
@@ -108,7 +107,7 @@ def show_api():
     st.markdown("### Example: Figs 8 and 9 of Garcia, Losada et al., PPCF 68 (2026) 055034")
     st.markdown(
         "The script reads the paper's velocities (`api.velocity_tde`) and blob sizes (`api.blob_parameters`)"
-        " of its five shots and redraws both figures, with the paper's own points over them as black outlines."
+        " of its five shots and redraws both figures."
         f" It is `examples/{EXAMPLE.name}` in the checkout; copy it and change what you need."
     )
     try:
@@ -116,12 +115,7 @@ def show_api():
     except OSError:
         st.info(f"The script is not in this checkout (examples/{EXAMPLE.name}).")
     st.markdown("### Its output")
-    st.caption(
-        "As the script printed and saved it when last run on the group server, not computed here."
-        " The paper's values are in parentheses."
-    )
-    if EXAMPLE_TABLE.exists():
-        st.code(EXAMPLE_TABLE.read_text(encoding="utf-8"), language=None)
+    st.caption("As the script saved it when last run on the group server, not computed here.")
     if EXAMPLE_FIGURE.exists():
         st.image(str(EXAMPLE_FIGURE))
 
