@@ -35,11 +35,6 @@ Run it on the group server with the app's Python, which finds the app's database
 """
 
 import argparse
-import json
-import subprocess
-import sys
-from datetime import datetime, timezone
-from pathlib import Path
 
 import matplotlib
 
@@ -51,15 +46,6 @@ import xarray as xr  # noqa: E402
 import experimental_database  # noqa: E402
 from fusion_ui import api, config  # noqa: E402
 from fusion_ui.core import geometry, loader, mlp  # noqa: E402
-
-try:  # the figure-provenance package, where it is installed
-    import figure_provenance
-    from figure_provenance import provenance
-except ImportError:
-    figure_provenance = None
-
-    def provenance(function):
-        return function
 
 
 E = 1.602176634e-19  # C
@@ -248,7 +234,6 @@ def _paper_point(ax, x, value, marker):
     ax.plot(x, y, marker, ms=8, mfc="none", mec="0.15", mew=0.8, zorder=5)
 
 
-@provenance
 def figs_8_and_9(rows):
     """Figs 8 and 9 of Garcia, Losada et al. PPCF 68 (2026) 055034 on one page, through fusion_ui.api.
 
@@ -300,34 +285,6 @@ def table(rows):
     return "\n".join(lines)
 
 
-def save(fig, path, function, arguments):
-    """Through ``figure_provenance`` where it is installed; without it, the same record written by hand."""
-    if figure_provenance is not None:
-        figure_provenance.save(fig, path, stacklevel=2)
-        return
-    fig.savefig(path, dpi=200, bbox_inches="tight")
-
-    def git(*args):
-        here = Path(__file__).resolve().parent
-        return subprocess.run(["git", "-C", str(here), *args], capture_output=True, text=True).stdout.strip()
-
-    manifest = Path(path).parent / "provenance.json"
-    entries = json.loads(manifest.read_text()) if manifest.exists() else {}
-    entries[Path(path).name] = {
-        "producer": f"{Path(__file__).resolve()}:{function.__name__}",
-        "purpose": function.__doc__,
-        "arguments": arguments,
-        "command": " ".join([sys.executable, *sys.argv]),
-        "cwd": str(Path.cwd()),
-        "remote": git("remote", "get-url", "origin"),
-        "commit": git("rev-parse", "--short", "HEAD"),
-        "uncommitted": git("status", "--porcelain", "--", str(Path(__file__).resolve())).splitlines(),
-        "created": datetime.now(timezone.utc).isoformat(),
-        "note": "written by the script's own fallback: figure_provenance is not installed",
-    }
-    manifest.write_text(json.dumps(entries, indent=2))
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", default="garcia_velocity_2026_figs8_9.png", help="where to save the figure")
@@ -335,7 +292,7 @@ def main(argv=None):
     rows = shot_data()
     print(table(rows))
     fig = figs_8_and_9(rows)
-    save(fig, args.out, figs_8_and_9, {})
+    fig.savefig(args.out, dpi=200, bbox_inches="tight")
     print(f"saved {args.out}")
 
 
