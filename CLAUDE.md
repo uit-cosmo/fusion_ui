@@ -479,6 +479,14 @@ checkout's, or before the methods moved to it (a `code_version` that names
 `fusion-ui precompute … --stale` recomputes the stale ones in place, upstream
 first, each with the parameters it was stored with.
 
+**`fusion_ui/api.py` reads the products from Python**, for the group's own
+scripts: `shots`, `blob_parameters`, `velocity_fields` (`method_fields`) and
+`table`, by shot and `(x, y)` pixels, under default or named `settings`. It
+never computes and opens the database with `db.open_readonly`, which neither
+migrates nor writes; a missing product raises `api.NotStored` with the
+`precompute` command. Its names are what scripts call, so keep them stable.
+Serving the same functions over HTTP for laptops is planned, not built.
+
 **`fusion-ui precompute`** takes several plots and runs them in dependency order
 within each shot, so a bank is computed once. `--workers N` runs a pool of
 spawned processes over the shots, largest file first, and is the only process

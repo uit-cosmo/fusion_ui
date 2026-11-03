@@ -259,6 +259,31 @@ def connect(path=None):
     return conn
 
 
+def open_readonly(path=None):
+    """Open the app database for reading only: no directory, no migration, no write.
+
+    For readers outside the app (``fusion_ui.api``), who may not own the file.
+    Refuses a database whose schema is not the one this code writes, rather
+    than migrate it: that is ``fusion-ui init-db``'s to do.
+    """
+    if path is None:
+        path = config.UI_DB_PATH
+    path = Path(os.path.expanduser(str(path)))
+    if not path.exists():
+        raise FileNotFoundError(f"no app database at {path}")
+    conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=30.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 5000")
+    version = schema_version(conn)
+    if version != SCHEMA_VERSION:
+        conn.close()
+        raise RuntimeError(
+            f"{path} is at schema v{version}, this code reads v{SCHEMA_VERSION}:"
+            " run `fusion-ui init-db` with the app's checkout"
+        )
+    return conn
+
+
 def schema_version(conn):
     return conn.execute("PRAGMA user_version").fetchone()[0]
 

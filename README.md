@@ -264,6 +264,34 @@ cp .env.example .env          # then edit for your machine
 .venv/bin/streamlit run fusion_ui/app.py
 ```
 
+## Reading results from Python
+
+`fusion_ui.api` reads the stored blob parameters and velocity fields for
+scripts, by shot and pixel. It only reads: nothing is computed, and the
+database is opened read-only. On the server, run a script with the app's
+Python, so that it finds the app's database and cache:
+
+```bash
+/media/fusion/fusion-files/jlo044/fusion_ui/.venv/bin/python my_script.py
+```
+
+```python
+from fusion_ui import api
+
+api.shots()                                      # shots with blob parameters stored
+ds = api.blob_parameters(1140827019)             # xarray, every pixel on (y, x)
+ds = api.blob_parameters(1140827019, pixels=[(4, 5), (5, 5)])  # (x, y) pairs, on "pixel"
+df = api.table()                                 # pandas, one row per stored shot and live pixel
+ds = api.velocity_fields(1140827019, pixels=[(4, 5)])          # every method's v_R, v_Z, tracks
+```
+
+Each variable of `blob_parameters` carries its `long_name` and `units`; `R` and
+`Z` are in metres, and `dead` marks the pixels the mask removed. The default
+`settings` are the products' defaults, which is what `precompute` stores; pass
+the fields to change (`settings={"averages": {"window": 30}}`) to read another
+stored set. A shot that is not stored raises `api.NotStored`, whose `command`
+is the `fusion-ui precompute` line that fills it.
+
 ## Commands
 
 ```bash
