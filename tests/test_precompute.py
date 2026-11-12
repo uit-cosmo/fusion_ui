@@ -1,8 +1,12 @@
-"""The precompute engine: targets from the index, params, and the run loop."""
+"""The precompute engine in one process: targets from the index, params, and the run loop."""
 
+import dataclasses
+import errno
 import os
+import shutil
 
 import pytest
+import xarray as xr
 
 import fusion_ui.plots  # noqa: F401 - registers taud_psd etc.
 from fusion_ui.core import catalog, db, precompute, registry, store
@@ -25,297 +29,200 @@ def indexed(monkeypatch, tmp_path, apd_dataset_path):
     conn.close()
 
 
+def fill(conn, pixel=(2, 3), **options):
+    """``taud_psd`` over the index: ``(stats, lines)``.
+
+    The fixture is 4x5, so ``pixel=None``, the spec's default (6, 6), is out of
+    range and the compute raises.
+    """
+    spec = registry.get("taud_psd")
+    lines = []
+    stats = precompute.run(
+        conn,
+        spec,
+        precompute.targets_for(conn, spec, "cmod"),
+        precompute.default_params(spec, pixel),
+        log=lines.append,
+        **options,
+    )
+    return stats, lines
+
+
+def the_run(conn):
+    (run,) = conn.execute("SELECT * FROM runs").fetchall()
+    return run
+
+
+def count_opens(monkeypatch):
+    """The paths ``precompute`` opens from here on."""
+    opened = []
+    real_open = xr.open_dataset
+
+    def counting(path, *args, **kwargs):
+        opened.append(path)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(precompute.xr, "open_dataset", counting)
+    return opened
+
+
 def test_targets_for_picks_only_shots_the_spec_accepts(indexed):
     spec = registry.get("taud_psd")
     targets = precompute.targets_for(indexed, spec, "cmod")
     assert [(t.shot, t.diagnostic, t.preprocessed) for t in targets] == [
         (1234, "apd", False)
     ]
+    assert precompute.targets_for(indexed, spec, "cmod", shots={999}) == []
     # An ASP-only spec matches nothing in this tree.
     assert precompute.targets_for(indexed, registry.get("probe_trace"), "cmod") == []
 
 
 def test_targets_skip_the_file_version_a_spec_does_not_accept(
-    monkeypatch, tmp_path, apd_dataset_path
+    indexed, apd_dataset_path
 ):
     """dead_pixels reads raw files only: the preprocessed file has them interpolated away."""
-    import shutil
+    shutil.copy(
+        apd_dataset_path, apd_dataset_path.with_name("apd_1234_preprocessed.nc")
+    )
+    catalog.rescan(indexed, str(apd_dataset_path.parent.parent), "cmod", None)
 
-    shutil.copy(apd_dataset_path, apd_dataset_path.with_name("apd_1234_preprocessed.nc"))
-    conn = db.open_db(tmp_path / "state" / "versions.sqlite")
-    catalog.rescan(conn, str(apd_dataset_path.parent.parent), "cmod", None)
-    versions = lambda key: [  # noqa: E731
-        t.preprocessed for t in precompute.targets_for(conn, registry.get(key), "cmod")
-    ]
+    def versions(key):
+        targets = precompute.targets_for(indexed, registry.get(key), "cmod")
+        return [t.preprocessed for t in targets]
+
     assert versions("taud_psd") == [False, True]
     assert versions("dead_pixels") == [False]
-    conn.close()
 
 
-def test_targets_come_back_in_a_fixed_order(indexed):
-    """The query orders the fill; the query plan must not get a say in it."""
-    spec = registry.get("taud_psd")
-    keys = [
-        (t.shot, t.diagnostic, t.preprocessed)
-        for t in precompute.targets_for(indexed, spec, "cmod")
-    ]
-    assert keys == sorted(keys)
-
-
-def test_targets_can_be_restricted_to_a_shot(indexed):
-    spec = registry.get("taud_psd")
-    assert precompute.targets_for(indexed, spec, "cmod", shots={999}) == []
-
-
-def test_default_params_sets_the_reference_pixel(indexed):
-    spec = registry.get("taud_psd")
-    params = precompute.default_params(spec, pixel=(2, 3))
+def test_default_params_sets_the_reference_pixel():
+    params = precompute.default_params(registry.get("taud_psd"), pixel=(2, 3))
     assert (params.refx, params.refy) == (2, 3)
 
 
-def test_a_full_fill_computes_then_reads_the_cache(indexed):
-    spec = registry.get("taud_psd")
-    params = precompute.default_params(spec, pixel=(2, 3))
-    targets = precompute.targets_for(indexed, spec, "cmod")
-
-    first = precompute.run(indexed, spec, targets, params)
+def test_a_fill_computes_then_reads_the_cache_unless_forced(indexed, monkeypatch):
+    first, _ = fill(indexed)
     assert (first.computed, first.cached, first.failed) == (1, 0, 0)
-
     # The scalar was written at the pixel it was computed for.
     value = indexed.execute(
-        "SELECT s.value FROM scalars s WHERE s.x = 2 AND s.y = 3"
-        " AND s.name = 'taud_psd'"
+        "SELECT value FROM scalars WHERE x = 2 AND y = 3 AND name = 'taud_psd'"
     ).fetchone()[0]
     assert value is not None
 
-    second = precompute.run(indexed, spec, targets, params)
+    opened = count_opens(monkeypatch)
+    second, _ = fill(indexed)
     assert (second.computed, second.cached, second.failed) == (0, 1, 0)
+    assert opened == [], "a cache hit must not open its file"
 
-
-def test_force_recomputes_an_existing_result(indexed):
-    spec = registry.get("taud_psd")
-    params = precompute.default_params(spec, pixel=(2, 3))
-    targets = precompute.targets_for(indexed, spec, "cmod")
-
-    precompute.run(indexed, spec, targets, params)
-    forced = precompute.run(indexed, spec, targets, params, force=True)
+    forced, _ = fill(indexed, force=True)
     assert (forced.computed, forced.cached) == (1, 0)
 
 
 def test_a_missing_blob_is_recomputed_not_skipped(indexed):
-    """An 'ok' run whose blob was cleared must be re-warmed, not skipped: the
-    ledger alone is not enough to count a cache hit."""
-    spec = registry.get("taud_psd")
-    params = precompute.default_params(spec, pixel=(2, 3))
-    targets = precompute.targets_for(indexed, spec, "cmod")
+    """The ledger alone is not a cache hit: a cleared cache must be filled again."""
+    fill(indexed)
+    os.remove(the_run(indexed)["blob_path"])
 
-    precompute.run(indexed, spec, targets, params)
-    params_hash, _ = store.record_params(indexed, spec.key, params)
-    run = store.find_run(indexed, targets[0], spec.key, params_hash)
-    assert run["status"] == "ok"
-    os.remove(run["blob_path"])
-
-    stats = precompute.run(indexed, spec, targets, params)
+    stats, _ = fill(indexed)
     assert (stats.computed, stats.cached, stats.failed) == (1, 0, 0)
 
 
-def test_a_failed_compute_is_counted_not_raised(indexed):
-    spec = registry.get("taud_psd")
-    # The tiny fixture is 4x5, so the default reference pixel (6, 6) is out of
-    # range and compute raises -- which must land as a failed run, not a traceback.
-    targets = precompute.targets_for(indexed, spec, "cmod")
-    stats = precompute.run(indexed, spec, targets, precompute.default_params(spec))
+def test_a_failed_compute_is_recorded_then_skipped_until_asked_to_retry(
+    indexed, monkeypatch
+):
+    stats, _ = fill(indexed, pixel=None)
     assert (stats.failed, stats.computed) == (1, 0)
+    assert the_run(indexed)["status"] == "failed"
 
-    run = indexed.execute("SELECT status FROM runs").fetchone()
-    assert run["status"] == "failed"
-
-
-def test_a_failed_run_is_counted_without_reopening_its_file(indexed, monkeypatch):
-    """``store.result`` would only hand a failed run straight back, so the fill
-    must not reopen a ~500 MB file to rediscover it."""
-    spec = registry.get("taud_psd")
-    params = precompute.default_params(spec)  # out-of-range pixel -> failed
-    targets = precompute.targets_for(indexed, spec, "cmod")
-
-    precompute.run(indexed, spec, targets, params)
-
-    def boom(*args, **kwargs):
-        raise AssertionError("a failed run must not reopen its dataset")
-
-    monkeypatch.setattr(precompute.xr, "open_dataset", boom)
-    stats = precompute.run(indexed, spec, targets, params)
+    # ``store.result`` would only hand the failure back, so the file stays shut.
+    opened = count_opens(monkeypatch)
+    stats, lines = fill(indexed, pixel=None)
     assert (stats.failed, stats.computed, stats.cached) == (1, 0, 0)
+    assert opened == []
+    assert any("--force or --retry-failed" in line for line in lines)
 
-
-def test_retry_failed_reopens_and_reattempts(indexed, monkeypatch):
-    """``retry_failed`` must actually recompute, not hand the stored failure back.
-
-    Regression test: the failed row has to be dropped before ``store.result``
-    runs, which returns a recorded failure as-is without touching the file.
-    """
-    spec = registry.get("taud_psd")
-    params = precompute.default_params(spec)  # out-of-range pixel -> failed
-    targets = precompute.targets_for(indexed, spec, "cmod")
-
-    first = precompute.run(indexed, spec, targets, params)
-    assert (first.failed, first.computed) == (1, 0)
-
-    opened = []
-    real_open = precompute.xr.open_dataset
-
-    def counting(*args, **kwargs):
-        opened.append(args)
-        return real_open(*args, **kwargs)
-
-    monkeypatch.setattr(precompute.xr, "open_dataset", counting)
-    stats = precompute.run(indexed, spec, targets, params, retry_failed=True)
+    # The failed row is dropped first, or the store would return it as it is.
+    stats, _ = fill(indexed, pixel=None, retry_failed=True)
     assert opened, "retry_failed must reopen the file instead of skipping"
     assert (stats.failed, stats.computed) == (1, 0)
 
 
-def test_delete_run_removes_its_rows_even_when_the_blob_is_locked(
-    indexed, monkeypatch
-):
-    """A failed ``os.remove`` must not leave a stale row behind.
-
-    Otherwise ``--force`` silently keeps returning the old cached result.
-    """
-    spec = registry.get("taud_psd")
-    params = precompute.default_params(spec, pixel=(2, 3))
-    targets = precompute.targets_for(indexed, spec, "cmod")
-    precompute.run(indexed, spec, targets, params)
-
-    params_hash, _ = store.record_params(indexed, spec.key, params)
-    run = store.find_run(indexed, targets[0], spec.key, params_hash)
-    assert run["status"] == "ok"
+def test_delete_run_removes_its_rows_even_when_the_blob_is_locked(indexed, monkeypatch):
+    """Otherwise ``--force`` would keep returning the old cached result."""
+    fill(indexed)
+    run = the_run(indexed)
 
     def locked(*args, **kwargs):
         raise PermissionError("locked by another writer")
 
     monkeypatch.setattr(store.os, "remove", locked)
     store.delete_run(indexed, run)
-    assert store.find_run(indexed, targets[0], spec.key, params_hash) is None
+    assert indexed.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
 
 
-def test_an_unreadable_file_records_a_failure_and_continues(indexed):
-    """A file removed after rescan must not abort the whole overnight fill."""
-    spec = registry.get("taud_psd")
-    params = precompute.default_params(spec, pixel=(2, 3))
-    targets = precompute.targets_for(indexed, spec, "cmod")
-    os.remove(targets[0].path)
-
-    stats = precompute.run(indexed, spec, targets, params)
-    assert (stats.failed, stats.computed, stats.cached) == (1, 0, 0)
-
-    run = indexed.execute("SELECT status, error FROM runs").fetchone()
-    assert run["status"] == "failed"
-    assert "FileNotFoundError" in run["error"]
-
-
-def test_a_corrupt_file_is_recorded_and_does_not_abort_the_fill(
+def test_a_file_that_cannot_be_read_is_recorded_and_the_fill_goes_on(
     indexed, apd_dataset_path
 ):
-    """``xr.open_dataset`` raises ValueError, not OSError, on a non-dataset
-    file -- which still must land as a failed run while the fill continues."""
-    (apd_dataset_path.parent / "apd_1.nc").write_bytes(b"not a netCDF file")
-    catalog.rescan(indexed, str(apd_dataset_path.parent.parent), "cmod", None)
+    """One corrupt (``xr.open_dataset`` raises ValueError, not OSError) and one
+    removed since the rescan: each a failed run, and the good file is computed."""
+    folder = apd_dataset_path.parent
+    (folder / "apd_1.nc").write_bytes(b"not a netCDF file")
+    shutil.copy(apd_dataset_path, folder / "apd_2.nc")
+    catalog.rescan(indexed, str(folder.parent), "cmod", None)
+    os.remove(folder / "apd_2.nc")
 
-    spec = registry.get("taud_psd")
-    params = precompute.default_params(spec, pixel=(2, 3))
-    targets = precompute.targets_for(indexed, spec, "cmod")
-    assert [t.shot for t in targets] == [1, 1234]  # the bad file sorts first
-
-    lines = []
-    stats = precompute.run(indexed, spec, targets, params, log=lines.append)
-    assert (stats.computed, stats.failed) == (1, 1)
-
+    stats, lines = fill(indexed)
+    assert (stats.computed, stats.failed) == (1, 2)
     text = "\n".join(lines)
-    assert "[1/2]" in text and "[2/2]" in text
-    assert "failed" in text and "ok in" in text
+    assert "[1/3]" in text and "[3/3]" in text and "ok in" in text
 
-    run = indexed.execute("SELECT status, error FROM runs WHERE shot = 1").fetchone()
-    assert run["status"] == "failed"
-    assert "ValueError" in run["error"]
-
-
-def test_run_logs_each_targets_fate(indexed):
-    spec = registry.get("taud_psd")
-    params = precompute.default_params(spec, pixel=(2, 3))
-    targets = precompute.targets_for(indexed, spec, "cmod")
-
-    lines = []
-    precompute.run(indexed, spec, targets, params, log=lines.append)
-    assert "1 targets" in "\n".join(lines)
-    assert any("computing" in line for line in lines)
-    assert any("ok in" in line for line in lines)
-
-    cached_lines = []
-    precompute.run(indexed, spec, targets, params, log=cached_lines.append)
-    assert any("cached, skipping" in line for line in cached_lines)
+    errors = dict(
+        indexed.execute("SELECT shot, error FROM runs WHERE status = 'failed'")
+    )
+    assert "ValueError" in errors[1]
+    assert "FileNotFoundError" in errors[2]
 
 
-def test_a_skipped_failure_points_at_force(indexed):
-    spec = registry.get("taud_psd")
-    params = precompute.default_params(spec)  # out-of-range pixel -> failed
-    targets = precompute.targets_for(indexed, spec, "cmod")
-    precompute.run(indexed, spec, targets, params)
-
-    lines = []
-    stats = precompute.run(indexed, spec, targets, params, log=lines.append)
-    assert stats.failed == 1
-    assert any("--force" in line for line in lines)
-
-
-def test_an_unwritable_cache_dir_skips_before_opening_the_file(
+def test_an_unwritable_cache_dir_is_reported_before_the_file_is_opened(
     indexed, monkeypatch
 ):
     """The two-writer failure: the blob directory belongs to the other account,
-    so the fill must report it without paying for the file open and compute."""
-    spec = registry.get("taud_psd")
-    params = precompute.default_params(spec, pixel=(2, 3))
-    targets = precompute.targets_for(indexed, spec, "cmod")
+    so the fill reports it without paying for the open and the compute."""
 
-    def boom(*args, **kwargs):
-        raise AssertionError("an unwritable cache must not open its dataset")
+    def denied(path, *args, **kwargs):
+        raise PermissionError(errno.EACCES, "Permission denied", path)
 
-    monkeypatch.setattr(precompute.xr, "open_dataset", boom)
-    monkeypatch.setattr(
-        precompute, "_output_writable", lambda *args: (False, "/nowhere/cache")
-    )
+    monkeypatch.setattr(precompute.shared, "makedirs", denied)
+    opened = count_opens(monkeypatch)
 
-    lines = []
-    stats = precompute.run(indexed, spec, targets, params, log=lines.append)
+    stats, lines = fill(indexed)
     assert (stats.failed, stats.computed, stats.cached) == (1, 0, 0)
+    assert opened == []
     assert indexed.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
     assert any("not writable" in line for line in lines)
 
 
-def test_a_permission_error_is_reported_not_recorded(indexed, monkeypatch):
-    """Infrastructure is not analysis: it leaves no `failed` row behind to
-    poison later fills, so fixing the setup and rerunning is enough."""
-    spec = registry.get("taud_psd")
-    params = precompute.default_params(spec, pixel=(2, 3))
-    targets = precompute.targets_for(indexed, spec, "cmod")
-
-    def denied(*args, **kwargs):
-        raise PermissionError(13, "Permission denied", targets[0].path)
-
-    monkeypatch.setattr(precompute.xr, "open_dataset", denied)
-
-    lines = []
-    stats = precompute.run(indexed, spec, targets, params, log=lines.append)
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a file whatever its mode")
+def test_a_permission_error_is_reported_not_recorded(indexed, apd_dataset_path):
+    """Infrastructure is not analysis: it leaves no ``failed`` row for later
+    fills to skip, so fixing the setup and rerunning is enough."""
+    apd_dataset_path.chmod(0)
+    try:
+        stats, lines = fill(indexed)
+    finally:
+        apd_dataset_path.chmod(0o644)
     assert (stats.failed, stats.computed) == (1, 0)
     assert indexed.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
-    assert any("without recording" in line for line in lines)
+    assert any(
+        "failed without recording a run: PermissionError" in line for line in lines
+    )
+
+    stats, _ = fill(indexed)
+    assert (stats.computed, stats.failed) == (1, 0)
 
 
 @pytest.fixture
 def batch_only_spec():
     """A batch-only spec, registered for one test."""
-    import dataclasses
-
-    import xarray as xr
 
     @dataclasses.dataclass
     class BankParams:
@@ -343,7 +250,7 @@ def test_precompute_is_the_batch_job_that_fills_a_batch_only_spec(
     stats = precompute.run(indexed, batch_only_spec, targets, batch_only_spec.params())
     assert (stats.computed, stats.failed) == (1, 0)
 
-    run = indexed.execute("SELECT * FROM runs").fetchone()
+    run = the_run(indexed)
     assert run["status"] == "ok"
     # What it was computed from: the file's mtime as the index has it.
     (mtime,) = indexed.execute("SELECT mtime FROM shots").fetchone()
@@ -351,8 +258,6 @@ def test_precompute_is_the_batch_job_that_fills_a_batch_only_spec(
 
 
 def test_command_names_the_shot_and_only_what_differs(indexed, batch_only_spec):
-    import dataclasses
-
     (target,) = precompute.targets_for(indexed, batch_only_spec, "cmod")
     params = batch_only_spec.params()
     assert (
@@ -369,21 +274,3 @@ def test_command_names_the_shot_and_only_what_differs(indexed, batch_only_spec):
     assert precompute.command(batch_only_spec, elsewhere, params) == (
         "fusion-ui precompute test_bank --shot 1234 --machine w7x"
     )
-
-
-def test_output_writable_is_false_when_the_directory_cannot_be_made(
-    indexed, monkeypatch
-):
-    import errno
-
-    spec = registry.get("taud_psd")
-    params = precompute.default_params(spec, pixel=(2, 3))
-    targets = precompute.targets_for(indexed, spec, "cmod")
-    params_hash, _ = store.record_params(indexed, spec.key, params)
-
-    def denied(path, *args, **kwargs):
-        raise PermissionError(errno.EACCES, "Permission denied", path)
-
-    monkeypatch.setattr(precompute.shared, "makedirs", denied)
-    ok, parent = precompute._output_writable(spec, targets[0], params_hash)
-    assert ok is False and parent

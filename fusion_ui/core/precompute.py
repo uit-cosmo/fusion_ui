@@ -1,34 +1,19 @@
-"""The ``fusion-ui precompute`` engine: fill the cache in batch, in parallel.
+"""The ``fusion-ui precompute`` engine: fill the result cache in batch.
 
-The single-shot view computes on demand and caches forever, so the first person
-to want a quantity pays its full cost (half a minute for 2DCA, most of an hour
-for a shot's bank of averages). ``precompute`` walks the shot index instead and
-runs the plots' ``compute`` on every matching shot ahead of time, so the views
--- and everyone else -- read warm caches. It is the same ``store.result`` call
-the page makes, driven from a list of targets instead of a widget.
+It makes the ``store.result`` call a page makes, over a list of targets from
+the shot index instead of one from a widget.
 
-How a fill is organised:
-
-- **Several plots run per target, in dependency order** (:func:`plan_fill`),
-  so one process handles a shot end to end: an upstream named alongside the
-  plots built on it is computed first, and once.
-- **Cache hits are skipped from the ledger, without opening the data file**:
-  a single APD record is ~500 MB, so a fill must not re-read what is stored.
-- **With ``workers > 1`` a pool of spawned processes** takes the targets left
-  to compute, largest file first, so the last shots do not start alone. Each
-  worker opens its own database connection, loads the windowed record into
-  memory once per target (the whole record, for a spec that declares
-  ``whole_record``), and prints its own timestamped lines. One worker
-  (the default) runs in this process, exactly as a fill always has.
-- **``--stale`` recomputes stale results in place** (:func:`plan_stale`), each
-  with the parameters it was computed with, upstream before downstream. A
-  result whose upstream is stale too, and not named, is left alone with the
-  command that fixes it: recomputed on a stale upstream it would still be
-  stale, and a quiet "ok" would hide that.
-- **Ctrl-C stops cleanly**: targets not started are cancelled, and a target
-  in flight is abandoned only while it reads or computes, never while the
-  store writes, so it leaves no ``failed`` row, no half-written blob and no
-  temporary file (see :class:`_Interrupts`).
+- Several plots run per target, in dependency order, so an upstream named with
+  the plots built on it is computed first, and once (:func:`plan_fill`).
+- A cache hit is skipped from the ledger, without opening the ~500 MB file.
+- With ``workers > 1`` a pool of spawned processes takes the targets left to
+  compute, largest file first. One worker runs in this process.
+- ``--stale`` recomputes stale results in place, each with the parameters it
+  was stored with, upstream before downstream (:func:`plan_stale`).
+- Ctrl-C stops between writes: no ``failed`` row, no half-written blob
+  (:class:`_Interrupts`).
+- A failure of the environment (permissions, a locked database) is reported
+  and leaves no ``failed`` row, which later fills would skip.
 """
 
 import concurrent.futures
@@ -43,7 +28,6 @@ import multiprocessing
 import os
 import signal
 import sqlite3
-import sys
 import threading
 import time
 import types
@@ -63,7 +47,7 @@ from fusion_ui.core import (
     store,
 )
 
-#: Outcomes of one plot on one target.
+#: Outcomes of one plot on one target. Each is a counter of PrecomputeStats.
 COMPUTED, CACHED, FAILED, SKIPPED, CANCELLED = (
     "computed",
     "cached",
@@ -77,17 +61,14 @@ COMPUTED, CACHED, FAILED, SKIPPED, CANCELLED = (
 DEFAULT_NICE = 10
 
 #: How long a worker waits for another writer's lock before failing a write.
-#: Several workers write the ledger at once; each write is a short transaction.
 WORKER_BUSY_TIMEOUT_MS = 60_000
 
-#: What a worker imports to register the specs it runs. A spawned worker is a
-#: fresh interpreter: it knows a spec only once the module that registers it
-#: has been imported, and ``fusion_ui.plots`` registers every spec of the app.
+#: What a pool worker imports to register the specs it runs: a spawned worker
+#: is a fresh interpreter. ``fusion_ui.plots`` registers every spec of the app.
 WORKER_MODULES = ("fusion_ui.plots",)
 
-#: The configuration a worker must see as its parent does. ``config`` reads
-#: ``.env`` files on import, which would otherwise fill in what the parent's
-#: environment left unset.
+#: The configuration a worker must see as its parent does: ``config`` reads
+#: ``.env`` on import, which would fill in what the parent's environment unset.
 _CONFIG_VARIABLES = (
     "FUSION_DISCHARGE_DB",
     "FUSION_DATA_FOLDER",
@@ -145,9 +126,8 @@ class Report:
     def summary_lines(self):
         """The lines a fill ends with.
 
-        One plot: its summary, timed, exactly as a fill has always ended. Several:
-        one untimed line per plot, then the wall time of the whole fill, since
-        the plots of one target share it.
+        One plot: its summary, timed. Several: one untimed line per plot, then
+        the wall time of the whole fill, which the plots of a target share.
         """
         if len(self.stats) == 1:
             lines = [self.stats[0].summary()]
@@ -208,7 +188,21 @@ def _accepts(spec, diagnostic, preprocessed):
     return diagnostic in spec.diagnostics and spec.accepts(preprocessed)
 
 
+def _files(conn, machine):
+    """The machine's index rows, by ``(shot, diagnostic, preprocessed)``."""
+    return {
+        (row["shot"], row["diagnostic"], bool(row["preprocessed"])): row
+        for row in conn.execute(
+            "SELECT shot, diagnostic, preprocessed, path, bytes FROM shots"
+            " WHERE machine = ?",
+            (machine,),
+        )
+    }
+
+
 def _target(machine, row):
+    """The target of an index row. Its window is left NaN: it is read off the
+    descriptor, or the record, when the file is opened."""
     return registry.Target(
         machine=machine,
         shot=row["shot"],
@@ -223,30 +217,21 @@ def _target(machine, row):
 
 def select_targets(conn, specs, machine=None, shots=None, run_days=None):
     """One :class:`~fusion_ui.core.registry.Target` per indexed file any of
-    ``specs`` accepts.
+    ``specs`` accepts, in shot order.
 
     ``shots`` and ``run_days`` are optional sets of shot numbers and of
     seven-digit run days; a file is selected when either names it, and every
-    file when neither is given. ``machine`` defaults to ``config.MACHINE``. The
-    time window is left ``NaN`` here -- it is derived from the descriptor (or
-    the record itself) when the file is opened, exactly as the single-shot page
-    does.
-
-    The order is fixed by the query, not left to the query plan: a fill prints
-    one line per shot and is watched (and resumed) by shot number, so two runs
-    over the same index must walk it the same way.
+    file when neither is given. ``machine`` defaults to ``config.MACHINE``.
     """
     machine = machine or config.MACHINE
-    rows = conn.execute(
-        "SELECT shot, diagnostic, preprocessed, path FROM shots WHERE machine = ?"
-        " ORDER BY shot, diagnostic, preprocessed",
-        (machine,),
-    ).fetchall()
+    files = _files(conn, machine)
+    # Sorted, so that two fills over one index walk it the same way: a fill is
+    # watched and resumed by its [i/N] lines.
     return [
-        _target(machine, row)
-        for row in rows
-        if _selected(row["shot"], shots, run_days)
-        and any(_accepts(s, row["diagnostic"], row["preprocessed"]) for s in specs)
+        _target(machine, files[key])
+        for key in sorted(files)
+        if _selected(key[0], shots, run_days)
+        and any(_accepts(spec, key[1], key[2]) for spec in specs)
     ]
 
 
@@ -265,12 +250,8 @@ def in_dependency_order(specs):
 
 
 def default_params(spec, pixel=None):
-    """The spec's default parameter set, optionally with a reference pixel.
-
-    ``pixel`` is an ``(x, y)`` tuple applied to whichever fields are named
-    ``refx`` / ``refy`` -- spectra and velocity_tde carry them at the top, and
-    the 2DCA-derived plots nest them under ``two_dca``.
-    """
+    """The spec's default parameters, with ``refx``/``refy`` set to the
+    ``(x, y)`` of ``pixel`` when one is given."""
     params = spec.params()
     if pixel is not None:
         return multipixel.with_pixel(params, pixel[0], pixel[1])
@@ -286,18 +267,22 @@ def default_params(spec, pixel=None):
 PARAMS_FILE = "params.json"
 
 
+def _shot_flags(target):
+    flags = ["--shot", str(target.shot)]
+    if target.machine != config.MACHINE:
+        flags += ["--machine", target.machine]
+    return flags
+
+
 def command(spec, target, params=None, *flags):
     """The command line that fills ``spec`` for ``target`` with ``params``.
 
-    What a page shows in place of a compute it must not start, a batch-only
-    one. ``--shot`` names the shot; ``--machine`` is added when the target is
-    not on the configured machine, and ``--params-json`` (see
-    :data:`PARAMS_FILE`) when ``params`` are not the spec's defaults. ``flags``
-    are appended as given, e.g. ``"--retry-failed"`` or ``"--force"``.
+    What a page shows in place of a compute it must not start. ``--machine`` is
+    added when the target is not on the configured machine, ``--params-json``
+    (see :data:`PARAMS_FILE`) when ``params`` are not the spec's defaults, and
+    ``flags`` as given, e.g. ``"--retry-failed"``.
     """
-    parts = ["fusion-ui", "precompute", spec.key, "--shot", str(target.shot)]
-    if target.machine != config.MACHINE:
-        parts += ["--machine", target.machine]
+    parts = ["fusion-ui", "precompute", spec.key, *_shot_flags(target)]
     if params is not None and not is_default(spec, params):
         parts += ["--params-json", PARAMS_FILE]
     return " ".join([*parts, *flags])
@@ -318,22 +303,6 @@ class ParamsError(ValueError):
     """
 
 
-def _sets_reference_pixel(values):
-    """Dotted paths of every ``refx``/``refy`` in a partial values tree."""
-    found = []
-
-    def walk(tree, prefix):
-        for name, value in tree.items():
-            path = f"{prefix}.{name}" if prefix else name
-            if name in ("refx", "refy"):
-                found.append(path)
-            elif isinstance(value, dict):
-                walk(value, path)
-
-    walk(values, "")
-    return found
-
-
 def params_from_file(path, specs, pixel=None):
     """``{plot key: params}`` for ``specs`` from a ``--params-json`` file.
 
@@ -341,22 +310,17 @@ def params_from_file(path, specs, pixel=None):
 
     **A complete parameter set**, as ``param_sets.params_json`` stores it and
     the single-shot page shows it (``{"plot", "params"}``), or the bare
-    ``{"__type__", "values"}`` inside it. It names one plot and fixes every
-    knob, so it is used only when that plot is the one plot named: it says
-    nothing about any other, and guessing would compute results nobody asked
-    for. ``--pixel`` cannot change it.
+    ``{"__type__", "values"}`` inside it. It is used only when its plot is the
+    one plot named, since it says nothing about any other, and ``--pixel``
+    cannot change it.
 
-    **The fields to change**, as part of a canonical ``values`` tree --
-    ``{"averages": {"window": 30}}`` -- applied to every plot named, on top of
-    its defaults (and ``--pixel``). Every path must exist in every plot named:
-    a change that fits one plot and not another would leave the two computed
-    with different settings, so it is refused, as is a ``refx``/``refy`` that
-    ``--pixel`` also sets.
+    **The fields to change**, as part of a canonical ``values`` tree, such as
+    ``{"averages": {"window": 30}}``, applied to every plot named on top of its
+    defaults (and ``--pixel``). Every path must exist in every plot named, or
+    the plots would be computed with different settings; a ``refx``/``refy``
+    that ``--pixel`` also sets is refused.
 
-    Either way each leaf is checked strictly (see
-    :func:`~fusion_ui.core.params_ui.from_canonical`), and the parameters come
-    back as instances, so what the store records is ``hash_params`` of the
-    parameters actually used -- which is how the pages find the results.
+    Each leaf is checked strictly (:func:`~fusion_ui.core.params_ui.from_canonical`).
     """
     try:
         with open(path, encoding="utf-8-sig") as handle:
@@ -398,10 +362,11 @@ def params_from_file(path, specs, pixel=None):
             raise ParamsError(f"--params-json {path}: {error}") from None
         return {spec.key: params}
 
-    if pixel is not None and _sets_reference_pixel(body):
+    twice = [name for name in ("refx", "refy") if name in body]
+    if pixel is not None and twice:
         raise ParamsError(
             f"--pixel and {path} both set the reference pixel"
-            f" ({', '.join(_sets_reference_pixel(body))}); set it in one place"
+            f" ({', '.join(twice)}); set it in one place"
         )
     out = {}
     for spec in specs:
@@ -468,29 +433,24 @@ class Plan:
     jobs: list  # in shot order
     stats: dict  # plot -> PrecomputeStats, in run order
     headers: list  # the lines printed first, without their timestamps
-    options: Options = field(default_factory=lambda: Options(total=0))
+    options: Options
     #: With --stale: upstreams, not named, whose staleness left results alone.
     unnamed_upstreams: list = field(default_factory=list)
 
 
-def _window(discharge):
-    if discharge is None:
-        return None
-    return types.SimpleNamespace(t_start=discharge.t_start, t_end=discharge.t_end)
-
-
-def _sizes(conn, machine):
-    return {
-        (row["shot"], row["diagnostic"], bool(row["preprocessed"])): row["bytes"] or 0
-        for row in conn.execute(
-            "SELECT shot, diagnostic, preprocessed, bytes FROM shots WHERE machine = ?",
-            (machine,),
-        )
-    }
-
-
-def _size(sizes, target):
-    return sizes.get((target.shot, target.diagnostic, target.preprocessed), 0)
+def _job(target, position, steps, files, discharges):
+    window = discharges.get(target.shot)
+    if window is not None:
+        # A plain namespace, not the discharge: a job is pickled to its worker.
+        window = types.SimpleNamespace(t_start=window.t_start, t_end=window.t_end)
+    row = files.get((target.shot, target.diagnostic, target.preprocessed))
+    return Job(
+        target=target,
+        index=position,
+        steps=tuple(steps),
+        window=window,
+        size=(row["bytes"] or 0) if row is not None else 0,
+    )
 
 
 def plan_fill(conn, plots, targets, force=False, retry_failed=False):
@@ -498,8 +458,8 @@ def plan_fill(conn, plots, targets, force=False, retry_failed=False):
 
     ``plots`` is ``[(spec, params), …]`` in dependency order (see
     :func:`in_dependency_order`); ``targets`` come from :func:`select_targets`.
-    Records each parameter set in ``param_sets`` once, so the header can name
-    its hash. Opens no file.
+    Records each parameter set in ``param_sets``, so the header can name its
+    hash. Opens no file.
     """
     discharges = load_discharges()
     recorded = [
@@ -507,26 +467,18 @@ def plan_fill(conn, plots, targets, force=False, retry_failed=False):
         for spec, params in plots
     ]
     stats = {spec.key: PrecomputeStats(plot=spec.key) for spec, _, _ in recorded}
-    sizes = _sizes(conn, targets[0].machine) if targets else {}
+    files = _files(conn, targets[0].machine) if targets else {}
     jobs = []
-    for index, target in enumerate(targets, start=1):
-        steps = tuple(
+    for position, target in enumerate(targets, start=1):
+        steps = [
             Step(spec.key, params, digest)
             for spec, params, digest in recorded
             if _accepts(spec, target.diagnostic, target.preprocessed)
-        )
+        ]
         for step in steps:
             stats[step.plot].considered += 1
         if steps:
-            jobs.append(
-                Job(
-                    target=target,
-                    index=index,
-                    steps=steps,
-                    window=_window(discharges.get(target.shot)),
-                    size=_size(sizes, target),
-                )
-            )
+            jobs.append(_job(target, position, steps, files, discharges))
     headers = [
         f"{spec.key}: {stats[spec.key].considered} targets,"
         f" params {digest[:12]}, force={force} retry_failed={retry_failed}"
@@ -549,6 +501,16 @@ def _settled(run):
     )
 
 
+def _chain_with_params(spec, params):
+    """``[(link, link params, link hash), …]`` down ``spec``'s chain."""
+    out = []
+    for link in registry.chain(spec):
+        if out:
+            params = out[-1][0].upstream_params(params)
+        out.append((link, params, params_ui.hash_params(link.key, params)[0]))
+    return out
+
+
 def _stale_beneath(conn, spec, target, params, stale_by_id, scheduled):
     """``[(link, reason), …]``: stale links below ``spec`` this fill leaves stale.
 
@@ -559,13 +521,9 @@ def _stale_beneath(conn, spec, target, params, stale_by_id, scheduled):
     is listed, and the walk goes on, so that the fix names every stale link.
     """
     blockers = []
-    links = registry.chain(spec)
-    current = params
-    for upper, link in zip(links, links[1:]):
-        current = upper.upstream_params(current)
-        digest, _ = params_ui.hash_params(link.key, current)
+    for link, _, digest in _chain_with_params(spec, params)[1:]:
         run = store.find_run(conn, target, link.key, digest)
-        if run is None or not _settled(run):
+        if not _settled(run):
             continue  # computed on the way, from whatever is beneath it
         if run["id"] in scheduled or run["id"] not in stale_by_id:
             break
@@ -584,26 +542,19 @@ def _with_upstreams(spec, blockers, named):
     return [s.key for s in in_dependency_order([registry.get(k) for k in keys])]
 
 
-def _fix_command(plots, target):
-    parts = ["fusion-ui", "precompute", *plots, "--stale", "--shot", str(target.shot)]
-    if target.machine != config.MACHINE:
-        parts += ["--machine", target.machine]
-    return " ".join(parts)
-
-
 def plan_stale(conn, specs, machine=None, shots=None, run_days=None, only=None):
     """A :class:`Plan` recomputing in place the stale runs of ``specs``.
 
     ``specs`` are in dependency order. Every stale run of theirs on the
-    selected targets is taken, of any status and any parameter set -- or only
-    the parameter sets in ``only`` (``{plot: params}``), when given -- and
+    selected targets is taken, of any status and any parameter set (or only
+    the parameter sets in ``only``, ``{plot: params}``, when given), and
     recomputed with the parameters it was stored with, rebuilt from
     ``param_sets``.
 
     A run is planned as a skip, with a line saying why, when
 
     - its stored parameters no longer rebuild to the same hash (the params
-      class changed since): nothing could recompute *that* set;
+      class changed since): nothing could recompute that set;
     - a link beneath it is stale and not recomputed first in this fill (see
       :func:`_stale_beneath`): recomputed on a stale upstream it would still
       be stale, so the line names the command that recomputes the chain.
@@ -629,15 +580,7 @@ def plan_stale(conn, specs, machine=None, shots=None, run_days=None, only=None):
         ),
         key=lambda row: (order[row["plot"]], row["id"]),
     )
-    index = {
-        (row["shot"], row["diagnostic"], bool(row["preprocessed"])): row
-        for row in conn.execute(
-            "SELECT shot, diagnostic, preprocessed, path, bytes FROM shots"
-            " WHERE machine = ?",
-            (machine,),
-        )
-    }
-    discharges = load_discharges()
+    files = _files(conn, machine)
     stats = {spec.key: PrecomputeStats(plot=spec.key, unit="stale") for spec in specs}
     reasons = {spec.key: {} for spec in specs}
     hashes = {spec.key: set() for spec in specs}
@@ -647,9 +590,9 @@ def plan_stale(conn, specs, machine=None, shots=None, run_days=None, only=None):
     for row in candidates:
         spec = registry.get(row["plot"])
         key = (row["shot"], row["diagnostic"], bool(row["preprocessed"]))
-        if key not in index:  # stale_runs judges indexed inputs only
+        if key not in files:  # stale_runs judges indexed inputs only
             continue
-        target = _target(machine, index[key])
+        target = _target(machine, files[key])
         stats[spec.key].considered += 1
         reasons[spec.key][row["stale"]] = reasons[spec.key].get(row["stale"], 0) + 1
         hashes[spec.key].add(row["params_hash"])
@@ -676,11 +619,12 @@ def plan_stale(conn, specs, machine=None, shots=None, run_days=None, only=None):
                 link, reason = blockers[0]
                 plots = _with_upstreams(spec, blockers, order)
                 unnamed.update(plot for plot in plots if plot not in order)
+                fix = ["fusion-ui", "precompute", *plots, "--stale"]
                 skip = (
                     f"not recomputed: stale ({row['stale']}), and so is its"
                     f" upstream {link.key} ({reason}); recomputed on a stale"
                     " upstream it would still be stale. Run"
-                    f" `{_fix_command(plots, target)}`"
+                    f" `{' '.join([*fix, *_shot_flags(target)])}`"
                 )
         if not skip:
             scheduled.add(row["id"])
@@ -688,18 +632,11 @@ def plan_stale(conn, specs, machine=None, shots=None, run_days=None, only=None):
             Step(spec.key, params, row["params_hash"], stale=row["stale"], skip=skip)
         )
 
-    jobs = []
-    for position, key in enumerate(sorted(by_target), start=1):
-        target = _target(machine, index[key])
-        jobs.append(
-            Job(
-                target=target,
-                index=position,
-                steps=tuple(by_target[key]),
-                window=_window(discharges.get(target.shot)),
-                size=index[key]["bytes"] or 0,
-            )
-        )
+    discharges = load_discharges()
+    jobs = [
+        _job(_target(machine, files[key]), position, steps, files, discharges)
+        for position, (key, steps) in enumerate(sorted(by_target.items()), start=1)
+    ]
     headers = []
     for spec in specs:
         counts = reasons[spec.key]
@@ -716,11 +653,15 @@ def plan_stale(conn, specs, machine=None, shots=None, run_days=None, only=None):
         multi=len(specs) > 1,
         hashed=frozenset(key for key, seen in hashes.items() if len(seen) > 1),
     )
-    plan = Plan(jobs=jobs, stats=stats, headers=headers, options=options)
-    plan.unnamed_upstreams = [
-        s.key for s in in_dependency_order([registry.get(k) for k in unnamed])
-    ]
-    return plan
+    return Plan(
+        jobs=jobs,
+        stats=stats,
+        headers=headers,
+        options=options,
+        unnamed_upstreams=[
+            s.key for s in in_dependency_order([registry.get(k) for k in unnamed])
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -729,8 +670,7 @@ def plan_stale(conn, specs, machine=None, shots=None, run_days=None, only=None):
 
 
 def _now_label():
-    # Wall-clock prefix for overnight-log reading: tailing the log shows not
-    # just which shot is in flight but since when.
+    """The wall-clock prefix of a line: a tailed log shows since when."""
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
 
@@ -746,8 +686,7 @@ def _prefix(job, step, options, tag=""):
     """``<time> [<tag>] [i/N] <target>[ · <plot>][ params <hash>]``.
 
     The plot is named only when several run, and the hash only when one plot
-    runs with several parameter sets, so a single plot's lines read as they
-    always have.
+    runs with several parameter sets.
     """
     parts = []
     if options.multi:
@@ -767,10 +706,10 @@ _INFRA_ERRNOS = frozenset({errno.EACCES, errno.EPERM, errno.EROFS})
 def _is_infra_error(error):
     """Whether ``error`` is the environment, not the analysis.
 
-    An infrastructure failure must not become a ``failed`` ledger row: it would
-    be skipped without ``--force`` ever after, although nothing about the shot
-    or the parameters is wrong. A database error is one too -- a lock held past
-    the busy timeout, a full disk -- and recording it would mostly fail anyway.
+    Such a failure must not become a ``failed`` ledger row: it would be skipped
+    without ``--force`` ever after, although nothing about the shot or the
+    parameters is wrong. A database error (a lock held past the busy timeout,
+    a full disk) is one too, and recording it would mostly fail anyway.
     """
     return (
         isinstance(error, PermissionError)
@@ -809,54 +748,35 @@ def _error_text(error):
     return _one_line(f"{type(error).__name__}: {error}")
 
 
-def _output_writable(spec, target, params_hash):
-    """Whether this process can save the blob for ``target``.
+def _unwritable_dir(spec, target, params_hash):
+    """The directory of ``target``'s blob when this process cannot write there,
+    else ``""``. Creates it first, group-writable.
 
-    Creates the parent directory first (group-writable, per
-    ``fusion_ui.core.shared``). ``(False, parent)`` means running the analysis
-    now would only waste it -- the ~500 MB open and minutes of compute would
-    end in a ``PermissionError`` on the save. Only the directory's owner (or
-    root) can repair that, so no repair is attempted here; the caller reports
-    it instead.
+    Only its owner (or root) can repair an unwritable one, so it is reported
+    before the analysis is paid for, not repaired.
     """
     try:
         parent = os.path.dirname(store.blob_path(spec.key, params_hash, target))
     except RuntimeError:
-        return True, ""  # cache unconfigured; let the compute surface that
+        return ""  # cache unconfigured; let the compute surface that
     try:
         shared.makedirs(parent)
     except OSError:
-        return False, parent
-    if not os.access(parent, os.W_OK | os.X_OK):
-        return False, parent
-    return True, parent
-
-
-def _chain_with_params(spec, params):
-    """``[(link, link params, link hash), …]`` down ``spec``'s chain."""
-    out = []
-    links = registry.chain(spec)
-    current = params
-    for position, link in enumerate(links):
-        if position:
-            current = links[position - 1].upstream_params(current)
-        out.append((link, current, params_ui.hash_params(link.key, current)[0]))
-    return out
+        return parent
+    return "" if os.access(parent, os.W_OK | os.X_OK) else parent
 
 
 def _unwritable(conn, spec, target, params):
     """The first blob directory this step would write and cannot, or ``""``.
 
     The step's own, and each upstream's that would be computed on the way:
-    the walk stops at a link the ledger resolves (cached, or failed), as the
-    store's does. An upstream bank that took an hour must not end in a
-    ``PermissionError`` -- and a ``failed`` row -- on its save either.
+    the walk stops at a link the ledger resolves, as the store's does.
     """
     for position, (link, _, digest) in enumerate(_chain_with_params(spec, params)):
         if position and _settled(store.find_run(conn, target, link.key, digest)):
             break
-        writable, parent = _output_writable(link, target, digest)
-        if not writable:
+        parent = _unwritable_dir(link, target, digest)
+        if parent:
             return parent
     return ""
 
@@ -870,7 +790,7 @@ class _Interrupts:
     """Ctrl-C, held back while the store writes.
 
     A SIGINT sets :attr:`pending`. It raises ``KeyboardInterrupt`` at once only
-    inside :meth:`interruptible` -- opening and loading the input, and a spec's
+    inside :meth:`interruptible`: opening and loading the input, and a spec's
     compute, where stopping loses nothing. Anywhere else the store may be part
     way through a write (the blob renamed into place, then the run row, then
     its scalars, each committed on its own), so the interruption waits for the
@@ -879,9 +799,8 @@ class _Interrupts:
     run.
 
     Installed only on the main thread, where Python delivers signals, and
-    never over an ignored SIGINT (a fill started in the background of a
-    script must stay deaf to the terminal's Ctrl-C); otherwise Ctrl-C behaves
-    as it always does.
+    never over an ignored SIGINT: a fill started in the background of a script
+    must stay deaf to the terminal's Ctrl-C.
     """
 
     def __init__(self):
@@ -929,27 +848,25 @@ class _Interrupts:
         self.check()
 
 
-def _interruptible_compute(compute, interrupts):
-    @functools.wraps(compute)
-    def compute_until_interrupted(*args, **kwargs):
-        with interrupts.interruptible():
-            return compute(*args, **kwargs)
-
-    return compute_until_interrupted
-
-
 def _wrap_registry(interrupts):
     """Wrap every cached spec's compute in :meth:`_Interrupts.interruptible`.
 
     Through the registry, since that is where the store finds an upstream.
     Returns ``{key: (original, wrapped)}``.
     """
+
+    def interruptible(compute):
+        @functools.wraps(compute)
+        def compute_until_interrupted(*args, **kwargs):
+            with interrupts.interruptible():
+                return compute(*args, **kwargs)
+
+        return compute_until_interrupted
+
     swapped = {}
     for key, spec in list(registry.REGISTRY.items()):
         if spec.cached:
-            wrapped = dataclasses.replace(
-                spec, compute=_interruptible_compute(spec.compute, interrupts)
-            )
+            wrapped = dataclasses.replace(spec, compute=interruptible(spec.compute))
             registry.REGISTRY[key] = wrapped
             swapped[key] = (spec, wrapped)
     return swapped
@@ -1019,11 +936,11 @@ class _Record:
 def _from_ledger(conn, target, step, options, prefix, emit):
     """The outcome the ledger alone settles for ``step``, or ``None`` to compute.
 
-    A cache hit needs an ``ok`` run *and* its blob on disk: the ledger alone is
-    not enough, because a cleared cache directory would otherwise make a fill
-    skip a result it was asked to warm. A ``failed`` run is skipped without
-    reopening its file, because ``store.result`` would only hand the same
-    failure back -- unless ``--force`` or ``--retry-failed`` say otherwise.
+    A cache hit needs an ``ok`` run and its blob on disk: a cleared cache
+    directory must not make a fill skip a result it was asked to warm. A
+    ``failed`` run is skipped without reopening its file, because
+    ``store.result`` would only hand the same failure back, unless ``--force``
+    or ``--retry-failed`` say otherwise.
     """
     if step.skip:
         emit(f"{prefix}: {step.skip}")
@@ -1031,46 +948,28 @@ def _from_ledger(conn, target, step, options, prefix, emit):
     if step.stale:
         return None
     existing = store.find_run(conn, target, step.plot, step.params_hash)
-    if existing is None or options.force:
+    if options.force or not _settled(existing):
         return None
     if existing["status"] == "ok":
-        if existing["blob_path"] and os.path.exists(existing["blob_path"]):
-            emit(f"{prefix}: cached, skipping")
-            return CACHED
+        emit(f"{prefix}: cached, skipping")
+        return CACHED
+    if options.retry_failed:
         return None
-    if existing["status"] == "failed" and not options.retry_failed:
-        emit(
-            f"{prefix}: previous failure recorded, skipping"
-            " (--force or --retry-failed to retry):"
-            f" {_one_line(existing['error'] or '')[:200]}"
-        )
-        return FAILED
-    return None
-
-
-def _clear(conn, run, prefix, emit):
-    """Drop ``run`` before recomputing it; ``False`` if the environment refused."""
-    try:
-        store.delete_run(conn, run)
-    except OSError as error:
-        if not _is_infra_error(error):
-            raise
-        emit(
-            f"{prefix}: cannot clear the previous result: {_error_text(error)}"
-            f" ({_permission_hint()})"
-        )
-        return False
-    return True
+    emit(
+        f"{prefix}: previous failure recorded, skipping"
+        " (--force or --retry-failed to retry):"
+        f" {_one_line(existing['error'] or '')[:200]}"
+    )
+    return FAILED
 
 
 def _failed(conn, target, step, prefix, emit, error, started):
     """Report an error that escaped the store; record it unless infrastructure.
 
-    The file was removed since rescan, is unreadable, or is not a dataset at
-    all (a corrupt file raises ValueError out of ``xr.open_dataset``, not
-    OSError). Recorded, so one bad file cannot abort the fill -- unless it is
-    the environment that is broken, which is reported and left unrecorded (see
-    :func:`_is_infra_error`).
+    The file is gone, unreadable, or not a dataset at all (a corrupt file
+    raises ValueError out of ``xr.open_dataset``, not OSError). Recorded, so
+    one bad file cannot abort the fill, unless it is the environment that is
+    broken (:func:`_is_infra_error`).
     """
     if _is_infra_error(error):
         emit(
@@ -1079,8 +978,8 @@ def _failed(conn, target, step, prefix, emit, error, started):
         )
         return FAILED
     try:
-        # Every column is set explicitly so a retried `ok` row does not keep
-        # stale timing/version values under its new `failed` status.
+        # Every column is set, so a retried `ok` row does not keep its timing
+        # and version under its new `failed` status.
         store.record_run(
             conn,
             target,
@@ -1115,12 +1014,10 @@ def _run_step(conn, job, step, options, emit, record, tag):
         return settled
     if not step.stale:
         # Retrying a failure, or --force, drops the row first: store.result
-        # hands a recorded failure (or a cached result) straight back and
-        # would never recompute.
+        # hands a recorded failure (or a cached result) straight back.
         existing = store.find_run(conn, target, step.plot, step.params_hash)
         if existing is not None and (options.force or existing["status"] == "failed"):
-            if not _clear(conn, existing, prefix, emit):
-                return FAILED
+            store.delete_run(conn, existing)
 
     spec = registry.get(step.plot)
     unwritable = _unwritable(conn, spec, target, step.params)
@@ -1137,16 +1034,11 @@ def _run_step(conn, job, step, options, emit, record, tag):
         else f"{prefix}: computing…"
     )
     started = time.perf_counter()
+    # batch=True: this is the one caller allowed to compute batch-only specs.
+    compute = store.compute_and_store if step.stale else store.result
     try:
         data = record.get(whole=spec.whole_record)
-        # A batch job: the one caller allowed to compute batch-only specs,
-        # including a batch-only upstream of the plot asked for.
-        if step.stale:
-            _, run = store.compute_and_store(
-                conn, spec, target, step.params, data, batch=True
-            )
-        else:
-            _, run = store.result(conn, spec, target, step.params, data, batch=True)
+        _, run = compute(conn, spec, target, step.params, data, batch=True)
     except Exception as error:  # noqa: BLE001 - recorded through the ledger
         return _failed(conn, target, step, prefix, emit, error, started)
 
@@ -1162,8 +1054,8 @@ def _run_job(conn, job, options, emit, interrupts, tag="", load=False):
     """Every step of one target, in order: ``[(plot, outcome), …]``.
 
     Ctrl-C ends the job: the step in flight, if any, is reported interrupted,
-    and it and the rest come back ``cancelled``. Commits stay per-step atomic:
-    a line saying ``ok`` means the blob and the ledger row are on disk.
+    and it and the rest come back ``cancelled``. A line saying ``ok`` means
+    the blob and the ledger row are on disk.
     """
     outcomes = []
     record = _Record(job, load, interrupts)
@@ -1218,7 +1110,7 @@ def _renice(niceness):
     at 10, not 20. Every thread is set, since numpy's BLAS threads are started
     at import, before a worker could renice its main thread, and Linux keeps a
     niceness per thread. Lowering needs privileges, so a niceness already
-    higher is kept. Returns the niceness now in force.
+    higher is kept.
     """
     try:
         threads = [int(name) for name in os.listdir("/proc/self/task")]
@@ -1230,17 +1122,14 @@ def _renice(niceness):
                 os.setpriority(os.PRIO_PROCESS, thread, niceness)
         except OSError:
             pass
-    return os.getpriority(os.PRIO_PROCESS, 0)
 
 
-def execute(conn, plan, log=None, workers=1, nice=None, modules=None):
+def execute(conn, plan, log=None, workers=1, nice=None):
     """Run ``plan``: in this process, or on a pool of ``workers`` processes.
 
     ``log`` is called with each line this process writes; pool workers print
     their own lines to standard output, flushed, each with its worker's tag.
     ``nice`` sets the niceness the computes run at (see :func:`_renice`).
-    ``modules`` are what a worker imports to register the specs it runs
-    (default :data:`WORKER_MODULES`).
     """
     emit = _quiet(log)
     for header in plan.headers:
@@ -1251,12 +1140,11 @@ def execute(conn, plan, log=None, workers=1, nice=None, modules=None):
     started = time.perf_counter()
     try:
         if workers > 1:
-            _execute_pool(conn, plan, emit, workers, nice, modules, report)
+            _execute_pool(conn, plan, emit, workers, nice, report)
         else:
             _execute_here(conn, plan, emit, nice, report)
     except KeyboardInterrupt:
-        # Ctrl-C in this process outside a worker's care: while planning the
-        # dispatch, before any job started.
+        # Ctrl-C in this process before any job started.
         report.interrupted = True
     finally:
         report.seconds = time.perf_counter() - started
@@ -1328,14 +1216,6 @@ def _init_worker(database, environment, modules, nice, counter):
     )
 
 
-def _print_line(line):
-    try:
-        sys.stdout.write(line + "\n")
-        sys.stdout.flush()
-    except (OSError, ValueError):
-        pass
-
-
 def _work(job, options):
     """One job, in a pool worker: ``(outcomes, whether Ctrl-C reached it)``.
 
@@ -1349,13 +1229,13 @@ def _work(job, options):
     if missing:
         raise RuntimeError(
             f"plot(s) {', '.join(missing)} are not registered in the worker:"
-            " pass the module that registers them in `modules`"
+            " name the module that registers them in precompute.WORKER_MODULES"
         )
     outcomes = _run_job(
         worker.conn,
         job,
         options,
-        _print_line,
+        _quiet(functools.partial(print, flush=True)),
         worker.interrupts,
         tag=worker.tag,
         load=True,
@@ -1380,7 +1260,7 @@ def largest_first(jobs):
     return sorted(jobs, key=lambda job: -job.size)
 
 
-def _execute_pool(conn, plan, emit, workers, nice, modules, report):
+def _execute_pool(conn, plan, emit, workers, nice, report):
     """The parent's side: skip from the ledger, dispatch the rest, collect."""
     options = plan.options
     dispatch = []
@@ -1410,6 +1290,7 @@ def _execute_pool(conn, plan, emit, workers, nice, modules, report):
         f" compute on {_count(workers, 'worker')} at nice {niceness}, largest first"
     )
 
+    # Spawned, not forked: no SQLite handle or thread is inherited.
     context = multiprocessing.get_context("spawn")
     pool = concurrent.futures.ProcessPoolExecutor(
         max_workers=workers,
@@ -1418,7 +1299,7 @@ def _execute_pool(conn, plan, emit, workers, nice, modules, report):
         initargs=(
             _database_file(conn),
             {name: os.environ.get(name) for name in _CONFIG_VARIABLES},
-            tuple(WORKER_MODULES if modules is None else modules),
+            tuple(WORKER_MODULES),
             nice,
             context.Value("i", 0),
         ),
@@ -1486,9 +1367,9 @@ def _wind_down(pool, futures, pending, plan, emit, report):
     """Cancel what has not started; let what runs stop at a safe point.
 
     A future handed to a worker cannot be cancelled, so each worker is sent
-    SIGINT too -- it already has it when the Ctrl-C came from the terminal --
-    and its job stops as :class:`_Interrupts` allows. A Ctrl-C while this waits
-    is left to the caller, which kills the workers (:func:`_kill`).
+    SIGINT too (it already has it when the Ctrl-C came from the terminal) and
+    its job stops as :class:`_Interrupts` allows. A Ctrl-C while this waits is
+    left to the caller, which kills the workers (:func:`_kill`).
     """
     if report.broken:
         emit(f"{_now_label()} a worker died ({report.broken}); stopping")
@@ -1526,8 +1407,6 @@ def _kill(pool, futures, emit, report):
 def _sweep(job):
     """Remove the temporary files a killed job's blob writes may have left."""
     for step in job.steps:
-        if step.params is None:
-            continue
         spec = registry.get(step.plot)
         for link, _, digest in _chain_with_params(spec, step.params):
             try:
@@ -1540,23 +1419,18 @@ def _sweep(job):
 
 
 # ---------------------------------------------------------------------------
-# One plot, one process: the original entry point
+# One plot, in this process
 # ---------------------------------------------------------------------------
 
 
 def run(conn, spec, targets, params, force=False, retry_failed=False, log=None):
-    """Compute ``spec`` with ``params`` on every target, skipping cache hits.
+    """Compute ``spec`` with ``params`` on every target, skipping cache hits,
+    and return its :class:`PrecomputeStats`.
 
-    A target whose compute raises still gets a ``failed`` row (via the store),
-    so a broken shot does not stop the rest of the fill. ``--force``
-    recomputes everything; ``--retry-failed`` recomputes only the failed rows
-    (e.g. after fixing a full disk or a permissions problem that poisoned the
-    ledger).
-
-    ``log``, when given, is called with one line per event -- a header, then
-    each target's skip/computing/done line -- so a fill watched through
-    ``tail -f`` shows which shot is in flight. :func:`plan_fill` and
-    :func:`execute` do the work, and take several plots and workers.
+    A target whose compute raises gets a ``failed`` row and the fill goes on.
+    ``force`` recomputes everything, ``retry_failed`` only the failed rows.
+    ``log``, when given, is called with one line per event. For several plots
+    or workers, use :func:`plan_fill` and :func:`execute`.
     """
     plan = plan_fill(
         conn, [(spec, params)], targets, force=force, retry_failed=retry_failed

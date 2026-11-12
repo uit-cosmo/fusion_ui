@@ -1,15 +1,15 @@
 """Toy cached specs for the precompute tests, and a driver for the CLI.
 
 Instant computes on the tiny APD fixture: one unchained spec, a chain shaped
-like phase 06's (a batch-only bank with two products built on it, whose
+like the products' (a batch-only bank with two products built on it, whose
 parameter classes share an ``averages`` field), and a few that misbehave on
-purpose -- interrupting themselves, or blocking until they are interrupted.
+purpose: interrupting themselves, or blocking until they are interrupted.
 
 Importing this module registers nothing, so that the toys never reach another
 test's page; :func:`register` and :func:`unregister` do, around the tests that
 use them. A pool worker is a fresh interpreter, which knows a spec only once it
-imports a module that registers it (``precompute.execute``'s ``modules``):
-that is :data:`REGISTERING_MODULE`.
+imports a module that registers it (``precompute.WORKER_MODULES``): that is
+:data:`REGISTERING_MODULE`.
 """
 
 import os
@@ -309,7 +309,7 @@ DRIVER = (
 
 def drive(argv):
     """``fusion-ui`` with the toys registered, in this process and in every
-    pool worker -- for the tests that need a process of their own (a process
+    pool worker, for the tests that need a process of their own (a process
     group to send Ctrl-C to, or a niceness to inherit)."""
     from fusion_ui import cli
     from fusion_ui.core import precompute
