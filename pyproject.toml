@@ -12,8 +12,9 @@ authors = [
 license = "MIT"
 readme = "README.md"
 requires-python = ">=3.10"
-# imaging_methods, experimental_database and fusion_scripts are not on PyPI:
-# install each editable from its local checkout (see README).
+# imaging_methods and experimental_database are not on PyPI: install each editable from its
+# local checkout (see README). The app imports nothing from fusion_scripts
+# (tests/test_no_fusion_scripts.py enforces it).
 dependencies = [
     # The Fields page passes a callable to st.download_button(data=...), so the file is built when
     # the button is clicked and not on every rerun. The installed package does not say which
@@ -30,7 +31,6 @@ dependencies = [
     "velocity_estimation>=1.0.0",
     "fppanalysis>=0.2.0",
     "experimental_database>=0.0.1",
-    "fusion_scripts>=0.1.0",
 ]
 
 [project.optional-dependencies]
