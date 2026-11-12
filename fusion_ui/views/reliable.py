@@ -1,36 +1,24 @@
 """The paper's cut: the pixels ``reliable()`` keeps, the same ones for every method.
 
-``imaging_methods.decorrelation.reliable`` (moved there from fusion_scripts' ``apd_check/figures.py`` in L14)
-is how the paper decides which pixels of a velocity field to believe, once, for all the methods together::
+``imaging_methods.decorrelation.reliable`` is how the paper decides which pixels of a velocity field
+to believe, once, for all the methods together::
 
-    ok = (nlags_com >= MIN_LAGS) & (nevents >= min_events)
+    ok = (nlags_com >= MIN_LAGS) & (nevents >= MIN_EVENTS)
     for v in (vr_com, vz_com, vr3_tde, vz3_tde, vr2_tde, vz2_tde):
         ok &= isfinite(v)
     return ok & interior        # everything but the array's border
 
-The Fields page's default cut is per method (``views.methods``: each cut applies to what each estimate
-rests on). The user chose, at G2, to keep that and to offer this one beside it as a checkbox, so that a
-figure can be held against the paper's: with it on, every panel shows only these pixels, whatever the
-panel's own method did there. The page's own thresholds stand in for ``MIN_LAGS`` and ``MIN_EVENTS``; their
-defaults, 8 and 200, are the paper's.
-
-The rule is a pure function of a ``method_fields`` dataset: the pixels it keeps are the library's own
-``reliable`` (called with the page's thresholds), and this module adds the reason for each one it leaves
-out. ``reliable()``'s ``ca`` argument, which also asks for ``vr`` of the ``_ca`` group to be finite, is left
-out: that group is not part of phase 06. ``tests/test_views_reliable.py`` holds the reasons to the library's
-verdict.
+The Fields page's default cut is per method (``views.methods``) and offers this one as a checkbox,
+with the page's own thresholds for the two minimums. :func:`rule` is the same rule with the reason
+for each pixel it leaves out; ``tests/test_views_reliable.py`` holds it to the library's.
 """
 
 from dataclasses import dataclass
 
 import numpy as np
 
-#: The 2DCA track the paper's rule reads (the library's ``TRACK``, ``"_com"``, which a test holds this to):
-#: the contour's centroid. The maximum sticks to the reference pixel for a few lags where the pulse passes
-#: close to its centre.
-TRACK = "com"
-#: What must be a number besides the track's own lags and the events, in the order the paper lists it, with
-#: the method each belongs to, for the reason a pixel is left out.
+#: What must be a number besides the centroid's lags and the events, in the order the paper lists
+#: it, with the method each belongs to.
 FINITE = (
     ("vr_com", "2DCA centroid"),
     ("vz_com", "2DCA centroid"),
@@ -39,8 +27,6 @@ FINITE = (
     ("vr2_tde", "2TDE"),
     ("vz2_tde", "2TDE"),
 )
-#: Every variable the library's ``reliable`` reads of a ``method_fields``.
-READ = (f"nlags_{TRACK}", "nevents", *(name for name, _ in FINITE))
 PREFIX = "cut (paper's rule): "
 
 
@@ -53,23 +39,22 @@ class Reliable:
 
 
 def interior(shape):
-    """``(y, x)`` bool: True away from the array's border, as the paper's ``reliable()`` makes it."""
+    """``(y, x)`` bool: True away from the array's border."""
     mask = np.zeros(shape, dtype=bool)
     mask[1:-1, 1:-1] = True
     return mask
 
 
-def _count(n, word):
+def plural(n, word):
     return f"{n:g} {word}" + ("" if n == 1 else "s")
 
 
 def rule(fields, shape, min_lags, min_events):
     """The pixels the paper's ``reliable()`` keeps of ``fields``, and why it leaves the others out.
 
-    ``fields`` is a ``method_fields`` dataset (or ``None``, or one that lacks a variable: a variable that
-    is not there is read as all-NaN, so nothing is kept, where the library's ``reliable`` would raise).
-    ``shape`` is ``(ny, nx)``. A NaN count of lags or events is below any minimum, as in the paper's
-    comparison, and the dead pixels are left out by the velocities they do not have, as there.
+    ``fields`` is a ``method_fields`` dataset or ``None``; a variable that is not there is read as
+    all-NaN, so nothing is kept. A NaN count of lags or events is below any minimum, and a dead
+    pixel is left out by the velocities it does not have.
     """
 
     def read(name):
@@ -77,23 +62,14 @@ def rule(fields, shape, min_lags, min_events):
             return np.full(shape, np.nan)
         return np.asarray(fields[name].values, dtype=float)
 
-    lags, events = read(f"nlags_{TRACK}"), read("nevents")
+    lags, events = read("nlags_com"), read("nevents")
     with np.errstate(invalid="ignore"):
         enough_lags, enough_events = lags >= min_lags, events >= min_events
     finite = {name: np.isfinite(read(name)) for name, _ in FINITE}
     inside = interior(shape)
-    # Imported here: ``fusion_ui.plots`` imports ``fusion_ui.views``, which imports this module.
-    from fusion_ui.plots._pipeline import pipeline
-
-    if fields is not None and all(name in fields for name in (*READ,)):
-        ok = np.asarray(
-            pipeline.reliable(
-                fields, min_lags=min_lags, min_events=min_events, track="_" + TRACK
-            ),
-            dtype=bool,
-        )
-    else:
-        ok = np.zeros(shape, dtype=bool)
+    ok = enough_lags & enough_events & inside
+    for is_number in finite.values():
+        ok &= is_number
 
     reason = np.full(shape, "", dtype=object)
     for y, x in zip(*np.nonzero(~ok)):
@@ -102,13 +78,13 @@ def rule(fields, shape, min_lags, min_events):
         if np.isfinite(lags[y, x]):
             if not enough_lags[y, x]:
                 parts.append(
-                    f"2DCA centroid on {_count(lags[y, x], 'lag')} < {min_lags}"
+                    f"2DCA centroid on {plural(lags[y, x], 'lag')} < {min_lags}"
                 )
         elif finite["vr_com"][y, x] and finite["vz_com"][y, x]:
             parts.append("2DCA centroid lags unknown")
         if not enough_events[y, x]:
             parts.append(
-                f"{_count(events[y, x], 'event')} < {min_events}"
+                f"{plural(events[y, x], 'event')} < {min_events}"
                 if np.isfinite(events[y, x])
                 else "no event count"
             )

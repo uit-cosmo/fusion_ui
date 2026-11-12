@@ -1,11 +1,8 @@
 """One large frame of the average, at a lag the page's slider picks, and the reference pixel's trace.
 
-As ``plots/two_dca.py`` draws a conditional average: a frame of ``cond_av``, ``cond_repr`` or
-``cross_corr`` with the reference marked, on a colour scale fixed across the sweep (a per-frame
-rescale makes a decaying average look as if it never decays). It also draws what the strip draws
-over a frame: the contour at the level the average implies and each track's position at this lag.
-
-The lag is view state. It is a time in microseconds, snapped to the bank's lag axis.
+A frame of ``cond_av``, ``cond_repr`` or ``cross_corr`` with the reference marked, the contour at
+the level the average implies and each track's position at this lag, on a colour scale fixed across
+the lags. The lag is view state: a time in microseconds, snapped to the bank's lag axis.
 """
 
 import numpy as np

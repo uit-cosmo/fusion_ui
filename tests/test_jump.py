@@ -71,14 +71,7 @@ def blob_hash(params):
 def test_only_the_two_products_open_the_fields_page():
     assert jump.FIELDS_PLOTS == ("method_fields", "blob_parameters")
     assert jump.opens_fields("method_fields") and jump.opens_fields("blob_parameters")
-    for plot in (
-        "pixel_averages",
-        "velocity_contour",
-        "velocity_field",
-        "taud_psd",
-        "density_scan_import",
-        "dead_pixels",
-    ):
+    for plot in ("pixel_averages", "taud_psd", "dead_pixels"):
         assert not jump.opens_fields(plot), plot
 
 
@@ -243,6 +236,10 @@ def test_a_blob_point_nobody_has_velocity_fields_for_has_no_settings(found):
     options = [setting(method_params(found), default=True)]
     wanted = blob_hash(blob_params(found, averages__window=30))
     assert jump.settings_for("blob_parameters", wanted, found, options) is None
+    # Nor does anything go with a blob point when there are no settings at all, or with another plot.
+    default = blob_hash(blob_params(found))
+    assert jump.settings_for("blob_parameters", default, found, []) is None
+    assert jump.settings_for("taud_psd", "h" * 40, found, options) is None
 
 
 def test_a_blob_point_with_its_own_fit_settings_has_no_settings(found):
@@ -262,16 +259,6 @@ def test_a_blob_point_with_its_own_fit_settings_has_no_settings(found):
     # Moving the 2DCA window as well does not make it match either.
     both = blob_params(found, averages__window=40, blobs__gauss_fit__size_penalty=3.0)
     assert jump.settings_for("blob_parameters", blob_hash(both), found, options) is None
-
-
-def test_no_settings_at_all_is_none(found):
-    wanted = blob_hash(blob_params(found))
-    assert jump.settings_for("blob_parameters", wanted, found, []) is None
-
-
-def test_another_plot_has_no_fields_settings(found):
-    options = [setting(method_params(found), default=True)]
-    assert jump.settings_for("velocity_contour", "h" * 40, found, options) is None
 
 
 def test_a_setting_that_cannot_be_read_goes_with_nothing(found):
@@ -301,27 +288,18 @@ def test_a_setting_that_cannot_be_read_goes_with_nothing(found):
     )
 
 
-def test_without_a_blob_parameters_spec_nothing_goes_with_a_blob_point(found):
-    without = {key: spec for key, spec in found.items() if key != "blob_parameters"}
-    option = setting(method_params(found), default=True)
-    assert jump.related_blob_hash(without, option) is None
-    assert (
-        jump.settings_for(
-            "blob_parameters", blob_hash(blob_params(found)), without, [option]
-        )
-        is None
-    )
-
-
 # -- the request the Fields page reads once ---------------------------------------------------------
 
 
-def test_the_request_names_the_shot_the_settings_and_the_pixel():
-    assert jump.fields_request(1160616027, "d" * 40, "pixel", (5, 4)) == {
-        "shot": 1160616027,
-        "settings": "d" * 40,
-        "pixel": (5, 4),
-    }
+def test_the_request_names_the_shot_the_settings_and_the_pixel_in_plain_python():
+    import numpy as np
+
+    request = jump.fields_request(
+        np.int64(1160616027), "d" * 40, "pixel", (np.int64(5), np.int64(4))
+    )
+    assert request == {"shot": 1160616027, "settings": "d" * 40, "pixel": (5, 4)}
+    assert type(request["shot"]) is int
+    assert all(type(v) is int for v in request["pixel"])
 
 
 def test_the_pixel_goes_only_with_a_fixed_pixel_aggregate():
@@ -332,15 +310,3 @@ def test_the_pixel_goes_only_with_a_fixed_pixel_aggregate():
         assert ("pixel" in request) == (how == "pixel"), how
     # A fixed pixel with none chosen has nothing to send.
     assert "pixel" not in jump.fields_request(1, "d" * 40, "pixel", None)
-
-
-def test_the_request_is_plain_python():
-    """It goes into session state and is read back by ``apply_request``: ints and a tuple."""
-    import numpy as np
-
-    request = jump.fields_request(
-        np.int64(7), "d" * 40, "pixel", (np.int64(5), np.int64(4))
-    )
-    assert request == {"shot": 7, "settings": "d" * 40, "pixel": (5, 4)}
-    assert type(request["shot"]) is int
-    assert all(type(v) is int for v in request["pixel"])

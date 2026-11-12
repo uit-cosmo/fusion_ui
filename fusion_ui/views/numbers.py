@@ -1,7 +1,7 @@
 """The numbers at one pixel: every method's velocity, and the blob parameters when they are computed.
 
 Plain tables of floats. A number a method did not produce is NaN, never text, so a column stays
-numeric and sorts as one (``st.dataframe`` greys a missing numeric as ``None``; see CLAUDE.md).
+numeric and sorts as one.
 """
 
 import numpy as np
@@ -21,7 +21,7 @@ METHOD_COLUMNS = [
     "CC",
 ]
 
-#: The blob parameters the app shows, of those ``apd<shot>_blobs.nc`` holds: what each is, and its unit.
+#: The blob parameters the app shows, of those the ``blob_parameters`` blob holds: name, meaning, unit.
 BLOB_PARAMETERS = (
     ("nevents", "events the conditional average rests on", ""),
     ("area", "area of the zero-lag contour", "m²"),
@@ -92,8 +92,7 @@ def blob_table(bundle):
 def numbers(bundle):
     """``[method table, blob table]`` for the pixel in view; a sentence instead when it has nothing to show.
 
-    A dead pixel and a live one with no events are ordinary, not errors: the page puts the sentence
-    where the tables would have been. The blob table is left out until ``blob_parameters`` is computed.
+    The blob table is left out until ``blob_parameters`` is computed.
     """
     why = pixel.problem(bundle, need_bank=False)
     if why:

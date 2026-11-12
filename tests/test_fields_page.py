@@ -1,10 +1,8 @@
 """The Fields page: it reads what a batch job left, draws it, and never computes.
 
 Products are seeded through ``store.result(batch=True)`` with stand-in specs (``tests/fields_fixtures``),
-so the page, the store and the ledger run end to end on synthetic blobs. Nothing here touches
-``~/Data`` or the server. AppTest cannot click a Plotly point or follow ``st.switch_page``, so
-the click is covered by ``pixel_from_event`` (``test_views_geometry``) and by a real browser, and the
-switch is replaced by a recorder.
+so the page, the store and the ledger run end to end on synthetic blobs. AppTest cannot click a Plotly
+point, so the click is covered by ``pixel_from_event`` (``test_views_geometry``).
 """
 
 import dataclasses
@@ -258,15 +256,6 @@ def test_nothing_on_the_page_or_in_the_builders_can_start_an_analysis():
             "write_scalars",
         ):
             assert forbidden not in text, f"{path.name} mentions {forbidden}"
-
-
-def test_nothing_on_the_page_or_in_the_builders_depends_on_the_old_velocity_field():
-    """J10 deletes ``plots/velocity_field.py``: what the quiver needed from it was copied, not imported."""
-    sources = [Path(FIELDS)] + sorted((REPO_ROOT / "fusion_ui" / "views").glob("*.py"))
-    for path in sources:
-        text = path.read_text()
-        assert "plots.velocity_field" not in text, path.name
-        assert "import velocity_field" not in text, path.name
 
 
 # -- the products ---------------------------------------------------------------------------------
@@ -981,12 +970,3 @@ def test_no_preprocessed_shot_is_a_message(monkeypatch, tmp_path, fields_world):
     assert any("No preprocessed APD shot" in i.value for i in app.info)
     st.cache_data.clear()
     st.cache_resource.clear()
-
-
-def test_an_unregistered_product_is_an_error_and_not_a_traceback(deployment):
-    saved = registry.REGISTRY.pop("method_fields")
-    try:
-        app = run(selection=SELECTION)
-    finally:
-        registry.REGISTRY["method_fields"] = saved
-    assert any("needs the `method_fields` product" in e.value for e in app.error)

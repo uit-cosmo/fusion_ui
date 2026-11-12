@@ -1,24 +1,17 @@
 """The shot level: every method's velocity field side by side, on one scale.
 
-Seven panels, one per method (2DCA max, 2DCA centroid, 2DCC, 3TDE and 2TDE off the record, 3TDE and
-2TDE on the conditional average), drawn either as **arrows** or as **maps** of v_R or v_Z. What
-makes the methods comparable by eye is that nothing is rescaled between panels:
+Seven panels, one per method, drawn either as arrows or as maps of v_R or v_Z. What makes the
+methods comparable by eye is that nothing is rescaled between panels:
 
-- One arrow scale for the whole figure, and one key that states it. A per-panel scale would make
-  every field look equally fast. The scale is set by the three 2DCA tracks, the methods the others
-  are compared against: a TDE inflates speeds, and a two-point TDE blows up wherever a component
-  is small, so left to set the scale it would shrink every 2DCA arrow to a stub. Its longer arrows
-  are the finding, and the ones that leave the view are cut off at its edge (the hover has the
-  numbers, and the gain makes every arrow longer or shorter). The other panels set the scale only
-  when no 2DCA track drew anything.
+- One arrow scale for the whole figure, and one key that states it. It is set by the three 2DCA
+  tracks, the methods the others are compared against: a two-point TDE blows up wherever a
+  component is small, and left to set the scale it would shrink every 2DCA arrow to a stub. The
+  other panels set the scale only when no 2DCA track drew anything.
 - One diverging colour scale for the maps, symmetric about zero.
-- Every panel shows the same stretch of the array at the same size, at equal aspect, or the arrow
-  directions lie.
+- Every panel shows the same stretch of the array at the same size, at equal aspect.
 
-A pixel that is not drawn as a number says why: the mask marks it dead (never computed), the
-method found no fit at a live pixel, or the view cuts leave it out. The three marks differ, and
-hovering any pixel of any panel shows its numbers. Every pixel carries ``[x, y]`` as customdata, so
-a click on it in any panel names the pixel the pixel level opens on.
+A pixel that is not drawn as a number says why (dead, no fit, cut by the view), each with its own
+mark. Every pixel carries ``[x, y]`` as customdata, so a click on it names the pixel to open.
 
 Layout: two rows of four cells. The 2DCA methods fill the first three cells of the top row and the
 arrow key the fourth; the four TDE panels fill the bottom row.
@@ -75,9 +68,9 @@ def _axes(cell):
 def _customdata(p, mask):
     """``[x, y, v_R, v_Z, |v|, lags, events, CC]`` of the pixels in ``mask``, as plain nested lists.
 
-    Lists, never a numpy array: Plotly 6 and later serialise an array as a typed array, and the
-    browser hands one back in a selection event as an object keyed "0", "1", … where the page expects
-    ``[x, y]``. NaN where a panel has no such number.
+    Lists, never a numpy array: Plotly serialises an array as a typed array, which the browser
+    hands back in a selection event as an object where the page expects ``[x, y]``. NaN where a
+    panel has no such number.
     """
     ys, xs = np.nonzero(mask)
     nan = np.full(len(xs), np.nan)
@@ -293,12 +286,9 @@ def _key(traces, x_range, y_range, spacing, scale, key_speed):
 def velocity_panels(bundle, mode="arrows", arrow_gain=1.0):
     """The seven panels of ``bundle.fields`` as one figure; ``mode`` is ``"arrows"``, ``"vr"`` or ``"vz"``.
 
-    The arrow scale is one for every panel, set by the speeds of the three 2DCA tracks; the other
-    panels set it only when no 2DCA track drew anything. A TDE's longer arrows are therefore the
-    finding, not something that shrinks the rest. ``arrow_gain`` makes every arrow that many times
-    longer: the scale is still one for all the panels, only moved, for a field whose arrows come
-    out short or tangled. ``fig.layout.meta`` records what the figure was drawn at: ``arrow_scale``
-    (velocity per metre) and ``key_speed`` for arrows, ``colour_limit`` for maps.
+    ``arrow_gain`` makes every arrow that many times longer: the scale is still one for all the
+    panels. ``fig.layout.meta`` records what the figure was drawn at: ``arrow_scale`` (velocity per
+    metre) and ``key_speed`` for arrows, ``colour_limit`` for maps.
     """
     if bundle.fields is None:
         return message_figure("The velocity fields of this shot are not computed.")
@@ -391,18 +381,9 @@ def velocity_panels(bundle, mode="arrows", arrow_gain=1.0):
                 thickness=12,
             ),
         )
-        for i, p in enumerate(panels):
-            axes = _axes(CELL_OF[i])
-            traces += _arrow_traces(p, R, Z, axes, scale)
-            if p.ok.any():
-                traces.append(_dots(p, R, Z, axes))
-            traces += _mark_traces(p, R, Z, axes, legend, marks)
-            traces += _selected_trace(bundle, R, Z, axes)
-        annotations += _key(traces, x_range, y_range, spacing, scale, key_speed)
     else:
-        component = "vr" if mode == "vr" else "vz"
         label = "v_R" if mode == "vr" else "v_Z"
-        shown = [np.where(p.ok, getattr(p, component), np.nan) for p in panels]
+        shown = [np.where(p.ok, getattr(p, mode), np.nan) for p in panels]
         pooled = np.abs(np.concatenate([s[np.isfinite(s)] for s in shown]))
         limit = float(np.percentile(pooled, MAP_PERCENTILE)) if pooled.size else 1.0
         limit = limit if limit > 0 else 1.0
@@ -424,11 +405,15 @@ def velocity_panels(bundle, mode="arrows", arrow_gain=1.0):
         )
         layout["plot_bgcolor"] = "#f1f1f1"
         x_axis, y_axis = grid_axes(R, Z)
-        for i, (p, values) in enumerate(zip(panels, shown)):
-            axes = _axes(CELL_OF[i])
+
+    for i, p in enumerate(panels):
+        axes = _axes(CELL_OF[i])
+        if mode == "arrows":
+            traces += _arrow_traces(p, R, Z, axes, scale)
+        else:
             traces.append(
                 go.Heatmap(
-                    z=values,
+                    z=shown[i],
                     x=x_axis,
                     y=y_axis,
                     coloraxis="coloraxis",
@@ -441,10 +426,12 @@ def velocity_panels(bundle, mode="arrows", arrow_gain=1.0):
                     yaxis=axes[1],
                 )
             )
-            if p.ok.any():
-                traces.append(_dots(p, R, Z, axes))
-            traces += _mark_traces(p, R, Z, axes, legend, marks)
-            traces += _selected_trace(bundle, R, Z, axes)
+        if p.ok.any():
+            traces.append(_dots(p, R, Z, axes))
+        traces += _mark_traces(p, R, Z, axes, legend, marks)
+        traces += _selected_trace(bundle, R, Z, axes)
+    if mode == "arrows":
+        annotations += _key(traces, x_range, y_range, spacing, scale, key_speed)
 
     # The key cell holds the arrow key or nothing: its axes carry no ticks either way.
     layout[layout_key(KEY_CELL, "x")]["visible"] = False

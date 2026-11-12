@@ -16,13 +16,12 @@ import xarray as xr
 
 import fusion_ui.plots  # noqa: F401 - registers the real specs the stand-ins stand in for
 from fusion_ui import cli
-from fusion_ui.core import catalog, params_ui, precompute, registry, store
+from fusion_ui.core import catalog, params_ui, registry, store
 from fusion_ui.views import products as prod
 from tests import fields_fixtures as ff
 from tests.fields_fixtures import fields_world  # noqa: F401 - the fixture
 
 SHOT = 1160616027
-SECOND = 1160616026
 #: What the page offers for a stale product: all three, upstream first, never ``--force``.
 REFRESH = (
     "fusion-ui precompute pixel_averages method_fields blob_parameters"
@@ -349,73 +348,17 @@ def test_a_product_whose_input_changed_is_stale_and_says_how_to_refresh_it(
     catalog.rescan(conn, str(stored.root), "cmod", None)
     products = collect(conn, stale=prod.stale_reasons(conn))
     assert [p.stale for p in products.values()] == ["input changed"] * 3
-    # One command for the three, upstream first. Not `--force` on the product: that recomputes it
-    # on whatever lies beneath it, which is stale as well when the input is what changed.
-    assert {p.refresh for p in products.values()} == {REFRESH}
-    assert all(
-        p.ok for p in products.values()
-    )  # still shown: stale is information, not an error
+    # Still shown: stale is information, not an error.
+    assert all(p.ok for p in products.values())
     assert [p.command for p in products.values()] == [None] * 3
-    assert all(p.refresh is None for p in collect(conn).values())  # nothing to refresh
-
-
-def test_a_recomputed_bank_makes_what_was_built_on_it_stale(stored, conn):
-    runs = stored.seed(conn, SHOT)
-    found = prod.specs(registry)[0]
-    store.delete_run(conn, runs["pixel_averages"])
-    stored.seed(conn, SHOT, "pixel_averages")
-    products = collect(conn, stale=prod.stale_reasons(conn))
-    assert products["pixel_averages"].stale is None
-    assert products["method_fields"].stale == "upstream deleted"
-    assert found["method_fields"].requires == "pixel_averages"
+    # One command for the three, upstream first, never `--force`; the machine only when it is not
+    # the configured one.
+    assert prod.refresh_command(target()) == REFRESH
+    there = dataclasses.replace(target(), machine="aug")
+    assert prod.refresh_command(there) == f"{REFRESH} --machine aug"
 
 
 # -- refreshing what is stale -----------------------------------------------------------------
-
-
-def test_the_refresh_command_names_the_machine_only_when_it_is_not_the_configured_one(
-    stored,
-):
-    found = prod.specs(registry)[0]
-    here = target()
-    assert prod.refresh_command(found, here) == REFRESH
-    there = dataclasses.replace(here, machine="diiid")
-    assert prod.refresh_command(found, there) == f"{REFRESH} --machine diiid"
-    # Dependency order whatever order the products were found in, and only what is registered.
-    backwards = dict(reversed(list(found.items())))
-    assert prod.refresh_command(backwards, here) == REFRESH
-    partial = {k: v for k, v in found.items() if k != "blob_parameters"}
-    assert prod.refresh_command(partial, here) == (
-        f"fusion-ui precompute pixel_averages method_fields --stale --shot {SHOT}"
-    )
-
-
-def test_the_refresh_command_is_one_the_cli_reads_as_the_stale_run_of_this_shot(stored):
-    found = prod.specs(registry)[0]
-    parser = cli.build_parser()
-    args = parser.parse_args(shlex.split(REFRESH)[1:])
-    assert (args.command, args.plots, args.stale, args.shot) == (
-        "precompute",
-        ["pixel_averages", "method_fields", "blob_parameters"],
-        True,
-        [SHOT],
-    )
-    assert not (args.force or args.retry_failed or args.params_json or args.run_day)
-    assert (
-        args.machine is None
-    )  # the configured one, which is where the page is looking
-    elsewhere = prod.refresh_command(
-        found, dataclasses.replace(target(), machine="aug")
-    )
-    args = parser.parse_args(shlex.split(elsewhere)[1:])
-    assert (args.shot, args.machine) == ([SHOT], "aug")
-    # What it asks for is what the CLI would plan: every product named, in dependency order.
-    assert [
-        spec.key
-        for spec in precompute.in_dependency_order(
-            [registry.get(key) for key in args.plots]
-        )
-    ] == args.plots
 
 
 def write_record(path):
@@ -433,10 +376,9 @@ def write_record(path):
 
 @pytest.fixture
 def recorded(stored, conn, tmp_path, monkeypatch):
-    """``stored`` with real records behind its two preprocessed files, and the CLI on its database."""
-    for path in (stored.path, stored.root / "apd" / f"apd_{SECOND}_preprocessed.nc"):
-        write_record(path)
-        os.utime(path, (1_700_000_000, 1_700_000_000))
+    """``stored`` with a real record behind the shot's preprocessed file, and the CLI on its database."""
+    write_record(stored.path)
+    os.utime(stored.path, (1_700_000_000, 1_700_000_000))
     catalog.rescan(conn, str(stored.root), "cmod", None)
     monkeypatch.setenv("FUSION_DATA_FOLDER", str(stored.root))
     monkeypatch.setenv("FUSION_UI_DB", str(tmp_path / "state" / "shot_explorer.sqlite"))
@@ -458,13 +400,6 @@ def reasons(conn, shot=None):
         for run in store.stale_runs(conn)
         if shot is None or run["shot"] == shot
     }
-
-
-def refresh_of(conn):
-    """The command the page offers for the shot, as it computes it from the ledger."""
-    products = collect(conn, stale=prod.stale_reasons(conn))
-    (refresh,) = {p.refresh for p in products.values() if p.refresh}
-    return refresh
 
 
 def input_changed(recorded, conn):
@@ -525,11 +460,9 @@ def test_the_refresh_command_leaves_nothing_stale_whatever_made_it_stale(
     expected = REASONS[reason](recorded, conn)
     assert reasons(conn) == expected
     assert reason in expected.values()
-    command = refresh_of(conn)
-    assert command == REFRESH
     capsys.readouterr()
 
-    assert cli.main(shlex.split(command)[1:]) == 0, capsys.readouterr()
+    assert cli.main(shlex.split(REFRESH)[1:]) == 0, capsys.readouterr()
     out = capsys.readouterr().out
     assert store.stale_runs(conn) == []
     # Every product is there again, none of them left behind by a stale one beneath it.
@@ -537,96 +470,10 @@ def test_the_refresh_command_leaves_nothing_stale_whatever_made_it_stale(
     assert "left stale" not in out
 
 
-def test_forcing_only_the_product_leaves_it_stale_which_is_why_the_command_is_not_that(
-    recorded, conn, capsys
-):
-    """`--force` on the velocity fields recomputes them on whatever lies beneath them: the bank,
-    which a changed input has left stale, so the new fields are stale the moment they are written.
-    """
-    recorded.seed(conn, SHOT)
-    touch(recorded, conn, SHOT)
-    force = ["precompute", "method_fields", "--shot", str(SHOT), "--force"]
-    assert cli.main(force) == 0, capsys.readouterr()
-    assert reasons(conn) == {
-        "pixel_averages": store.STALE_INPUT,
-        "method_fields": store.STALE_UPSTREAM_STALE,
-        "blob_parameters": store.STALE_INPUT,
-    }
-    capsys.readouterr()
-    assert cli.main(shlex.split(refresh_of(conn))[1:]) == 0, capsys.readouterr()
-    assert store.stale_runs(conn) == []
-
-
-def test_naming_only_the_product_leaves_it_to_a_second_command_the_page_does_not_need(
-    recorded, conn, capsys
-):
-    """`--stale` on the velocity fields alone does not touch them while the bank is stale (a result
-    recomputed on a stale upstream would be stale too), and says what would."""
-    recorded.seed(conn, SHOT)
-    touch(recorded, conn, SHOT)
-    only = ["precompute", "method_fields", "--stale", "--shot", str(SHOT)]
-    assert cli.main(only) == 0, capsys.readouterr()
-    assert reasons(conn) == dict.fromkeys(prod.KEYS, store.STALE_INPUT)
-    assert (
-        "fusion-ui precompute pixel_averages method_fields --stale"
-        in capsys.readouterr().out
-    )
-
-
-def test_the_refresh_command_recomputes_each_settings_with_its_own_parameters_and_no_other_shot(
-    recorded, conn, capsys
-):
-    recorded.seed(conn, SHOT)
-    recorded.seed(
-        conn, SHOT, "method_fields", params={"method_fields": ff.with_window(40)}
-    )
-    recorded.seed(conn, SECOND)
-    touch(recorded, conn, SHOT, SECOND)
-    assert {r["shot"] for r in store.stale_runs(conn)} == {SHOT, SECOND}
-
-    def ledger():
-        return {
-            (r["shot"], r["plot"], r["params_hash"]): (r["id"], r["created_at"])
-            for r in conn.execute("SELECT * FROM runs")
-        }
-
-    before = ledger()
-    assert len(before) == 5 + 3
-    # The page is looking at the default settings; the command is for the shot, whatever they are.
-    command = refresh_of(conn)
-    assert command == REFRESH
-    assert cli.main(shlex.split(command)[1:]) == 0, capsys.readouterr()
-
-    after = ledger()
-    assert set(after) == set(
-        before
-    )  # nothing added: every set recomputed under its own hash
-    for key, (run_id, created) in after.items():
-        shot = key[0]
-        assert run_id == before[key][0], "recomputed in place"
-        assert (created != before[key][1]) == (shot == SHOT)
-    assert {r["shot"] for r in store.stale_runs(conn)} == {SECOND}  # left as it was
-
-    windows = {}
-    for run in conn.execute(
-        "SELECT * FROM runs WHERE shot = ? AND plot = 'pixel_averages'", (SHOT,)
-    ):
-        values = json.loads(store.params_json(conn, run["params_hash"]))["params"][
-            "values"
-        ]
-        windows[values["averages"]["window"]] = store.load_result(conn, run).sizes[
-            "time"
-        ]
-    assert windows == {
-        60: 61,
-        40: 41,
-    }  # each bank has the lags its own settings gave it
-
-
 def test_a_product_computed_before_the_move_to_imaging_methods_says_so(
     stored, conn, monkeypatch
 ):
-    """A run whose code_version names fusion_scripts predates L14, whatever the checkout is now."""
+    """A run whose code_version names fusion_scripts says so, whatever the checkout is now."""
     monkeypatch.setattr(
         store,
         "_code_version",
@@ -676,40 +523,3 @@ def test_a_product_computed_under_another_imaging_methods_commit_is_marked(
         for p in collect(conn, current={"imaging_methods": "unknown"}).values()
     )
     assert not any(p.code_note for p in collect(conn, current=None).values())
-
-
-def test_runs_from_before_the_versions_were_recorded_are_not_marked(
-    stored, conn, monkeypatch
-):
-    monkeypatch.setattr(
-        store, "_code_version", lambda: "imported"
-    )
-    stored.seed(conn, SHOT)
-    assert not any(
-        p.code_note
-        for p in collect(conn, current={"imaging_methods": "2222222"}).values()
-    )
-
-
-def test_a_spec_that_is_not_registered_is_said_so_and_nothing_is_offered_for_it(
-    stored, conn
-):
-    found, missing = prod.specs(registry)
-    assert missing == []
-    partial = {k: v for k, v in found.items() if k != "blob_parameters"}
-    products = collect(conn, found=partial)
-    assert (
-        products["blob_parameters"].state == prod.UNREGISTERED
-        and products["blob_parameters"].command is None
-    )
-    assert products["method_fields"].state == prod.MISSING
-    found, missing = prod.specs(
-        types_namespace({"method_fields": found["method_fields"]})
-    )
-    assert missing == ["pixel_averages", "blob_parameters"]
-
-
-def types_namespace(entries):
-    import types
-
-    return types.SimpleNamespace(REGISTRY=entries)

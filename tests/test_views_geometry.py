@@ -110,8 +110,8 @@ def test_a_click_names_the_pixel_in_its_customdata():
 
 
 def test_a_typed_array_that_went_through_json_is_still_a_click():
-    """The browser hands a Float64Array back as an object keyed "0", "1", ... : the failure the
-    first real click found. Figures now send lists, and this reads the object anyway."""
+    """The browser hands a Float64Array back as an object keyed "0", "1", ... . Figures send
+    lists, and this reads the object anyway."""
     assert geometry.pixel_from_event(event({"0": 5.0, "1": 4.0, "2": 400.0})) == (5, 4)
     assert geometry.pixel_from_event(event({0: 1.0, 1: 2.0})) == (1, 2)
 
