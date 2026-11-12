@@ -441,9 +441,9 @@ def _docstring_help(cls):
     return out
 
 
-def help_for(cls, field_name, path=None):
+def help_for(cls, field_name):
     """The help text of field ``field_name`` of ``cls``, or ``None``: :data:`HELP`
-    first, then the class docstring. ``path`` is not used."""
+    first, then the class docstring."""
     return (
         HELP.get((cls.__name__, field_name))
         or _docstring_help(cls).get(field_name)

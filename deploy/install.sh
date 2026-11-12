@@ -2,7 +2,7 @@
 #
 # Install or update Shot Explorer on the group server. Run as root:
 #
-#   sudo bash deploy/install.sh --branch phase-00-skeleton
+#   sudo bash deploy/install.sh
 #
 # Every step is idempotent, so re-running it after a `git pull` is the normal
 # way to deploy an update. `--help` lists every setting; each also works as an
@@ -61,8 +61,8 @@ CAMPUS_SUBNET=${CAMPUS_SUBNET:-}             # e.g. 10.228.0.0/16; empty = ask, 
                                              # the subnet the server is itself on
 HTPASSWD_USER=${HTPASSWD_USER:-fusion}
 
-# name=url for the packages that are not on PyPI. Only experimental_database and
-# fusion_scripts are private; the rest clone anonymously and need no credentials.
+# name=url for the group's packages. Only experimental_database is private; the
+# rest clone anonymously and need no credentials.
 # A checkout already present in
 # $SRC_DIR is used as it stands and never overwritten, so a private repository
 # the server cannot reach is handled by copying it in first:
@@ -75,7 +75,6 @@ HTPASSWD_USER=${HTPASSWD_USER:-fusion}
 DEPENDENCIES=(
   "imaging-methods=https://github.com/uit-cosmo/imaging-methods.git"
   "experimental_database=https://github.com/uit-cosmo/experimental_database.git"
-  "fusion_scripts=https://github.com/Sosnowsky/fusion_scripts.git"
   "velocity-estimation=https://github.com/uit-cosmo/velocity-estimation.git"
   "fpp-analysis-tools=https://github.com/uit-cosmo/fpp-analysis-tools.git"
 )

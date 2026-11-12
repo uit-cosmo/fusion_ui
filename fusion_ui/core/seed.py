@@ -5,8 +5,6 @@ key :data:`IMPORT_PLOT`: they show on the multi-shot axis and ``fusion-ui
 prune`` removes them.
 """
 
-from dataclasses import dataclass
-
 #: The plot key every imported row carries. No spec has it.
 IMPORT_PLOT = "density_scan_import"
 
@@ -33,10 +31,3 @@ RECORD_NAMES = (
 #: the ellipse fitted to a contour, not the Gaussian fit they mean elsewhere.
 NOT_IMPORTED = ("lx_f", "ly_f", "theta_f")
 
-
-@dataclass
-class ImportedResults:
-    """The parameter set of the imported rows: the file they came from."""
-
-    source: str = ""
-    sha1: str = ""

@@ -272,7 +272,7 @@ def test_every_leaf_of_every_products_form_is_explained(key):
     leaves = list(_form_leaves(registry.get(key).params))
     assert leaves
     unexplained = [
-        path for path, cls, name in leaves if not params_ui.help_for(cls, name, path)
+        path for path, cls, name in leaves if not params_ui.help_for(cls, name)
     ]
     assert not unexplained
 

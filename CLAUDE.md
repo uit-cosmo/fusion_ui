@@ -128,8 +128,9 @@ class PlotSpec:
 - **`choices`** is for options only the opened file knows. Static choices go in
   `params_ui.CHOICES`.
 - **`overlay`** draws many pixels on one axis; `items` is `[((x, y), result), …]`.
-  Many-pixel mode (`multipixel.supported`) takes a cached spec with `refx` and
-  `refy` in its params and no batch-only link, or a live spec with an `overlay`.
+  Many-pixel mode (`multipixel.supported`) takes a cached spec with top-level
+  `refx` and `refy` in its params that is neither chained nor batch only, or a
+  live spec with an `overlay`.
 
 `register()` enforces most of this at import. Do not work around a refusal.
 

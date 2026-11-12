@@ -276,7 +276,7 @@ def settings():
     rows = {}
     for key in ("method_fields", "blob_parameters", "pixel_averages"):
         for path, owner, name, value in _leaves(registry.get(key).params()):
-            help_text = params_ui.help_for(owner, name, path) or ""
+            help_text = params_ui.help_for(owner, name) or ""
             rows.setdefault(path, (value, [], help_text))[1].append(key)
     return {
         path: (value, sorted(products, key=PRODUCTS.index), help_text)

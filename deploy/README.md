@@ -54,7 +54,7 @@ sudo useradd --system --create-home --home-dir /var/lib/fusionui fusionui
 
 ## 2. Checkouts
 
-The script pulls or clones five dependencies into `$SRC_DIR`, then the app into
+The script pulls or clones four dependencies into `$SRC_DIR`, then the app into
 `$APP_DIR`:
 
 | Checkout | From | |
@@ -63,10 +63,6 @@ The script pulls or clones five dependencies into `$SRC_DIR`, then the app into
 | `velocity-estimation` | `uit-cosmo/velocity-estimation` | public |
 | `fpp-analysis-tools` | `uit-cosmo/fpp-analysis-tools` | public |
 | `experimental_database` | `uit-cosmo/experimental_database` | **private** |
-| `fusion_scripts` | `Sosnowsky/fusion_scripts` | **private** |
-
-The app no longer imports `fusion_scripts`, but it is still in the script's
-`DEPENDENCIES` list, so the script still needs it, by a key or as a copy.
 
 For each one:
 
@@ -122,7 +118,6 @@ run this once per private repository:
 
 ```bash
 sudo bash deploy/add-deploy-key.sh https://github.com/uit-cosmo/experimental_database.git
-sudo bash deploy/add-deploy-key.sh https://github.com/Sosnowsky/fusion_scripts.git
 ```
 
 For `<owner>/<repo>` it generates `/var/lib/fusionui/.ssh/id_<repo>` for the
@@ -210,8 +205,7 @@ sudo -u fusionui "$APP_DIR/.venv/bin/pip" install --upgrade pip
 # The checkouts first: the app names them as dependencies, and not all are on PyPI.
 sudo -u fusionui "$APP_DIR/.venv/bin/pip" install \
   -e "$SRC_DIR/imaging-methods" -e "$SRC_DIR/experimental_database" \
-  -e "$SRC_DIR/fusion_scripts" -e "$SRC_DIR/velocity-estimation" \
-  -e "$SRC_DIR/fpp-analysis-tools"
+  -e "$SRC_DIR/velocity-estimation" -e "$SRC_DIR/fpp-analysis-tools"
 sudo -u fusionui "$APP_DIR/.venv/bin/pip" install -e "$APP_DIR"
 ```
 

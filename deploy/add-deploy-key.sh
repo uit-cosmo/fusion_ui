@@ -2,7 +2,7 @@
 #
 # Give the service user read-only access to one private GitHub repository.
 #
-#   sudo bash deploy/add-deploy-key.sh https://github.com/Sosnowsky/fusion_scripts.git
+#   sudo bash deploy/add-deploy-key.sh https://github.com/uit-cosmo/experimental_database.git
 #
 # A deploy key must be unique across the whole of GitHub, so this generates a
 # fresh key per repository and an ssh Host alias to keep them apart. Re-running

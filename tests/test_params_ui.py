@@ -187,7 +187,7 @@ def test_help_is_the_table_entry_or_else_the_class_docstring():
     assert params_ui.help_for(Documented, "third") == "on its own."
     assert params_ui.help_for(Documented, "fourth") is None
     entry = params_ui.HELP[("TaudEstimationParams", "cutoff")]
-    assert params_ui.help_for(im.TaudEstimationParams, "cutoff", "blobs.taud_estimation.cutoff") == entry
+    assert params_ui.help_for(im.TaudEstimationParams, "cutoff") == entry
 
 
 # ---------------------------------------------------------------------------
