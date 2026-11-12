@@ -1,12 +1,7 @@
 """What a builder is handed: one shot's products as loaded, the pixel in view, and the view cuts.
 
-The page loads the three products (``pixel_averages``, ``method_fields``, ``blob_parameters``) and
-puts them in a :class:`Bundle`; a builder reads whatever it needs off it and never touches the
-store. Any product may be ``None``: the page only calls a builder whose ``reads`` are present, but a
-builder that can do without one (the lag strip without ``method_fields``) is told so by ``optional``.
-
-All three products carry ``R`` and ``Z`` as 2-D ``(y, x)`` coordinates in metres, and velocities are
-in m/s. Nothing here converts units.
+Any product may be ``None``. All three carry ``R`` and ``Z`` as 2-D ``(y, x)`` coordinates in
+metres, and velocities are in m/s.
 """
 
 from dataclasses import dataclass, field
@@ -18,27 +13,20 @@ import xarray as xr
 
 @dataclass(frozen=True)
 class Cuts:
-    """View cuts: which pixels the panels leave out of the arrows. View state, never parameters.
+    """View cuts: which pixels the panels leave out. View state, never parameters.
 
-    Moving one never recomputes anything, so none of them is part of a product's cache key.
-
-    The cuts apply per method (``views.methods.METHODS``), to what each estimate rests on, unless
+    They apply per method (``views.methods.METHODS``), to what each estimate rests on, unless
     ``paper`` is set.
 
-    min_lags: fewest lags a 2DCA track's slope may rest on, for the three tracks (the 2DCC keeps it).
-        A slope through two or three lags is a secant, not a fit, and the wildest velocities in a
-        field come from such pixels.
-    min_events: fewest events the conditional average at a pixel may rest on, for the methods read
-        off that average: the 2DCA maximum and centroid, and the TDEs applied to it. The 2DCC is
-        read off the cross-correlation of the whole record, and a TDE off the record: neither
-        depends on the events, and this never cuts them.
-    interior_only: leave out the pixels on the array's border, where the 2DCA track leaves the view
-        within a few lags and a TDE loses half its neighbour pairs. Every method.
-    paper: the paper's own cut instead of those three, one set of pixels for every method
-        (``views.reliable``, which is ``reliable()`` of ``apd_check/figures.py``): the 2DCA
-        centroid on at least ``min_lags`` lags and the average on at least ``min_events`` events, a
-        number from the centroid and from both TDEs, and not on the border. The two minimums are the
-        ones above; the border is always out, whatever ``interior_only`` says.
+    min_lags: fewest lags a 2DCA track's slope may rest on (the three tracks). A slope through two
+        or three lags is a secant, not a fit.
+    min_events: fewest events the conditional average may rest on, for the methods read off it:
+        the 2DCA maximum and centroid, and the TDEs applied to the average. The 2DCC and the TDEs
+        off the record do not depend on the events.
+    interior_only: leave out the pixels on the array's border. Every method.
+    paper: the paper's cut instead, one set of pixels for every method (``views.reliable``): the
+        2DCA centroid on at least ``min_lags`` lags and ``min_events`` events, a number from the
+        centroid and from both TDEs, and not on the border, whatever ``interior_only`` says.
     """
 
     min_lags: int = 8
@@ -57,11 +45,10 @@ class Bundle:
     blobs: Optional[xr.Dataset] = None  # blob_parameters
     pixel: Optional[tuple] = None  # (x, y) in view, or None
     cuts: Cuts = field(default_factory=Cuts)
-    #: Pixels between the peak and the neighbours the contour level is read off
-    #: (``Tracking.neighbour_step``): the page reads it out of the settings in use.
+    #: Pixels between the peak and the neighbours the contour level is read off (``Tracking.neighbour_step``).
     neighbour_step: int = 1
-    #: Names the 2DCA bank these products rest on, so a view's own state (a lag slider) is shared
-    #: by shots with the same lags and apart from those with another window.
+    #: Names the 2DCA bank the products rest on: a view's widget state (a lag slider) is keyed on it,
+    #: so banks with another lag window get their own.
     tag: str = ""
 
     def reference(self):
@@ -82,13 +69,13 @@ class Bundle:
     @property
     def grid(self):
         """``(R, Z)`` as float ``(y, x)`` arrays in metres, or the pixel indices when a product has none."""
-        dataset = self.reference()
-        ny, nx = self.shape
-        if dataset is not None and "R" in dataset.coords and "Z" in dataset.coords:
+        if self.has_coordinates:
+            dataset = self.reference()
             return (
                 np.asarray(dataset["R"].values, dtype=float),
                 np.asarray(dataset["Z"].values, dtype=float),
             )
+        ny, nx = self.shape
         x, y = np.meshgrid(np.arange(nx, dtype=float), np.arange(ny, dtype=float))
         return x, y
 

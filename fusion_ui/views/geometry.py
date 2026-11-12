@@ -1,17 +1,14 @@
-"""The array as the figures draw it: axes for a heatmap, reading order, arrow scale.
+"""The array as the figures draw it: axes for a heatmap, reading order, a click read back.
 
-The pixel grid is almost rectilinear: on C-Mod's APD the columns of R differ by a tenth of a
-millimetre along a pixel pitch of nearly four. A Plotly heatmap takes one axis per direction, so a
-frame is drawn on the mean R of each column and the mean Z of each row, an error of a few percent
-of a pixel. Anything placed at a pixel's true position (a marker, an arrow tail, a contour) uses the
-2-D ``R`` and ``Z``.
+The pixel grid is almost rectilinear. A Plotly heatmap takes one axis per direction, so a frame is
+drawn on the mean R of each column and the mean Z of each row, an error of a few percent of a
+pixel. Anything placed at a pixel's true position (a marker, an arrow, a contour) uses the 2-D
+``R`` and ``Z``.
 """
 
 import numpy as np
 
-#: The 90th-percentile speed is drawn this long, as a fraction of the array's R extent
-#: (``plotting_scripts.twodca_plots.ARROW_FRACTION``).
-ARROW_FRACTION = 0.18
+from fusion_ui.core import decimate
 
 
 def grid_axes(R, Z):
@@ -56,11 +53,8 @@ def pitch(R, Z):
 
 
 def reading_order(R, Z):
-    """Every pixel as ``(x, y)`` in the order it is read off the drawn array.
-
-    Top row first, left to right: Z up and R to the right, as the figures draw it. A row is a row
-    of the array (``y``); it is the top one when its Z is the largest, whichever way ``y`` runs.
-    """
+    """Every pixel as ``(x, y)`` in the order it is read off the drawn array: top row (largest Z)
+    first, left to right (R increasing)."""
     ny, nx = R.shape
     z_by_row = (
         np.nanmean(Z, axis=1) if np.isfinite(Z).any() else np.arange(ny, dtype=float)
@@ -113,7 +107,7 @@ def _pair(custom):
     """``(x, y)`` from one point's ``customdata``, or ``None`` when it does not hold a pixel.
 
     Usually a list. A typed array that went through JSON arrives as an object keyed "0", "1", …
-    and is read as the list it was, so a figure that forgot to send plain lists still works.
+    and is read as the list it was.
     """
     if isinstance(custom, dict):
         custom = [custom.get(str(i), custom.get(i)) for i in range(2)]
@@ -126,12 +120,9 @@ def _pair(custom):
 def pixel_from_event(event):
     """The ``(x, y)`` a ``st.plotly_chart`` selection event names, or ``None``.
 
-    Each marker carries its ``[x, y]`` as ``customdata``, as the pixel map of ``core.multipixel``
-    does. With several points selected the first, in reading of ``(x, y)``, is taken. Anything that
-    is not a pixel is skipped, never an error in the page.
+    Each marker carries its ``[x, y]`` as ``customdata``. With several points selected the smallest
+    ``(x, y)`` is taken. Anything that is not a pixel is skipped.
     """
-    from fusion_ui.core import decimate
-
     pairs = {_pair(_customdata(point)) for point in decimate.selection_points(event)}
     pairs.discard(None)
     return min(pairs) if pairs else None

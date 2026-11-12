@@ -1,23 +1,20 @@
 """Plotly plumbing the Fields builders share: a grid of equal-aspect cells, a message, colours.
 
-``make_subplots`` plus ``add_trace(row=, col=)`` costs milliseconds per trace, and the pixel level
-draws a few dozen. Every builder here therefore lays its own axes out as a grid of cells and hands
-Plotly its traces in one batch, each already naming its axes.
+``make_subplots`` plus ``add_trace(row=, col=)`` costs milliseconds per trace, so every builder
+lays its own axes out as a grid of cells and hands Plotly its traces in one batch.
 """
 
 import numpy as np
 import plotly.graph_objects as go
 
-#: Marker colours. The three tracks and the two TDE lines keep the colours the group's own figures
-#: give them (``plotting_scripts.twodca_plots.TRACK_STYLES``, ``figures.TDE_COLORS``), so a figure
-#: here reads like the one in the deck.
+#: The colours and symbols of the three tracks and the two TDE lines, as the group's figures have them.
 TRACK_COLOURS = {"max": "#1f77b4", "com": "#7fb8e0", "2dcc": "#ff7f0e"}
 TRACK_SYMBOLS = {"max": "triangle-up", "com": "circle", "2dcc": "square"}
 TDE_COLOURS = {"3": "#2ca02c", "2": "#9467bd"}
 
-#: How a pixel that is not drawn as a number is marked, and why. A dead pixel was never computed; a
-#: failed fit is a live pixel whose estimator returned nothing; a cut pixel has a number the view
-#: cuts leave out. They look different because they mean different things.
+#: How a pixel that is not drawn as a number is marked. A dead pixel was never computed, a failed
+#: fit is a live pixel whose estimator returned nothing, a cut pixel has a number the view cuts
+#: leave out.
 DEAD_STYLE = dict(
     symbol="square", size=8, color="#c7c7c7", line=dict(width=1, color="#7f7f7f")
 )
@@ -36,11 +33,7 @@ SELECTED_STYLE = dict(
 
 
 def message_figure(text, height=170):
-    """An empty figure that says ``text``: what a builder returns when there is nothing to draw.
-
-    A pixel with no events, a dead pixel and a missing product are not errors. The page puts this
-    where the figure would be, so the reason is on the screen and not in a traceback.
-    """
+    """An empty figure that says ``text``: what a builder returns when there is nothing to draw."""
     fig = go.Figure()
     fig.add_annotation(
         text=text,
@@ -109,10 +102,9 @@ def cell_axes(
 ):
     """Put the k-th cell's two axes into ``layout`` (a dict): equal aspect, fixed ranges.
 
-    Both ranges are fixed so that every cell of a figure shows the same stretch of the array at the
-    same scale: arrows drawn in two cells then have comparable lengths on the screen, and a figure's
-    cells are not each zoomed to their own contents. ``constrain="domain"`` keeps the aspect by
-    shrinking the cell, never by moving the range.
+    Both ranges are fixed so that every cell shows the same stretch of the array at the same scale,
+    and arrows in two cells compare. ``constrain="domain"`` keeps the aspect by shrinking the cell,
+    never by moving the range.
     """
     x_domain, y_domain = domains
     common = dict(

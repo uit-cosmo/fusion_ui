@@ -1,37 +1,28 @@
 """Fields: every method's velocity field for a shot, and the average behind each pixel's number.
 
 Reads the three products a batch job leaves in the result store (``pixel_averages``,
-``method_fields``, ``blob_parameters``) and draws them. **This page never computes.** It asks the
-ledger with ``store.find_run`` and loads blobs through a ``st.cache_data`` keyed on (path, mtime),
-so flipping through the pixels of a shot never reloads the 12 MB bank; what is missing it names,
-with the exact ``fusion-ui precompute`` command that fills it, because a 40-minute analysis must
-never start inside the process that serves the group.
+``method_fields``, ``blob_parameters``) and draws them. **This page never computes**: a 40-minute
+analysis must not start inside the process that serves the group. It asks the ledger with
+``store.find_run`` and loads blobs through a ``st.cache_data`` keyed on (path, mtime); what is
+missing it names, with the ``fusion-ui precompute`` command that fills it.
 
-The page draws nothing itself: it walks ``views.SHOT_VIEWS`` and ``views.PIXEL_VIEWS``. A new
-figure is a pure builder in ``fusion_ui/views/`` plus an entry in one of the two lists.
+The figures are the entries of ``views.SHOT_VIEWS`` and ``views.PIXEL_VIEWS``.
 
-Session state another page may set before it switches here (the multi-shot jump does):
+Session state another page may set before it switches here:
 
 ``fields.open``
-    **A request to open the page somewhere, consumed once**:
+    A request to open the page somewhere, read once and removed:
     ``{"shot": 1160616027, "settings": <a method_fields params hash>, "pixel": (x, y)}``. Every
-    entry is optional; an unknown shot or hash is ignored. It always wins, however often it is
-    sent, because it is taken out of the session state when it is read: a jump to the shot the page
-    was already remembering still lands there, which a comparison of states could not tell.
+    entry is optional; an unknown shot or hash is ignored.
 ``selection``
-    The shared selection contract, ``{"machine", "shot", "diagnostic", "preprocessed"}``. A
-    selection that differs from the last one this page saw picks the shot (the shot browser's);
-    otherwise the page keeps the shot it was last on.
-``fields.settings``
-    The ``method_fields`` parameters hash in use: the widget's own state. Anything unknown is the
-    default.
+    The shared selection contract. A selection that differs from the last one this page saw picks
+    the shot; otherwise the page keeps the shot it was last on.
 ``fields.pixel``
-    ``(x, y)`` of the pixel the pixel level shows, or ``None``. Set by a click on any panel and by
-    the previous/next buttons; kept when the shot or the settings change, and dropped when it is
-    not on the array.
+    ``(x, y)`` of the pixel the pixel level shows, or ``None``. Kept when the shot or the settings
+    change, and dropped when it is not on the array.
 
-Every other key is view state of this page (the cuts, the lags of the strip) and never a parameter:
-moving one recomputes nothing and mints no ``param_sets`` row.
+Every other key is view state of this page (the settings picked, the cuts, the lags of the strip)
+and never a parameter: moving one recomputes nothing and mints no ``param_sets`` row.
 """
 
 import dataclasses
@@ -96,9 +87,9 @@ SETTINGS, DAY, SHOT = "fields.settings", "fields.day", "fields.shot"
 def restore():
     """Put back the widget values the page remembered, before any widget is drawn.
 
-    Streamlit drops the state of a widget that was not drawn in a run, so leaving this page -- the
-    link to the dead-pixel view does -- would send the person back to the first shot with the cuts
-    and the lags reset. Plain session-state keys survive, so the values are kept in one.
+    Streamlit drops the state of a widget that was not drawn in a run, so a visit to another page
+    would reset the shot, the cuts and the lags. Plain session-state keys survive, so the values
+    are kept in one.
     """
     for key, value in st.session_state.get(MEMORY, {}).items():
         if key not in st.session_state:
@@ -232,12 +223,14 @@ def pick_shot(day_box, shot_box, shots, good, asked=None):
 def pick_cuts(container):
     """The view cuts. View state: moving one recomputes nothing."""
     container.markdown("**View cuts**")
-    for key, default in (
-        ("fields.min_lags", 8),
-        ("fields.min_events", 200),
-        ("fields.interior", False),
-        ("fields.paper", False),
-    ):
+    start = Cuts()
+    defaults = {
+        "fields.min_lags": start.min_lags,
+        "fields.min_events": start.min_events,
+        "fields.interior": start.interior_only,
+        "fields.paper": start.paper,
+    }
+    for key, default in defaults.items():
         st.session_state.setdefault(key, default)
     min_lags = container.number_input(
         "Minimum lags",
@@ -274,18 +267,13 @@ def pick_cuts(container):
         key="fields.paper",
         help=(
             "Instead of the cuts per method: every panel shows the same pixels, the ones the paper's "
-            "reliable() keeps (apd_check/figures.py). The 2DCA centroid rests on at least the minimum "
+            "reliable() keeps (imaging_methods.decorrelation). The 2DCA centroid rests on at least the minimum "
             "of lags and of events above, the centroid and both TDEs returned a number, and the pixel "
             "is not on the array's border, whatever the checkbox above says. A method that found no "
             "number at a pixel still shows its failure there."
         ),
     )
-    for key in (
-        "fields.min_lags",
-        "fields.min_events",
-        "fields.interior",
-        "fields.paper",
-    ):
+    for key in defaults:
         remember(key)
     return Cuts(int(min_lags), int(min_events), bool(interior), bool(paper))
 
@@ -305,15 +293,10 @@ def show_command(product):
 
 def show_product(product, target):
     label = f"**{product.key}**"
-    cost = prod.COST.get(product.key, "")
-    if product.state == prod.UNREGISTERED:
-        st.error(
-            f"{label} is not registered in this deployment, so the page cannot read it.",
-            icon="⚠️",
-        )
-    elif product.state == prod.MISSING:
+    if product.state == prod.MISSING:
         st.warning(
-            f"{label} is not computed for {target.shot} with these settings ({cost}). Nothing is computed "
+            f"{label} is not computed for {target.shot} with these settings "
+            f"({prod.COST[product.key]}). Nothing is computed "
             "here; fill it from the command line on the server:",
             icon="⏳",
         )
@@ -350,16 +333,13 @@ def show_products(products, target):
     ):
         for product in products.values():
             show_product(product, target)
-        stale = [p for p in products.values() if p.ok and p.stale]
-        if stale:
-            # One command for all of them, not --force on each: that recomputes a product on whatever
-            # lies beneath it, which is still stale when the input or the bank is what changed.
+        if any(p.stale for p in products.values()):
             st.caption(
                 "The results marked stale were computed before their input file or an upstream result "
                 "changed. This recomputes exactly the stale results of this shot, whatever their "
                 "settings, upstream first, each with the parameters it was stored with:"
             )
-            st.code(stale[0].refresh, language="bash")
+            st.code(prod.refresh_command(target), language="bash")
 
 
 # ---------------------------------------------------------------------------
@@ -368,11 +348,11 @@ def show_products(products, target):
 
 
 def draw_control(view, control, bundle):
-    """One widget of a view. Its state is set before it is drawn and remembered after, never defaulted.
+    """One widget of a view. Its state is set before it is drawn and remembered after.
 
     The key carries the bank's hash, so the lags of a bank with another window are another widget
-    and a slider is never out of its own bounds. A number that starts empty is the one exception:
-    empty is its value (the builder works it out), and Streamlit keeps that without a default.
+    and a slider is never out of its own bounds. A number starts empty, which the builder reads as
+    "work it out".
     """
     key = f"fields.{view.key}.{control.key}.{bundle.tag}"
     low, high, step = control.bounds if control.bounds else (None, None, None)
@@ -584,14 +564,7 @@ def main():
         "batch jobs stored. Nothing is computed on this page."
     )
     conn = ui.get_connection()
-    found, unregistered = prod.specs(registry)
-    if "method_fields" not in found:
-        st.error(
-            "The Fields page needs the `method_fields` product, which is not registered in this "
-            f"deployment (missing: {', '.join(unregistered)}).",
-            icon="⚠️",
-        )
-        return
+    found, _ = prod.specs(registry)
     shots = prod.preprocessed_shots(conn, config.MACHINE)
     if not shots:
         st.info(

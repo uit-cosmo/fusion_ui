@@ -1,23 +1,15 @@
 """The tracks: where each method put the structure at each lag, and the fits and TDE lines against it.
 
-R(tau) above and Z(tau) below, as ``figures.fig_pixel`` draws them through
-``plotting_scripts.plot_trajectories``: for each of the three 2DCA tracks every lag it tracked
-(faint), the lags its slope rests on (highlighted), and the straight line that slope is. The two
-TDE velocities appear as the straight lines they imply through the reference pixel, so the three
-numbers can be held against what the track actually did. A velocity is one number and looks equally
-plausible whatever it is; a track that latched onto the array edge or never straightens out is
-obvious here.
+R(tau) above and Z(tau) below, as displacements from the reference pixel in millimetres against the
+lag in microseconds: for each of the three 2DCA tracks every lag it tracked (faint), the lags its
+slope rests on (highlighted), and the stored velocity as a line through the mean of the fitted
+points (``pixel.velocity_line``). The two TDE velocities are the straight lines they imply through
+the reference pixel. A track that latched onto the array edge or never straightens out is obvious
+here, where its velocity alone is one plausible number.
 
-**A fitted lag can have no position.** The tracker fills a lag it lost by interpolation before the
-slope is fitted (``imaging_methods.decorrelation.track``): that lag is in ``fit_*`` and counted in
-``nlags_*``, but there is no stored position to draw at it. Only the lags that are both fitted and
-tracked are highlighted, so there can be fewer highlighted points than lags counted.
-
-Positions are drawn as displacements from the reference pixel in millimetres, against the lag in
-microseconds. The fitted line is the stored velocity as a line through the mean of the fitted
-points: that is the least-squares line itself when the estimator is ``lsq`` (the deck's), and the
-mean slope the velocity stands for otherwise. ``pixel.velocity_line`` makes it, and the lag strip's
-trajectory (``overlays.path_traces``) draws the same two lines as one path in the R-Z plane.
+A fitted lag can have no position: the tracker fills a lag it lost by interpolation before the
+slope is fitted, so that lag is in ``fit_*`` and counted in ``nlags_*`` with nothing stored to draw.
+Only the lags that are both fitted and tracked are highlighted.
 """
 
 import numpy as np
@@ -181,9 +173,6 @@ def tracks_figure(bundle):
                 if f"{speed_key}_{key}" in fields
                 else np.nan
             )
-            # The velocity as a line through the mean of the fitted points: the least-squares line
-            # itself when the estimator is lsq. The lag strip's trajectory draws the same line in the
-            # R-Z plane (``pixel.velocity_line``).
             straight = pixel.velocity_line(lag, position, fitted, speed / MM)
             if straight is not None:
                 t_fit, line = straight

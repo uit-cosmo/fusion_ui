@@ -1,33 +1,22 @@
 """The seven ways a velocity is read off the data, and what each pixel of one of them is.
 
-``method_fields`` stores a field per method under the names ``apd<shot>_velocities.nc`` has always
-used, so the paper's code can read a blob as it is. This module is the page's table of them: which
-variables make a panel, what colours its arrows, and which view cuts apply to it.
-
-Every pixel of a panel is exactly one of four things, and the four look different on the screen
-because they mean different things:
+The page's table of ``method_fields``: which variables make a panel, what colours its arrows, and
+which view cuts apply to it. Every pixel of a panel is exactly one of four things:
 
 ``OK``
     A number the view draws.
 ``FAILED``
     A live pixel whose estimator returned nothing: no events, a contour that never closed, a fit
-    resting on one lag, a correlation below the TDE's minimum. A failed fit is not a dead pixel.
+    resting on one lag, a correlation below the TDE's minimum.
 ``CUT``
-    A number the view cuts leave out (too few lags or events, or an edge pixel). It is still in the
-    product; moving the cut brings it back.
+    A number the view cuts leave out. It is still in the product; moving the cut brings it back.
 ``DEAD``
     A pixel the mask marks dead. It was never computed.
 
-The view cuts apply per method, to what each estimate rests on. The minimum of lags applies to the
-three 2DCA tracks, which each fit a slope through the lags they tracked. The minimum of events
-applies to the methods read off the conditional average: the 2DCA maximum and centroid, and the
-TDEs applied to it. The 2DCC is read off the cross-correlation of the whole record and the other
-TDEs off the record, so no number of events cuts them. The interior-only cut applies to every panel.
-
-The paper cuts the other way: one rule for every method, ``reliable()`` of ``apd_check/figures.py``
-(``views.reliable``). With ``Cuts.paper`` set, every panel leaves out the pixels it leaves out and no
-others: a pixel is CUT in each panel where its own method found a number, and is still FAILED in the
-panel whose method found none.
+The view cuts apply per method, to what each estimate rests on (``bundle.Cuts``). With
+``Cuts.paper`` set, every panel leaves out the pixels the paper's rule leaves out
+(``views.reliable``) and no others: a pixel is CUT in each panel where its own method found a
+number, and is still FAILED in the panel whose method found none.
 """
 
 import enum
@@ -37,7 +26,7 @@ from typing import Optional
 import numpy as np
 
 from fusion_ui.views import reliable
-from fusion_ui.views.reliable import interior
+from fusion_ui.views.reliable import interior, plural
 
 
 class Status(enum.IntEnum):
@@ -54,9 +43,7 @@ class Track:
     key: str  # the suffix of its variables in method_fields: vr_<key>, pos_r_<key>, ...
     label: str
     field: str  # the field of pixel_averages it is read off
-    method: (
-        str  # how: "max" (sub-pixel maximum) or "contouring" (centroid of the contour)
-    )
+    method: str  # "max" (sub-pixel maximum) or "contouring" (centroid of the contour)
 
 
 #: In the order the panels and the tracks figure list them.
@@ -84,13 +71,9 @@ class Method:
     uses_events: bool = True
 
 
-#: "3TDE and 2TDE by velocity_estimation's CA method wait for L9", so the CA here is the TDE
-#: applied to the conditional average itself: the same field sliced the other way.
-#:
 #: The 2DCC track is read off ``cross_corr``, which ``imaging_methods`` computes from the whole
-#: record ("Spatiotemporal cross-correlation on full dataset", ``cond_av.py``) and not from the
-#: events, so it keeps its lags cut and has no events cut, like the TDEs off the record. Its arrows
-#: are still coloured by the pixel's events, the one per-pixel count the product has for it.
+#: record and not from the events, so it keeps its lags cut and has no events cut, like the TDEs
+#: off the record. Its arrows are still coloured by the pixel's events.
 METHODS = (
     Method("max", "2DCA max", "vr_max", "vz_max", "nlags_max", track="max"),
     Method("com", "2DCA centroid", "vr_com", "vz_com", "nlags_com", track="com"),
@@ -109,10 +92,6 @@ METHODS = (
     Method("catde2", "2TDE on the CA", "vr2_catde", "vz2_catde"),
 )
 METHOD_BY_KEY = {method.key: method for method in METHODS}
-
-
-def _plural(n, word):
-    return f"{n:g} {word}" + ("" if n == 1 else "s")
 
 
 @dataclass(frozen=True)
@@ -141,9 +120,7 @@ class Panel:
 def panel(bundle, method):
     """The :class:`Panel` of ``method`` on ``bundle``'s ``method_fields``, with the view cuts applied.
 
-    A variable the product lacks is read as all-NaN, so every pixel of that panel is a failed fit
-    rather than the page failing. The cuts are per method, or with ``cuts.paper`` the paper's rule,
-    the same for every method (see the module docstring).
+    A variable the product lacks is read as all-NaN, so every pixel of that panel is a failed fit.
     """
     shape = bundle.shape
     nan = np.full(shape, np.nan)
@@ -193,7 +170,7 @@ def panel(bundle, method):
         if not events[y, x] or not np.isfinite(events[y, x]):
             reason[y, x] = "no fit: no events at this reference"
         elif nlags is not None and np.isfinite(nlags[y, x]) and nlags[y, x] < 3:
-            reason[y, x] = f"no fit: the track rests on {_plural(nlags[y, x], 'lag')}"
+            reason[y, x] = f"no fit: the track rests on {plural(nlags[y, x], 'lag')}"
         else:
             reason[y, x] = "no fit: the method returned no estimate"
     for y, x in zip(*np.nonzero(cut)):
@@ -202,9 +179,9 @@ def panel(bundle, method):
             continue
         parts = []
         if too_few_lags[y, x]:
-            parts.append(f"{_plural(nlags[y, x], 'lag')} < {cuts.min_lags}")
+            parts.append(f"{plural(nlags[y, x], 'lag')} < {cuts.min_lags}")
         if too_few_events[y, x]:
-            parts.append(f"{_plural(events[y, x], 'event')} < {cuts.min_events}")
+            parts.append(f"{plural(events[y, x], 'event')} < {cuts.min_events}")
         if edge[y, x]:
             parts.append("edge pixel")
         reason[y, x] = "cut: " + ", ".join(parts)

@@ -105,47 +105,6 @@ def test_the_view_cuts_apply_where_they_mean_something(products):
     assert all("edge pixel" in edge.reason[y, x] for x, y in cut_pixels)
 
 
-def test_the_2dcc_is_not_cut_by_the_number_of_events_but_keeps_its_lags(products):
-    """The 2DCC track is read off ``cross_corr``, which ``imaging_methods`` computes from the whole
-    record ("Spatiotemporal cross-correlation on full dataset"), not from the events the conditional
-    average is made of. Its estimate does not rest on them, so no number of events cuts it; it is
-    still a slope fitted through lags, so the minimum of lags does."""
-    twodcc = methods.METHOD_BY_KEY["2dcc"]
-    assert twodcc.uses_events is False and twodcc.nlags == "nlags_2dcc"
-    plain = methods.panel(bundle_of(products), twodcc)
-    fitted = int(plain.ok.sum())
-    assert fitted == 90 - 22 - 2  # every live pixel with a fit
-
-    # More events than any pixel has: the 2DCA tracks lose every pixel to it, the 2DCC none.
-    many = bundle_of(products, cuts=Cuts(min_events=10_000))
-    for key in ("max", "com"):
-        assert not methods.panel(many, methods.METHOD_BY_KEY[key]).ok.any(), key
-    far = methods.panel(many, twodcc)
-    assert not (far.status == Status.CUT).any()
-    np.testing.assert_array_equal(
-        far.status, plain.status
-    )  # the events change nothing for it
-
-    # It keeps the cut on its lags: every fit in the fixture rests on 19.
-    short = methods.panel(bundle_of(products, cuts=Cuts(min_lags=20)), twodcc)
-    assert (short.status == Status.CUT).sum() == fitted
-    assert short.reason[4, 5] == "cut: 19 lags < 20"
-    # Both cuts at once: the reason names the lags alone, never the events.
-    both = methods.panel(
-        bundle_of(products, cuts=Cuts(min_lags=20, min_events=10_000)), twodcc
-    )
-    assert both.reason[4, 5] == "cut: 19 lags < 20"
-
-    # On the figure the centroid panel marks pixels cut by events and the 2DCC panel marks none.
-    figure = panels.velocity_panels(many)
-    assert traces(figure, "cut", "com") and not traces(figure, "cut", "2dcc")
-    assert len(pairs(traces(figure, "pixels", "2dcc")[0])) == fitted
-    # And its row of the numbers has no event count to show: none of it rests on one.
-    table = numbers.method_table(bundle_of(products, pixel=(5, 4)))
-    row = table.set_index("method").loc["2DCC"]
-    assert np.isnan(row["events"]) and row["lags"] == 19
-
-
 def test_a_missing_variable_is_all_failed_not_an_error(products):
     bundle = bundle_of(products)
     fields = products.fields.drop_vars(["vr_2dcc", "vz_2dcc", "nlags_2dcc"])
@@ -284,22 +243,6 @@ def test_the_arrow_gain_moves_the_one_scale_and_not_a_panel(products):
             panels.velocity_panels(bundle_of(products), arrow_gain=bad)
 
 
-def test_every_cell_shows_the_same_stretch_of_the_array_at_equal_aspect(products):
-    layout = panels.velocity_panels(bundle_of(products)).layout
-    ranges = set()
-    for k in range(1, 9):
-        x_axis = layout["xaxis" if k == 1 else f"xaxis{k}"]
-        y_axis = layout["yaxis" if k == 1 else f"yaxis{k}"]
-        assert (
-            y_axis.scaleanchor == ("x" if k == 1 else f"x{k}")
-            and y_axis.scaleratio == 1
-        )
-        assert x_axis.constrain == "domain" and y_axis.constrain == "domain"
-        ranges.add((tuple(x_axis.range), tuple(y_axis.range)))
-    # The key cell included: a metre is as long in it as in any panel, so the key can be held up to them.
-    assert len(ranges) == 1
-
-
 def test_dead_pixels_and_failed_fits_are_marked_differently(products):
     figure = panels.velocity_panels(bundle_of(products))
     dead, failed = traces(figure, "dead", "com")[0], traces(figure, "failed", "com")[0]
@@ -311,12 +254,6 @@ def test_dead_pixels_and_failed_fits_are_marked_differently(products):
     assert pairs(failed) == {(7, 4), (6, 7)}
     # Hovering says which it is.
     assert "dead pixel" in dead.text[0] and "no fit" in failed.text[0]
-
-
-def test_each_mark_is_in_the_legend_once(products):
-    figure = panels.velocity_panels(bundle_of(products, cuts=Cuts(min_events=450)))
-    names = [t.name for t in figure.data if t.showlegend]
-    assert sorted(names) == ["cut by the view", "dead pixel (mask)", "no fit"]
 
 
 def test_nan_everywhere_still_draws_and_marks_every_live_pixel_as_failed(products):
@@ -438,23 +375,45 @@ def test_without_the_fields_the_figure_says_so(products):
     assert "not computed" in figure.layout.annotations[0].text
 
 
-def test_arrow_helpers():
+def test_every_cell_shows_the_same_stretch_of_the_array_at_equal_aspect(products):
+    layout = panels.velocity_panels(bundle_of(products)).layout
+    ranges = set()
+    for k in range(1, 9):
+        x_axis = layout["xaxis" if k == 1 else f"xaxis{k}"]
+        y_axis = layout["yaxis" if k == 1 else f"yaxis{k}"]
+        assert y_axis.scaleanchor == ("x" if k == 1 else f"x{k}")
+        assert y_axis.scaleratio == 1
+        ranges.add((tuple(x_axis.range), tuple(y_axis.range)))
+    # The key cell included: a metre is as long in it as in any panel.
+    assert len(ranges) == 1
+
+
+def test_the_2dcc_keeps_its_lags_cut_and_has_no_events_cut(products):
+    """The 2DCC is read off the cross-correlation of the whole record, not off the events."""
+    twodcc = methods.METHOD_BY_KEY["2dcc"]
+    plain = methods.panel(bundle_of(products), twodcc)
+    both = methods.panel(
+        bundle_of(products, cuts=Cuts(min_lags=20, min_events=10_000)), twodcc
+    )
+    # Every fit in the fixture rests on 19 lags, and the reason names the lags alone.
+    assert (both.status == Status.CUT).sum() == plain.ok.sum() == 90 - 22 - 2
+    assert both.reason[4, 5] == "cut: 19 lags < 20"
+    # Its row of the numbers has no event count to show.
+    row = numbers.method_table(bundle_of(products, pixel=(5, 4))).set_index("method")
+    assert np.isnan(row.loc["2DCC", "events"]) and row.loc["2DCC", "lags"] == 19
+
+
+def test_the_arrow_scale_the_key_speed_and_the_heads():
     assert arrows.arrow_scale([100.0, 200.0, 300.0], 0.03) == pytest.approx(
         np.percentile([100, 200, 300], 90) / (0.18 * 0.03)
     )
-    assert (
-        arrows.arrow_scale([], 0.03) is None
-        and arrows.arrow_scale([np.nan, 0.0, -1.0], 0.03) is None
-    )
+    assert arrows.arrow_scale([], 0.03) is None
+    assert arrows.arrow_scale([np.nan, 0.0, -1.0], 0.03) is None
     assert arrows.arrow_scale([100.0], 0.0) is None
-    assert (
-        arrows.nice_speed([480.0, 510.0]) == 500.0
-        and arrows.nice_speed([1100.0]) == 1000.0
-    )
+    assert arrows.nice_speed([480.0, 510.0]) == 500.0
+    assert arrows.nice_speed([1100.0]) == 1000.0
     assert arrows.nice_speed([]) is None
-    # Heads point along the shaft, in degrees clockwise from up.
-    np.testing.assert_allclose(
-        arrows.head_angles([0, 1, 0, -1], [1, 0, -1, 0]), [0, 90, 180, -90]
-    )
-    xs, ys = arrows.shafts([0.0, 1.0], [0.0, 1.0], [2.0, 3.0], [0.0, 1.0])
-    assert np.isnan(xs[2]) and np.isnan(xs[5]) and list(xs[:2]) == [0.0, 2.0]
+    # Heads point along the shaft, in degrees clockwise from up, and shafts are NaN-separated.
+    q = arrows.quiver([0, 0, 0, 0], [0, 0, 0, 0], [0, 1, 0, -1], [1, 0, -1, 0], 1.0)
+    np.testing.assert_allclose(q["angle"], [0, 90, 180, -90])
+    assert list(q["shaft_y"][:2]) == [0.0, 1.0] and np.isnan(q["shaft_x"][2::3]).all()

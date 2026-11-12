@@ -2,18 +2,13 @@
 
 Plotly has no quiver. An arrow is a line segment from the pixel to ``pixel + v / scale`` and a head
 at its tip, rotated to point along the segment (``marker.angle``). ``scale`` is a velocity per unit
-length, one for the whole figure so that two methods compare by eye: a per-panel scale makes every
-field look equally fast. Which speeds set it is the caller's choice. The seven-panel figure uses the
-three 2DCA tracks' (the methods the others are compared against), and the other panels' only when
-no 2DCA track drew anything (see ``fusion_ui.views.panels.velocity_panels``).
-
-Ported from ``plotting_scripts.twodca_plots`` (``auto_quiver_scale``, ``nice_speed``), which are
-drawn per figure.
+length, one for the whole figure: a per-panel scale makes every field look equally fast.
 """
 
 import numpy as np
 
-from fusion_ui.views.geometry import ARROW_FRACTION
+#: The 90th-percentile speed is drawn this long, as a fraction of the array's R extent.
+ARROW_FRACTION = 0.18
 
 
 def _positive(speeds):
@@ -21,15 +16,15 @@ def _positive(speeds):
     return speeds[np.isfinite(speeds) & (speeds > 0)]
 
 
-def arrow_scale(speeds, width, fraction=ARROW_FRACTION):
-    """Velocity per unit length that draws the 90th-percentile speed ``fraction`` of ``width`` long.
+def arrow_scale(speeds, width):
+    """Velocity per unit length that draws the 90th-percentile speed ``ARROW_FRACTION`` of ``width`` long.
 
     ``None`` when there is nothing to scale off: no positive speed, or no width.
     """
     speeds = _positive(speeds)
     if speeds.size == 0 or not np.isfinite(width) or width <= 0:
         return None
-    return float(np.percentile(speeds, 90)) / (fraction * width)
+    return float(np.percentile(speeds, 90)) / (ARROW_FRACTION * width)
 
 
 def nice_speed(speeds):
@@ -43,40 +38,24 @@ def nice_speed(speeds):
     return float(step * 10**exponent)
 
 
-def shafts(x0, y0, x1, y1):
-    """``(xs, ys)`` of one line trace drawing every segment ``(x0, y0) -> (x1, y1)``, gaps between them."""
-    n = len(x0)
-    xs = np.full(3 * n, np.nan)
-    ys = np.full(3 * n, np.nan)
-    xs[0::3], xs[1::3] = x0, x1
-    ys[0::3], ys[1::3] = y0, y1
-    return xs, ys
-
-
-def head_angles(dx, dy):
-    """Marker angles, in degrees clockwise from up, for arrows pointing along ``(dx, dy)``.
-
-    Right for axes drawn at equal aspect with y up, which is how every panel here is drawn.
-    """
-    return np.degrees(np.arctan2(dx, dy))
-
-
 def quiver(x, y, vr, vz, scale):
     """``dict`` of the arrows' parts for pixels at ``(x, y)`` moving at ``(vr, vz)``, drawn at ``scale``.
 
-    ``tail_x/tail_y`` and ``tip_x/tip_y`` are the ends of each arrow, ``shaft_x/shaft_y`` the single
-    NaN-separated line through all of them, ``angle`` the head's rotation.
+    ``shaft_x/shaft_y`` is one NaN-separated line through every arrow, ``tip_x/tip_y`` where the
+    heads go, and ``angle`` each head's rotation in degrees clockwise from up, which is right for
+    axes at equal aspect with y up.
     """
     x, y, vr, vz = (np.asarray(a, dtype=float) for a in (x, y, vr, vz))
     tip_x = x + vr / scale
     tip_y = y + vz / scale
-    shaft_x, shaft_y = shafts(x, y, tip_x, tip_y)
+    shaft_x = np.full(3 * len(x), np.nan)
+    shaft_y = np.full(3 * len(x), np.nan)
+    shaft_x[0::3], shaft_x[1::3] = x, tip_x
+    shaft_y[0::3], shaft_y[1::3] = y, tip_y
     return dict(
-        tail_x=x,
-        tail_y=y,
         tip_x=tip_x,
         tip_y=tip_y,
         shaft_x=shaft_x,
         shaft_y=shaft_y,
-        angle=head_angles(tip_x - x, tip_y - y),
+        angle=np.degrees(np.arctan2(tip_x - x, tip_y - y)),
     )

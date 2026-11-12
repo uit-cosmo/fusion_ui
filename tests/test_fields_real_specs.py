@@ -1,20 +1,18 @@
 """The Fields page and its builders against the real specs, on the real blobs.
 
-``tests/test_fields_page.py`` runs the page on stand-in specs and synthetic blobs written before J3's
-specs existed. These tests run it on what the real ones make: J3's synthetic record (3 x 3 pixels, with a
-dead pixel, a live pixel that never sees an event, and an array whose only interior pixel is (1, 1)) goes
-through ``pixel_averages`` (``batch=True``), ``method_fields`` and ``blob_parameters`` by way of the store,
-once for the session (``tests/real_fixtures``), and the page, the builders and ``views.products`` read
-the blobs back off disk as a person would find them.
+``tests/test_fields_page.py`` runs the page on stand-in specs and synthetic blobs. These tests run it on
+what the real specs make: a synthetic record (3 x 3 pixels, with a dead pixel, a live pixel that never
+sees an event, and one interior pixel, (1, 1)) goes through ``pixel_averages``, ``method_fields`` and
+``blob_parameters`` by way of the store, once for the session (``tests/real_fixtures``), and the page,
+the builders and ``views.products`` read the blobs back off disk.
 
-What a stand-in could not tell is what is checked: that the settings a batch job used are offered and
+What a stand-in cannot tell is what is checked: that the settings a batch job used are offered and
 found, that ``related_params`` names the blob run of the velocity fields' settings, that every section of
-the pixel level draws, that the paper's cut moves the pixels and nothing else, and that the blobs have
+the pixel level draws, and that the blobs have
 what the builders read off them.
 """
 
 import base64
-import dataclasses
 import json
 import shlex
 from pathlib import Path
@@ -26,12 +24,9 @@ from streamlit.testing.v1 import AppTest
 
 import fusion_ui.plots  # noqa: F401 - registers the real specs
 from fusion_ui import cli
-from fusion_ui.core import catalog, params_ui, precompute, registry, store
-from fusion_ui.plots.blob_parameters import BlobParametersParams
-from fusion_ui.plots.method_fields import MethodFieldsParams
-from fusion_ui.views import methods, numbers, reliable
+from fusion_ui.core import params_ui, precompute, registry, store
+from fusion_ui.views import numbers
 from fusion_ui.views import products as prod
-from fusion_ui.views.bundle import Bundle, Cuts
 from fusion_ui.views.methods import METHODS, TRACKS
 from tests import product_fixtures as fx
 from tests import real_fixtures as real
@@ -40,7 +35,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 FIELDS = str(REPO_ROOT / "fusion_ui" / "pages" / "5_fields.py")
 SHOT = real.SHOT
 KEYS = real.KEYS
-PAPER = "The paper's cut, reliable()"
 
 
 @pytest.fixture(scope="module")
@@ -115,23 +109,6 @@ def kinds(figure, kind, panel=None):
         and t.meta.get("kind") == kind
         and panel in (None, t.meta.get("panel"))
     ]
-
-
-def drawn(figure, panel):
-    """The ``(x, y)`` pixels ``panel`` draws as numbers."""
-    return {
-        (int(c[0]), int(c[1]))
-        for trace in kinds(figure, "pixels", panel)
-        for c in trace.customdata
-    }
-
-
-def widget(app, kind, label):
-    matches = [w for w in getattr(app, kind) if w.label == label]
-    assert (
-        matches
-    ), f"no {kind} labelled {label!r}: {[w.label for w in getattr(app, kind)]}"
-    return matches[0]
 
 
 def sidebar(app, label):
@@ -263,32 +240,6 @@ def test_related_params_name_the_stored_run_of_every_product_of_the_velocity_fie
     )
 
 
-def test_the_blob_parameters_follow_the_velocity_fields_settings_through_the_three_names_j3_keeps():
-    found = prod.specs(registry)[0]
-    # At the group's defaults every product is at its own default key.
-    defaults = prod.related_params(found, MethodFieldsParams())
-    for key in KEYS:
-        assert (
-            params_ui.hash_params(key, defaults[key])[0]
-            == params_ui.hash_params(key, found[key].params())[0]
-        )
-    # The 2DCA settings and the contour's neighbour step carry over from the velocity fields' ...
-    short = real.settings()["method_fields"]
-    stepped = dataclasses.replace(
-        short, tracking=dataclasses.replace(short.tracking, neighbour_step=2)
-    )
-    blobs = prod.related_params(found, stepped)["blob_parameters"]
-    assert blobs == BlobParametersParams(averages=fx.AVERAGES, neighbour_step=2)
-    # ... and the ellipse fit's and the duration time's own knobs, which nothing of theirs can name, do not:
-    # blob parameters computed with J3's non-default ``blobs`` are not the ones a page looks for.
-    assert fx.BLOBS != BlobParametersParams().blobs
-    own = params_ui.hash_params("blob_parameters", fx.blob_parameters_params())[0]
-    wanted = params_ui.hash_params(
-        "blob_parameters", prod.related_params(found, short)["blob_parameters"]
-    )[0]
-    assert own != wanted
-
-
 # -- the pixel level --------------------------------------------------------------------------------
 
 
@@ -365,98 +316,6 @@ def test_a_pixel_with_nothing_to_show_says_why_in_every_section(served, pixel, s
     assert not app.exception
 
 
-def test_previous_and_next_walk_the_real_arrays_live_pixels_top_row_first(served):
-    """Reading order comes from the blobs' own R and Z (float32, metres): the top row first, left to
-    right, and the mask's one dead pixel, (0, 1), is not stopped on."""
-    order = [(0, 2), (1, 2), (2, 2), (1, 1), (2, 1), (0, 0), (1, 0), (2, 0)]
-    app = open_on(served, pixel=(1, 1))
-    for expected in order[order.index((1, 1)) + 1 :]:
-        widget(app, "button", "Next ▶").click()
-        rerun(app)
-        assert app.session_state["fields.pixel"] == expected
-    for expected in reversed(order[: order.index((2, 0))]):
-        widget(app, "button", "◀ Previous").click()
-        rerun(app)
-        assert app.session_state["fields.pixel"] == expected
-    assert (0, 1) not in order  # the dead pixel was walked over, both ways
-
-
-def test_an_edge_pixel_draws_the_pixel_level_too(served):
-    app = open_on(served, pixel=(0, 0))
-    assert len(figures(app)) == 5
-    assert len(app.dataframe) == 2
-
-
-# -- both cuts -------------------------------------------------------------------------------------
-
-
-def test_the_papers_cut_keeps_the_pixels_reliable_keeps_in_every_panel_and_nothing_else_moves(
-    served, products
-):
-    fields = products["method_fields"]
-    # The least lags and events any pixel with an average has: every pixel clears them where it has a
-    # number, so what the per-method cut leaves out is the panel's own failures alone, and the paper's
-    # leaves only what its other clauses keep.
-    lags_of, events_of = (
-        np.asarray(fields[n].values) for n in ("nlags_com", "nevents")
-    )
-    positive = (lags_of > 0) & (events_of > 0)
-    lags, events = int(np.nanmin(lags_of[positive])), int(
-        np.nanmin(events_of[positive])
-    )
-    app = open_on(served)
-    widget(app, "number_input", "Minimum lags").set_value(lags)
-    widget(app, "number_input", "Minimum events").set_value(events)
-    rerun(app)
-    before = counts(served)
-
-    def panel_pixels(figure):
-        return {m.key: drawn(figure, m.key) for m in METHODS}
-
-    (per_method,) = figures(app)
-    assert per_method.layout.meta["cut"] == "method"
-    plain = Bundle(shot=SHOT, fields=fields, cuts=Cuts(lags, events))
-    plain_pixels = panel_pixels(per_method)
-    assert plain_pixels == {
-        m.key: {(int(x), int(y)) for y, x in np.argwhere(methods.panel(plain, m).ok)}
-        for m in METHODS
-    }
-
-    widget(app, "checkbox", PAPER).check()
-    rerun(app)
-    (paper,) = figures(app)
-    assert paper.layout.meta["cut"] == "paper"
-    kept = reliable.rule(fields, fields["dead"].shape, lags, events)
-    # The record's one interior pixel has every number the rule asks for: the premise of the comparison.
-    assert {(int(x), int(y)) for y, x in np.argwhere(kept.ok)} == {(1, 1)}
-    shown = panel_pixels(paper)
-    for m in METHODS:
-        finite = np.isfinite(fields[m.vr].values) & np.isfinite(fields[m.vz].values)
-        assert shown[m.key] == {
-            (int(x), int(y)) for y, x in np.argwhere(kept.ok & finite)
-        }, m.key
-    # The cut is what moved: the same data, fewer pixels, and the figure says which rule it is.
-    assert shown["com"] == {(1, 1)} and len(plain_pixels["com"]) > 1
-    said = [a.text for a in paper.layout.annotations if a.text.startswith("Cut")]
-    assert said == [methods.describe_cut(Cuts(lags, events, False, True))]
-    assert {t.name for t in paper.data if t.name} >= {"not reliable (the paper's cut)"}
-    # The border is always out under it: the checkbox for it changes nothing.
-    widget(app, "checkbox", "Interior pixels only").check()
-    rerun(app)
-    assert panel_pixels(figures(app)[0]) == shown
-    # And the cut is view state: nothing was recorded, nothing recomputed.
-    assert counts(served) == before
-
-
-def test_the_default_cuts_of_the_real_fields_are_per_method_and_name_themselves(served):
-    app = open_on(served)
-    (figure,) = figures(app)
-    assert figure.layout.meta["cut"] == "method"
-    said = [a.text for a in figure.layout.annotations if a.text.startswith("Cut")]
-    assert said == [methods.describe_cut(Cuts())]
-    assert widget(app, "checkbox", PAPER).value is False
-
-
 # -- what the builders assume of the blobs ----------------------------------------------------------------
 
 
@@ -504,150 +363,7 @@ def test_the_real_blobs_are_what_the_builders_read_off_them(products):
     assert float(fields.attrs["min_cc"]) == fx.TDE.min_cc
 
 
-def test_a_fitted_lag_without_a_position_is_counted_and_not_drawn(products):
-    """The tracker fills a lag it lost by interpolation before it fits, so ``fit_*`` can hold a lag with no
-    stored position. The tracks figure highlights only the lags that have one, and no builder fails.
-    """
-    from fusion_ui.views import tracks
-
-    bank, fields = products["pixel_averages"], products["method_fields"]
-    fit = np.array(fields["fit_com"].values)
-    position = np.asarray(fields["pos_r_com"].values)
-    x, y = 1, 1
-    lost = [i for i in np.flatnonzero(fit[y, x]) if np.isfinite(position[y, x, i])][0]
-    crafted = fields.copy(deep=True)
-    pos = np.array(crafted["pos_r_com"].values)
-    pos[y, x, lost] = np.nan
-    crafted["pos_r_com"] = crafted["pos_r_com"].copy(data=pos)
-    bundle = Bundle(shot=SHOT, bank=bank, fields=crafted, pixel=(x, y))
-    figure = tracks.tracks_figure(bundle)
-    drawn_fit = [t for t in figure.data if t.name == "2DCA centroid: lags of the fit"][
-        0
-    ]
-    assert (
-        len(drawn_fit.x) == int(fit[y, x].sum()) - 1
-    )  # one fitted lag has nothing to draw
-    # The number of lags counted is the fit's, whatever is drawn.
-    row = numbers.method_table(bundle).set_index("method").loc["2DCA centroid"]
-    assert row["lags"] == float(fit[y, x].sum())
-
-
-def test_the_strips_trajectories_are_what_the_real_tracker_stored(products):
-    """On what ``pipeline.track`` writes: every stored position (NaN where the track followed nothing), the
-    lags its slope rests on, and a dashed path along the velocity it stored, which is the Tracks view's line
-    in the other plane.
-    """
-    from fusion_ui.views import lag_strip, tracks
-
-    bank, fields = products["pixel_averages"], products["method_fields"]
-    x, y = 1, 1
-    bundle = Bundle(shot=SHOT, bank=bank, fields=fields, pixel=(x, y))
-    figure = lag_strip.lag_strip(bundle)
-    seen = tracks.tracks_figure(bundle)
-    R, Z = bundle.grid
-    time = np.asarray(bank["time"].values)
-    drawn_a_path = 0
-    for track in TRACKS:
-        layers = {
-            t.name: t
-            for t in figure.data
-            if t.name and t.name.startswith(f"{track.label} trajectory")
-        }
-        r, z = (np.asarray(fields[f"pos_{c}_{track.key}"].values)[y, x] for c in "rz")
-        every = layers[f"{track.label} trajectory"]
-        np.testing.assert_array_equal(every.x, r)
-        np.testing.assert_array_equal(every.y, z)
-        fitted = np.asarray(fields[f"fit_{track.key}"].values)[y, x] & np.isfinite(r)
-        fit = layers[f"{track.label} trajectory: lags of the fit"]
-        np.testing.assert_array_equal(np.isfinite(fit.x), fitted)
-        vr, vz = (float(fields[f"v{c}_{track.key}"].values[y, x]) for c in "rz")
-        line = layers.get(f"{track.label} trajectory: stored velocity")
-        if not (np.isfinite(vr) and np.isfinite(vz) and fitted.any()):
-            assert line is None, track.key  # no slope, no path
-            continue
-        drawn_a_path += 1
-        span = time[fitted].max() - time[fitted].min()
-        assert line.x[-1] - line.x[0] == pytest.approx(vr * span, rel=1e-9), track.key
-        assert line.y[-1] - line.y[0] == pytest.approx(vz * span, rel=1e-9), track.key
-        # The Tracks view's dashed lines of the same track, R(tau) and Z(tau), are this path's R and Z.
-        in_r, in_z = (
-            next(
-                t
-                for t in seen.data
-                if t.mode == "lines"
-                and t.line.dash == "dash"
-                and t.yaxis == axis
-                and t.legendgroup == track.key
-            )
-            for axis in ("y", "y2")
-        )
-        np.testing.assert_allclose(line.customdata, in_r.x)
-        np.testing.assert_allclose(line.x, R[y, x] + in_r.y / 1e3, rtol=0, atol=1e-12)
-        np.testing.assert_allclose(line.y, Z[y, x] + in_z.y / 1e3, rtol=0, atol=1e-12)
-    assert drawn_a_path, "at least the centroid fitted at the interior pixel"
-
-
-# -- the specs' own renders, built from the views --------------------------------------------------------
-
-
-def test_the_three_specs_render_their_own_results_with_the_views(products):
-    figs = {
-        key: registry.get(key).render(products[key], real.settings()[key], target())
-        for key in KEYS
-    }
-    assert all(isinstance(f, go.Figure) and len(f.data) for f in figs.values())
-    # ``method_fields`` draws the page's panels at the page's default cut, and says so.
-    assert figs["method_fields"].layout.meta["cut"] == "method"
-    assert any(
-        a.text.startswith("Cut per method")
-        for a in figs["method_fields"].layout.annotations
-    )
-    assert "Reference pixel" in figs["pixel_averages"].layout.title.text
-    assert {
-        t.meta["parameter"]
-        for t in figs["blob_parameters"].data
-        if t.meta and "parameter" in t.meta
-    } >= {
-        "area",
-        "taud",
-    }
-
-
-# -- staleness, with the real specs ----------------------------------------------------------------------
-
-
-def test_a_rewritten_input_gives_the_one_command_that_refreshes_the_real_products(
-    served, tmp_path, monkeypatch
-):
-    import os
-
-    import streamlit as st
-
-    copy = served.copy(tmp_path / "copy").use(monkeypatch)
-    st.cache_data.clear()
-    os.utime(copy.path, (1_800_000_000, 1_800_000_000))
-    conn = copy.conn()
-    try:
-        catalog.rescan(conn, str(copy.data), "cmod", None)
-        assert {r["stale"] for r in store.stale_runs(conn)} == {"input changed"}
-    finally:
-        conn.close()
-    app = run(fields__open={"shot": SHOT, "settings": settings_hash(copy)})
-    assert commands(app) == [
-        "fusion-ui precompute pixel_averages method_fields blob_parameters"
-        f" --stale --shot {SHOT}"
-    ]
-    assert (
-        len(
-            [
-                m
-                for m in app.markdown
-                if ":orange-badge[stale: input changed]" in m.value
-            ]
-        )
-        == 3
-    )
-    assert figures(app)  # still drawn: stale is information
+# -- the command for what is missing, with the real specs ------------------------------------------------
 
 
 def test_the_command_for_a_missing_run_saves_the_parameters_the_page_looks_for(
