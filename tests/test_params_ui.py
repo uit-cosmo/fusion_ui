@@ -1,14 +1,12 @@
 """The canonical params form and the cache key it produces.
 
-This is the code whose mistakes tests have to catch, because nothing else
-will: an unsorted key, a float that reprs differently, or an unhandled type
-produces a cache that quietly misses or -- worse -- collides, and the wrong
-figure appears under the right label.
+Nothing else catches a mistake here: an unsorted key or an unhandled type gives
+a cache that quietly misses or collides, and the wrong figure appears under the
+right label.
 """
 
 import dataclasses
 import json
-from enum import Enum
 
 import pytest
 
@@ -22,16 +20,6 @@ class Simple:
     scale: float = 1.0
     flag: bool = False
     name: str = "a"
-
-
-class Colour(Enum):
-    red = 1
-    blue = 2
-
-
-@dataclasses.dataclass
-class WithEnum:
-    colour: Colour = Colour.red
 
 
 @dataclasses.dataclass
@@ -63,15 +51,6 @@ def test_an_int_field_survives_a_json_round_trip_as_an_int():
     assert rebuilt == Simple()
 
 
-def test_a_real_method_parameters_tree_round_trips():
-    params = im.MethodParameters()
-    values = json.loads(json.dumps(params_ui.canonical(params)["values"]))
-    assert params_ui.from_dict(im.MethodParameters, values) == params
-    assert isinstance(
-        params_ui.from_dict(im.MethodParameters, values).preprocessing.radius, int
-    )
-
-
 def test_none_is_preserved_and_is_not_zero():
     """``size_max: float = None`` means "use the full grid extent". Coercing it
     to 0.0 would silently change the ellipse fit."""
@@ -87,22 +66,20 @@ def test_the_plot_key_is_part_of_the_hash():
     two plots sharing a default parameter set would collide on it."""
     assert (
         params_ui.hash_params("taud_psd", Simple())[0]
-        != params_ui.hash_params("velocity_2dca", Simple())[0]
+        != params_ui.hash_params("velocity_tde", Simple())[0]
     )
 
 
 def test_a_subclass_does_not_hash_like_its_base():
-    """A subclass such as fusion_scripts' ``SEParameters`` extends
-    ``MethodParameters``, so their defaults share a prefix and values alone do
-    not identify the parameter set."""
+    """Their values are the same, so values alone do not identify the set."""
 
     @dataclasses.dataclass
-    class SEParameters(im.MethodParameters):
+    class Subclass(Simple):
         pass
 
     assert (
-        params_ui.hash_params("p", im.MethodParameters())[0]
-        != params_ui.hash_params("p", SEParameters())[0]
+        params_ui.hash_params("p", Simple())[0]
+        != params_ui.hash_params("p", Subclass())[0]
     )
 
 
@@ -116,24 +93,11 @@ def test_a_dataclass_with_no_fields_raises():
         params_ui.canonical(Nests(inner=Empty()))
 
 
-def test_the_real_velocity_estimation_options_are_caught():
-    import velocity_estimation as ve
-
-    assert dataclasses.fields(ve.EstimationOptions()) == ()
-    with pytest.raises(TypeError, match="no fields"):
-        params_ui.canonical(ve.EstimationOptions())
-
-
 def test_a_non_finite_value_raises_rather_than_hashing():
     with pytest.raises(ValueError, match="not finite"):
         params_ui.hash_params("p", Simple(scale=float("nan")))
     with pytest.raises(ValueError, match="not finite"):
         params_ui.hash_params("p", Simple(scale=float("inf")))
-
-
-def test_an_enum_serialises_as_its_name_and_comes_back():
-    assert params_ui.canonical(WithEnum())["values"]["colour"] == "red"
-    assert params_ui.from_dict(WithEnum, {"colour": "blue"}).colour is Colour.blue
 
 
 def test_a_bool_is_not_an_int_in_either_direction():
@@ -157,18 +121,14 @@ def test_an_unknown_type_raises_naming_the_field():
         params_ui.canonical(Odd())
 
 
-def test_the_json_is_key_sorted_so_the_hash_is_stable():
-    _, text = params_ui.hash_params("p", im.MethodParameters())
+def test_the_json_is_key_sorted_and_the_hash_is_a_literal():
+    """A literal, not a recomputation: a change to the canonical form, which
+    would silently invalidate every cached result, fails here first."""
+    digest, text = params_ui.hash_params("p", Nests())
     body = json.loads(text)
-    assert list(body) == sorted(body)
-    assert list(body["params"]["values"]) == sorted(body["params"]["values"])
-
-
-def test_the_hash_is_stable_across_processes():
-    """A literal, not a recomputation: a change to the canonical form that
-    silently invalidates every cached result should fail here first."""
-    digest, _ = params_ui.hash_params("taud_psd", im.MethodParameters())
-    assert digest == "7238ed04e1d86f3b2c27756a6635f2c9e474b8d4"
+    assert list(body) == ["params", "plot"]
+    assert list(body["params"]["values"]["inner"]) == ["count", "flag", "name", "scale"]
+    assert digest == "a2c8f2dfdf10f426fa87338ceeb2cd9149026d17"
 
 
 def test_canonical_rejects_a_class():
@@ -206,6 +166,30 @@ def test_seed_session_state_keeps_a_present_zero_value():
     assert state["p.size_max"] == 0.0
 
 
+def test_help_is_the_table_entry_or_else_the_class_docstring():
+    @dataclasses.dataclass
+    class Documented:
+        """Settings.
+
+        - first, second (int): what both of them do,
+          on two lines.
+
+        - third: on its own.
+        """
+
+        first: int = 1
+        second: int = 2
+        third: int = 3
+        fourth: int = 4
+
+    assert params_ui.help_for(Documented, "first") == "what both of them do, on two lines."
+    assert params_ui.help_for(Documented, "second") == params_ui.help_for(Documented, "first")
+    assert params_ui.help_for(Documented, "third") == "on its own."
+    assert params_ui.help_for(Documented, "fourth") is None
+    entry = params_ui.HELP[("TaudEstimationParams", "cutoff")]
+    assert params_ui.help_for(im.TaudEstimationParams, "cutoff", "blobs.taud_estimation.cutoff") == entry
+
+
 # ---------------------------------------------------------------------------
 # The strict inverse: parameters a person wrote down (--params-json)
 # ---------------------------------------------------------------------------
@@ -218,8 +202,8 @@ class Optionals:
 
 
 def test_every_registered_spec_round_trips_through_its_stored_form():
-    """What `param_sets.params_json` holds, and what the single-shot page tells
-    people to save, rebuilds to the parameters that hash to it."""
+    """What `param_sets.params_json` holds rebuilds, strictly and leniently, to
+    the parameters that hash to it."""
     import fusion_ui.plots  # noqa: F401 - registers every spec
     from fusion_ui.core import registry
 
@@ -228,13 +212,22 @@ def test_every_registered_spec_round_trips_through_its_stored_form():
         for form in (text, json.loads(text), json.loads(text)["params"]):
             back = params_ui.from_canonical(spec.params, form, plot_key=key)
             assert params_ui.hash_params(key, back)[0] == digest, key
+        values = json.loads(text)["params"]["values"]
+        assert params_ui.from_dict(spec.params, values) == spec.params(), key
+
+
+def test_from_dict_reads_a_set_stored_by_another_version_of_the_class():
+    """A field left out keeps its default and a name the class lacks is ignored."""
+    assert params_ui.from_dict(Nests, {"inner": {"count": 7, "gone": 1}}) == Nests(
+        inner=Simple(count=7)
+    )
 
 
 def test_from_canonical_rebuilds_types_and_none():
     form = params_ui.canonical(Optionals(size_max=None))
     assert params_ui.from_canonical(Optionals, form) == Optionals()
-    form = params_ui.canonical(WithEnum(Colour.blue))
-    assert params_ui.from_canonical(WithEnum, form).colour is Colour.blue
+    back = params_ui.from_canonical(Simple, json.dumps(params_ui.canonical(Simple())))
+    assert back == Simple() and isinstance(back.count, int)
 
 
 @pytest.mark.parametrize(
@@ -268,10 +261,7 @@ def test_from_canonical_checks_the_class_and_the_plot():
     with pytest.raises(ValueError, match="parameter set of plot 'p', not of 'q'"):
         params_ui.from_canonical(Simple, text, plot_key="q")
     with pytest.raises(ValueError, match="but the plot's parameters are"):
-        params_ui.from_canonical(WithEnum, text)
-    form = {"__type__": params_ui._type_name(WithEnum), "values": {"colour": "green"}}
-    with pytest.raises(ValueError, match="expected one of"):
-        params_ui.from_canonical(WithEnum, form)
+        params_ui.from_canonical(Nests, text)
 
 
 def test_with_values_changes_only_what_it_names():

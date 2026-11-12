@@ -43,8 +43,7 @@ def test_indexes_raw_and_preprocessed(conn, data_folder, discharge_db):
     assert stats.seen == 5  # 4 apd + 1 asp; notes.txt and apd_broken.nc are not
     assert stats.inserted == 5
     assert stats.skipped == 2
-    # The fixture tree has no phantom folder and no thomson_scattering one, and a missing folder is reported, in the
-    # diagnostics' order, not an error.
+    # A missing folder is reported, in the diagnostics' order, not an error.
     assert stats.missing_folders == ("phantom", "thomson_scattering")
 
     indexed = rows(conn)
@@ -94,16 +93,14 @@ def test_machines_do_not_clobber_each_other(conn, data_folder, discharge_db):
     empty = data_folder.parent / "empty"
     (empty / "apd").mkdir(parents=True)
     catalog.rescan(conn, str(empty), "w7x", str(discharge_db))
-    # Rescanning w7x must never touch cmod's rows. And a diagnostic whose
-    # folder is missing right now (asp/phantom/...) must not be wiped by a
-    # transient mount loss: only the present-but-empty apd folder drops rows.
+    # Rescanning w7x never touches cmod's rows, and a diagnostic whose folder
+    # is missing right now keeps its rows: only the present, empty apd folder
+    # drops them.
     machines = {row["machine"] for row in conn.execute("SELECT machine FROM shots")}
     assert machines == {"cmod", "w7x"}
     assert conn.execute(
         "SELECT COUNT(*) FROM shots WHERE machine = 'cmod'"
     ).fetchone()[0] == 5
-    # The w7x apd rows are gone (folder seen empty); the w7x asp row survives
-    # (folder missing, not empty).
     assert conn.execute(
         "SELECT COUNT(*) FROM shots WHERE machine = 'w7x' AND diagnostic = 'asp'"
     ).fetchone()[0] == 1

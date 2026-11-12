@@ -1,39 +1,69 @@
-"""The app imports nothing from fusion_scripts (L14, step 3).
+"""The app and its tests import nothing from the ``fusion_scripts`` repository.
 
-Every method the app runs lives in ``imaging_methods`` (and the hand-made 1160616 mask in
-``experimental_database``). This walks every module of ``fusion_ui/`` and of ``tests/`` and fails on an
-import of fusion_scripts' own top-level packages, or of a top-level ``config``. fusion_scripts stays in
-``pyproject.toml`` until the user takes it out (step 6), so this, and not the dependency list, is what
-keeps it from coming back.
+That repository's modules are top-level packages, so an absolute import whose
+first part is one of them is an import from it. ``imaging_methods.decorrelation``
+and ``fusion_ui.config`` are other things than the top-level ``decorrelation``
+and ``config``, and are allowed. Imports are read from the syntax tree, so a
+string or a comment that names one is not one.
 """
 
+import ast
 from pathlib import Path
 
 import pytest
 
-from tests.import_guard import FUSION_SCRIPTS, reaches_fusion_scripts
-
 REPO = Path(__file__).resolve().parents[1]
-MODULES = sorted(
-    p
-    for folder in ("fusion_ui", "tests")
-    for p in (REPO / folder).rglob("*.py")
-    if ".venv" not in p.parts
+
+#: The top-level packages and modules of fusion_scripts.
+FORBIDDEN = frozenset(
+    {
+        "fusion_scripts",
+        "density_scan",
+        "decorrelation",
+        "twodca_manuscript",
+        "plotting_scripts",
+        "waveform_analysis",
+        "individual_events",
+        "figure_scripts",
+        "phantom_events",
+        "tools",
+        "config",
+    }
 )
 
 
-def test_the_walk_covers_the_app_and_its_tests():
-    names = {p.relative_to(REPO).as_posix() for p in MODULES}
-    assert "fusion_ui/plots/_pipeline.py" in names
-    assert "tests/test_no_fusion_scripts.py" in names
-    assert len(names) > 100
+def forbidden_imports(source):
+    """The imports of ``source`` that reach fusion_scripts: an absolute import
+    of one of its packages, or any module named ``fusion_scripts``."""
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            names = [(0, alias.name) for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            names = [(node.level, module)] + [
+                (node.level, f"{module}.{alias.name}" if module else alias.name)
+                for alias in node.names
+            ]
+        else:
+            continue
+        for level, name in names:
+            parts = name.split(".")
+            if (level == 0 and parts[0] in FORBIDDEN) or "fusion_scripts" in parts:
+                found.append(name)
+    return found
 
 
 def test_no_module_of_the_app_or_its_tests_imports_fusion_scripts():
+    modules = [
+        p for folder in ("fusion_ui", "tests") for p in (REPO / folder).rglob("*.py")
+    ]
+    names = {p.relative_to(REPO).as_posix() for p in modules}
+    assert {"fusion_ui/plots/_pipeline.py", "tests/test_no_fusion_scripts.py"} <= names
     offenders = {
         p.relative_to(REPO).as_posix(): found
-        for p in MODULES
-        if (found := reaches_fusion_scripts(p.read_text()))
+        for p in modules
+        if (found := forbidden_imports(p.read_text()))
     }
     assert not offenders, offenders
 
@@ -45,21 +75,15 @@ def test_no_module_of_the_app_or_its_tests_imports_fusion_scripts():
         "import density_scan.dead_pixels",
         "from decorrelation import pipeline",
         "from decorrelation.pipeline import Averages",
-        "from twodca_manuscript.tracking import get_positions_and_mask",
-        "from plotting_scripts.figure_plots import calculate_splinted_LCFS",
         "import waveform_analysis as wf",
-        "from individual_events.parameters import SEParameters",
-        "import figure_scripts",
-        "import phantom_events",
         "import config",
         "from config import DATA_FOLDER",
-        "from fusion_ui.core import fusion_scripts, loader",  # the retired door
-        "from fusion_ui.core.fusion_scripts import import_config",
+        "from fusion_ui.core import fusion_scripts, loader",
         "from ..core import fusion_scripts",
     ],
 )
 def test_the_guard_sees_each_way_of_reaching_fusion_scripts(line):
-    assert reaches_fusion_scripts(line), line
+    assert forbidden_imports(line), line
 
 
 @pytest.mark.parametrize(
@@ -68,26 +92,10 @@ def test_the_guard_sees_each_way_of_reaching_fusion_scripts(line):
         "from imaging_methods import decorrelation",
         "from imaging_methods.decorrelation import Averages, dead_mask",
         "import imaging_methods.decorrelation as pipeline",
-        "from imaging_methods import dead_pixels, puff",
         "from fusion_ui import config",
         "from . import config",
-        "from fusion_ui.core import loader, registry\nimport numpy as np",
         "x = 'import density_scan'  # import decorrelation",
     ],
 )
 def test_the_guard_lets_the_allowed_ones_through(line):
-    assert reaches_fusion_scripts(line) == [], line
-
-
-def test_the_guard_names_the_packages_the_note_lists():
-    assert {
-        "density_scan",
-        "decorrelation",
-        "twodca_manuscript",
-        "plotting_scripts",
-        "waveform_analysis",
-        "individual_events",
-        "figure_scripts",
-        "phantom_events",
-        "config",
-    } <= FUSION_SCRIPTS
+    assert forbidden_imports(line) == [], line

@@ -1,21 +1,16 @@
 """The shot catalog: an index of what is on disk, and the join to metadata.
 
-With shots arriving continuously, ``os.listdir`` per page load stops being
-acceptable and the discharge DB stops being the authoritative shot list.
-:func:`rescan` -- on cron plus a button in the UI -- fills the ``shots`` table;
-the browser reads only from it. Files with no discharge-DB entry still appear,
-flagged ``has_metadata = 0``, so a newly copied shot is visible the moment it
-lands rather than waiting for someone to curate it.
-
-:func:`rescan` **stats files, it never opens them.** A single APD file is
-~425 MB and the tree is tens of terabytes.
+:func:`rescan` fills the ``shots`` table, and pages read only that table, never
+the filesystem. It **stats files, it never opens them**: a single APD file is
+~425 MB and the tree is tens of terabytes. A file with no discharge-DB entry is
+indexed with ``has_metadata = 0`` and shown flagged, not hidden.
 """
 
 import math
 import os
 import re
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import numpy as np
@@ -61,9 +56,6 @@ class RescanStats:
             parts.append(f"missing: {', '.join(self.missing_folders)}")
         return f"[{self.machine}] " + ", ".join(parts) + f" in {self.seconds:.2f}s"
 
-    def as_dict(self):
-        return asdict(self)
-
 
 # ---------------------------------------------------------------------------
 # The discharge descriptor (read-only, hand-curated)
@@ -71,11 +63,8 @@ class RescanStats:
 
 
 def load_discharges(discharge_db_path):
-    """Return ``{shot_number: PlasmaDischarge}`` from the descriptor.
-
-    The file carries a handful of exact duplicate entries; last one wins, which
-    is safe because duplicates do not conflict. Never written back.
-    """
+    """``{shot_number: PlasmaDischarge}`` from the descriptor, which is never
+    written. It carries a few exact duplicate entries; the last one wins."""
     manager = PlasmaDischargeManager(discharge_file=str(discharge_db_path))
     return {d.shot_number: d for d in manager.discharges}
 
@@ -86,11 +75,8 @@ def load_discharges(discharge_db_path):
 
 
 def _scan_folder(data_folder, diagnostic):
-    """Yield ``(shot, preprocessed, path, bytes, mtime)`` for one diagnostic.
-
-    ``os.scandir`` on one directory, stat only. Returns ``None`` instead of a
-    generator when the diagnostic subfolder does not exist at all.
-    """
+    """``([(shot, preprocessed, path, bytes, mtime), …], files skipped)`` for one
+    diagnostic, by stat only, or ``None`` when its subfolder does not exist."""
     folder = os.path.join(data_folder, diagnostic.subfolder)
     if not os.path.isdir(folder):
         return None
@@ -122,9 +108,8 @@ def _scan_folder(data_folder, diagnostic):
 def rescan(conn, data_folder, machine, discharge_db_path=None):
     """Refresh the ``shots`` table for one machine from the data tree.
 
-    Rows whose file has disappeared are deleted, so the index cannot outlive
-    the data. Everything happens in one transaction: a crashed scan leaves the
-    previous index intact rather than a half-emptied one.
+    A row whose file has disappeared is deleted. Everything happens in one
+    transaction, so a crashed scan leaves the previous index intact.
     """
     started = time.perf_counter()
     known_shots = (
@@ -163,15 +148,10 @@ def rescan(conn, data_folder, machine, discharge_db_path=None):
 
     inserted = [key for key in seen if key not in existing]
     updated = [k for k, v in seen.items() if k in existing and existing[k] != v]
-    # Never delete rows for a diagnostic whose folder is missing right now: a
-    # transient NFS loss or a typo'd --data-folder would otherwise wipe the
-    # index for that diagnostic in the same transaction. A genuinely removed
-    # diagnostic is deleted by an explicit rescan once its (empty but present)
-    # folder is seen.
-    missing_set = set(missing)
-    removed = [
-        key for key in existing if key not in seen and key[1] not in missing_set
-    ]
+    # Rows of a diagnostic whose folder is missing right now are kept: a lost
+    # mount or a mistyped --data-folder would otherwise wipe its index. They go
+    # once the folder is seen, present and empty.
+    removed = [key for key in existing if key not in seen and key[1] not in missing]
 
     with conn:
         conn.executemany(
@@ -206,18 +186,15 @@ def rescan(conn, data_folder, machine, discharge_db_path=None):
 # Phantom frame interval: measured once per file, read everywhere
 # ---------------------------------------------------------------------------
 
-# The diagnostic whose frame rate varies shot to shot (and is therefore worth
-# a browser column). The APD samples at a fixed rate; the fast camera does not.
+# The one diagnostic whose frame rate varies from shot to shot, which is why it
+# has a browser column.
 PHANTOM_DIAGNOSTIC = "phantom"
 
 
 def frame_dt(path):
-    """The file's median frame interval in seconds, or ``None``.
-
-    Read off the 1-D time coordinate only -- milliseconds even on a ~500 MB
-    record, since the frames themselves are never touched. ``None`` when the
-    file is missing, unreadable, or carries fewer than two finite time stamps.
-    """
+    """The file's median frame interval in seconds, read off the time
+    coordinate alone. ``None`` when the file is missing, unreadable, or has
+    fewer than two increasing time stamps."""
     try:
         with xr.open_dataset(path) as ds:
             if "time" not in ds.coords:
@@ -251,13 +228,11 @@ class DtBackfillStats:
 
 
 def backfill_dt(conn, machine, shots=None, force=False):
-    """Fill ``shots.dt`` for the phantom rows missing it.
+    """Fill ``shots.dt`` for the phantom rows of ``machine`` that lack it.
 
-    ``machine`` scopes the pass the way :func:`rescan` does; ``shots`` is an
-    optional set of shot numbers to restrict to; ``force`` re-measures rows
-    that already carry a value. Never touches non-phantom rows, and never
-    clears a stored value it cannot replace -- a file that disappeared since
-    rescan keeps its old measurement rather than going NULL.
+    ``shots`` is an optional set of shot numbers to restrict to; ``force``
+    measures again the rows that already hold a value. A file that cannot be
+    read keeps the value it had.
     """
     rows = conn.execute(
         "SELECT machine, shot, diagnostic, preprocessed, path, dt FROM shots"
@@ -326,21 +301,16 @@ def _finite(value):
 
 
 def _as_float_or_nan(value):
-    """``float(value)`` with ``None``/non-numeric/inf coerced to NaN.
-
-    Discharge-DB fields are sparsely filled; ``float(None)`` would raise
-    ``TypeError`` and kill the whole browser table for one incomplete entry.
-    """
+    """``float(value)``, or NaN for ``None``, a non-number or an infinity: the
+    discharge DB's fields are sparsely filled."""
     return float(value) if _finite(value) else float("nan")
 
 
 def greenwald_fraction(discharge):
-    """``(value, source)`` -- stored if the descriptor has it, else derived.
+    """``(value, source)``: f_GW as the descriptor stores it (``"db"``), else
+    derived from I_p and n̄_e (``"derived"``), else ``(nan, "")``.
 
-    f_GW is filled in for only about a quarter of the curated shots but is
-    derivable from I_p and n̄_e for most of the rest. Deriving it silently would
-    be worse than not deriving it, hence the source flag: it ends up as a column
-    so nobody sorts by a number whose origin they cannot see.
+    Most shots store none, so the source is always shown beside the value.
     """
     if _finite(discharge.greenwald_fraction):
         return float(discharge.greenwald_fraction), "db"
@@ -359,9 +329,8 @@ def _availability(raw, preprocessed):
 def shot_table(conn, discharge_db_path):
     """One row per (machine, shot): what is on disk, joined to the metadata.
 
-    The discharge descriptor is read straight from JSON rather than mirrored
-    into SQLite -- it is small, it is hand-curated, and a copy in the app
-    database would be one more thing that can go stale.
+    The discharge descriptor is read straight from JSON, never mirrored into
+    SQLite, where a copy would go stale.
     """
     rows = conn.execute(
         "SELECT machine, shot,"
@@ -375,20 +344,28 @@ def shot_table(conn, discharge_db_path):
     ).fetchall()
 
     discharges = load_discharges(discharge_db_path) if discharge_db_path else {}
+    nan = float("nan")
 
     records = {}
     for row in rows:
         key = (row["machine"], row["shot"])
         record = records.get(key)
         if record is None:
-            record = records[key] = dict.fromkeys(TABLE_COLUMNS)
-            record.update(
+            record = records[key] = dict(
                 machine=row["machine"],
                 shot=row["shot"],
-                bytes=0,
-                has_metadata=False,
-                phantom_dt=float("nan"),
                 **{diagnostic: "" for diagnostic in DIAGNOSTICS},
+                phantom_dt=nan,
+                I_p=nan,
+                n_e_bar=nan,
+                f_GW=nan,
+                f_GW_source="",
+                mode="",
+                t_start=nan,
+                t_end=nan,
+                mlp_mode="",
+                has_metadata=False,
+                bytes=0,
             )
         record[row["diagnostic"]] = _availability(row["raw"], row["prep"])
         if row["diagnostic"] == PHANTOM_DIAGNOSTIC and row["dt"] is not None:
@@ -399,16 +376,6 @@ def shot_table(conn, discharge_db_path):
     for (_, shot), record in records.items():
         discharge = discharges.get(shot)
         if discharge is None:
-            record.update(
-                I_p=float("nan"),
-                n_e_bar=float("nan"),
-                f_GW=float("nan"),
-                f_GW_source="",
-                mode="",
-                t_start=float("nan"),
-                t_end=float("nan"),
-                mlp_mode="",
-            )
             continue
         f_gw, source = greenwald_fraction(discharge)
         record.update(
@@ -429,10 +396,10 @@ def shot_table(conn, discharge_db_path):
 
 
 def index_fingerprint(conn):
-    """A cheap value that changes whenever ``shots`` does -- a cache key.
+    """A cheap value that changes whenever ``shots`` does: a cache key.
 
-    ``COUNT(dt)`` is in there so a ``backfill-dt`` pass shows up in the browser
-    without restarting the server: filling NULLs changes no byte count or mtime.
+    ``COUNT(dt)`` is in it because a ``backfill-dt`` pass changes no byte count
+    or mtime.
     """
     row = conn.execute(
         "SELECT COUNT(*), COALESCE(SUM(bytes), 0), COALESCE(MAX(mtime), ''),"

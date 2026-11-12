@@ -1,8 +1,5 @@
-"""Time-window slicing and lazy frame/pixel access over the APD/phantom shape.
-
-Uses the tiny real ``apd_dataset_path`` fixture rather than the byte-stuffed
-files ``test_catalog.py`` uses -- this module actually opens the file.
-"""
+"""Time-window slicing and lazy frame and pixel access, on the tiny real files
+of ``conftest.py``."""
 
 import math
 from types import SimpleNamespace
@@ -26,10 +23,16 @@ def test_time_window_uses_discharge_metadata_when_present(apd_dataset_path):
 @pytest.mark.parametrize(
     "discharge", [None, SimpleNamespace(t_start=float("nan"), t_end=1.0)]
 )
-def test_time_window_falls_back_to_a_centred_default(apd_dataset_path, discharge):
+def test_time_window_falls_back_to_a_centred_default(
+    apd_dataset_path, discharge, monkeypatch
+):
     ds = loader.open_dataset(str(apd_dataset_path))
-    t_start, t_end, source = loader.time_window(ds, discharge, default_span=0.01)
     t_min, t_max = float(ds.time.min()), float(ds.time.max())
+    # The record is 0.02 s long: the 0.2 s default is clipped to it.
+    assert loader.time_window(ds, discharge) == (t_min, t_max, "default")
+
+    monkeypatch.setattr(loader, "DEFAULT_WINDOW_SECONDS", 0.01)
+    t_start, t_end, source = loader.time_window(ds, discharge)
     center = (t_min + t_max) / 2
     assert source == "default"
     assert math.isclose(t_start, center - 0.005)
@@ -67,10 +70,11 @@ def test_pixel_grid_is_none_without_r_z_coordinates(apd_dataset_path):
     assert loader.pixel_grid(ds) == (None, None)
 
 
-def test_cached_frame_times_matches_an_uncached_read(apd_dataset_path):
+def test_cached_frame_times_are_the_times_in_the_window(apd_dataset_path):
     ds = loader.open_dataset(str(apd_dataset_path))
-    direct = loader.frame_times(loader.sliced(ds, 1.0, 1.01))
+    direct = loader.sliced(ds, 1.0, 1.01).time.values
     cached = loader.cached_frame_times(str(apd_dataset_path), 1.0, 1.01)
+    assert 0 < len(direct) < ds.sizes["time"]
     assert list(direct) == list(cached)
 
 
@@ -82,8 +86,7 @@ def test_nearest_index_finds_the_closest_sample():
 
 
 # ---------------------------------------------------------------------------
-# What an analysis computes on: the record cut to the discharge window, or, for
-# a spec that declares it needs the whole record, all of it with the window.
+# What an analysis computes on: the cut, or the whole record with the window
 # ---------------------------------------------------------------------------
 
 
@@ -92,7 +95,7 @@ def test_input_for_cuts_the_record_to_the_window_by_default(apd_dataset_path):
     cut = loader.input_for(ds, 1.005, 1.01)
     assert 0 < cut.sizes["time"] < ds.sizes["time"]
     assert float(cut.time.min()) >= 1.005 and float(cut.time.max()) <= 1.01
-    assert loader.WINDOW_ATTR not in cut.attrs  # nothing to tell it: it is the window
+    assert loader.WINDOW_ATTR not in cut.attrs
 
 
 def test_input_for_hands_over_the_whole_record_and_the_window(apd_dataset_path):
@@ -126,8 +129,7 @@ def test_a_record_with_no_time_axis_comes_back_as_it_is(asp_dataset_path):
 
 
 def test_a_record_with_no_discharge_window_is_refused_not_guessed(apd_dataset_path):
-    """The record's own span would pass for the discharge window, and the window
-    found from it would be wrong without a word."""
+    """The record's own span would pass for the discharge window."""
     ds = loader.open_dataset(str(apd_dataset_path))
     with pytest.raises(ValueError, match="carries no discharge window"):
         loader.discharge_window(ds)
@@ -165,9 +167,7 @@ def test_a_cropped_file_says_its_window_by_its_analysis_window(apd_dataset_path)
 
 
 # ---------------------------------------------------------------------------
-# A companion, another diagnostic's file a view draws beside its own, is opened
-# without reading anything but its attributes: a probe file's time axes, which
-# open_dataset reads whole to index them, are most of a gigabyte.
+# A companion is opened without reading anything but its attributes
 # ---------------------------------------------------------------------------
 
 
