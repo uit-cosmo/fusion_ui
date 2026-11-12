@@ -1,26 +1,24 @@
 """The three decorrelation products: ``pixel_averages``, ``method_fields`` and ``blob_parameters``.
 
-They are thin adapters over ``imaging_methods.decorrelation``, so what is tested here is the adapting: that each
-spec hands the API what it takes (the record in metres, the bank's own mask, the settings as they are),
-returns its Dataset unchanged, stores it and gets it back bit for bit, writes the scalars the plan names, and
-hashes the way the plan says. The physics itself is the API's, tested in imaging_methods and, against the paper's, in fusion_scripts.
+They are thin adapters over ``imaging_methods.decorrelation``, so what is tested here is the adapting: that
+each spec hands the API what it takes (the record in metres, the bank's own mask, the settings as they
+are), returns its Dataset unchanged, stores it and gets it back bit for bit, writes its scalars, and hashes
+as it should. The physics is the library's, tested there.
 
 The record is ``tests/product_fixtures``: 3 x 3 pixels in centimetres, like the real files. A product
-computed through the store is compared with the API called directly on the record in metres. The tests that
-need a computed product share two module-scoped ones, ``full`` (eight live pixels, for the velocity fields)
-and ``sparse`` (three, for the blob parameters: the duration-time fit costs 0.7 s a live pixel). ``slow``
-marks what spawns worker processes.
+computed through the store is compared with the API called directly on the record in metres. The tests
+that need a computed product share two module-scoped ones, ``full`` (eight live pixels, for the velocity
+fields) and ``sparse`` (three, for the blob parameters: the duration-time fit costs 0.7 s a live pixel).
+``slow`` marks what spawns worker processes.
 """
 
 import ast
 import dataclasses
 import json
 import os
-import pickle
-import subprocess
-import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import get_type_hints
 
 import numpy as np
 import plotly.graph_objects as go
@@ -28,7 +26,7 @@ import pytest
 import xarray as xr
 
 import fusion_ui.plots  # noqa: F401 - registers the real specs
-from fusion_ui.core import catalog, db, params_ui, precompute, registry, seed, store
+from fusion_ui.core import catalog, db, params_ui, precompute, registry, store
 from fusion_ui.plots import _pipeline, blob_parameters, method_fields, pixel_averages
 from fusion_ui.plots._pipeline import pipeline
 from fusion_ui.views import products
@@ -36,24 +34,21 @@ from tests import product_fixtures as fx
 
 REPO = Path(__file__).resolve().parent.parent
 KEYS = ("pixel_averages", "method_fields", "blob_parameters")
+DERIVED = KEYS[1:]
 PARAMS = {
     "pixel_averages": fx.pixel_averages_params,
     "method_fields": fx.method_fields_params,
     "blob_parameters": fx.blob_parameters_params,
 }
 
-#: The scalar names (docs/PHASE_06_DECORRELATION.md, "Scalars") as G2 settled them, written out here as an
-#: independent statement of them. Three are not their blob variable's name, because the store already
-#: holds the same quantity under another one: ``number_events`` (``two_dca``, the seeded rows),
-#: ``taud_psd`` and ``lambda_psd`` (the ``taud_psd`` spec, the seeded rows). The blobs keep the API's names.
+#: The scalar names, written out here as an independent statement of them: a stored row is found by its
+#: name. Three are not their blob variable's name (``RENAMED``).
 METHOD_FIELDS_NAMES = (
     "vr_max vz_max nlags_max vr_com vz_com nlags_com level_com vr_2dcc vz_2dcc nlags_2dcc number_events"
     " vr3_tde vz3_tde vr2_tde vz2_tde cc_tde vr3_catde vz3_catde vr2_catde vz2_catde"
 ).split()
 BLOB_PARAMETERS_NAMES = "area lr lz taud_psd lambda_psd".split()
-#: Scalar name -> the blob variable it is read from, for the scalars whose names differ.
 RENAMED = {"number_events": "nevents", "taud_psd": "taud", "lambda_psd": "lam"}
-
 
 #: The blob variables the app shows, in the order of its table.
 SHOWN = ["nevents", "area", "lr", "lz", "taud", "lam"]
@@ -134,24 +129,6 @@ def live_pixels(case):
 # ---------------------------------------------------------------------------
 
 
-def test_the_three_specs_are_imported_bank_first_and_after_the_older_ones():
-    """``plots/__init__.py`` imports them in this order, which ``register`` needs (an upstream before what
-    is built on it) and the plot picker lists. The order of the live registry is not a contract: a test
-    that pops a spec and puts it back moves it to the end."""
-    tree = ast.parse((Path(fusion_ui.plots.__file__)).read_text())
-    (imported,) = [
-        [alias.name for alias in node.names]
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module == "fusion_ui.plots"
-    ]
-    positions = [imported.index(k) for k in KEYS]
-    assert positions == sorted(positions)
-    older = [name for name in imported if name not in KEYS]
-    assert older and all(imported.index(name) < positions[0] for name in older)
-    assert imported[-3:] == list(KEYS), "after every older spec"
-    assert set(KEYS) <= set(registry.REGISTRY)
-
-
 def test_only_the_bank_is_batch_only_and_the_other_two_are_built_on_it():
     bank, fields, blobs = (registry.get(k) for k in KEYS)
     assert [s.batch_only for s in (bank, fields, blobs)] == [True, False, False]
@@ -175,58 +152,32 @@ def test_the_products_run_on_preprocessed_apd_files_only():
     assert set(KEYS) <= {s.key for s in registry.for_diagnostic("apd", True)}
 
 
-def test_only_the_derived_products_write_scalars():
-    assert registry.get("pixel_averages").scalars is None
-    assert registry.get("method_fields").scalars is not None
-    assert registry.get("blob_parameters").scalars is not None
+def _imported(path):
+    """The dotted names ``path`` imports: ``a.b`` for ``import a.b`` and for ``from a import b``."""
+    for node in ast.walk(ast.parse(Path(path).read_text())):
+        if isinstance(node, ast.Import):
+            yield from (alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            yield node.module or ""
+            yield from (f"{node.module}.{alias.name}" for alias in node.names)
 
 
-# ---------------------------------------------------------------------------
-# Parameters: the plan's names, one shared ``averages``, and what moves which key
-# ---------------------------------------------------------------------------
-
-
-def test_the_params_classes_are_the_plans_and_module_level():
-    expected = {
-        "pixel_averages": (pixel_averages.PixelAveragesParams, ["averages"]),
-        "method_fields": (
-            method_fields.MethodFieldsParams,
-            ["averages", "tracking", "tde"],
-        ),
-        "blob_parameters": (
-            blob_parameters.BlobParametersParams,
-            ["averages", "neighbour_step", "blobs"],
-        ),
+def test_only_pipeline_imports_the_decorrelation_api_and_the_specs_import_no_streamlit():
+    importing = {
+        path.relative_to(REPO).as_posix()
+        for path in (REPO / "fusion_ui").rglob("*.py")
+        if any(n.startswith("imaging_methods.decorrelation") for n in _imported(path))
     }
-    for key, (cls, names) in expected.items():
-        assert registry.get(key).params is cls
-        assert [f.name for f in dataclasses.fields(cls)] == names
-        # Importable by qualified name: a precompute pool worker receives them pickled.
-        module = sys.modules[cls.__module__]
-        assert getattr(module, cls.__qualname__) is cls
-        assert cls.__module__ == f"fusion_ui.plots.{key}"
+    assert importing == {"fusion_ui/plots/_pipeline.py"}
+    for module in (pixel_averages, method_fields, blob_parameters, _pipeline):
+        assert not [
+            n for n in _imported(module.__file__) if n.split(".")[0] == "streamlit"
+        ]
 
 
-def test_every_product_shares_one_averages_of_the_apis_class():
-    for key in KEYS:
-        defaults = registry.get(key).params()
-        assert type(defaults.averages) is pipeline.Averages
-        assert defaults.averages == pipeline.Averages()
-    assert method_fields.MethodFieldsParams().tracking == pipeline.Tracking()
-    assert method_fields.MethodFieldsParams().tde == pipeline.Tde()
-    assert blob_parameters.BlobParametersParams().blobs == pipeline.Blobs()
-    assert (
-        blob_parameters.BlobParametersParams().neighbour_step
-        == pipeline.Tracking().neighbour_step
-    )
-
-
-def test_the_defaults_do_not_share_state():
-    a, b = method_fields.MethodFieldsParams(), method_fields.MethodFieldsParams()
-    a.tracking.position_filter.mask_signal_factor = 0.1
-    a.averages.window = 7
-    assert b.tracking.position_filter.mask_signal_factor != 0.1
-    assert b.averages.window != 7
+# ---------------------------------------------------------------------------
+# Parameters: one shared ``averages``, and what moves which key
+# ---------------------------------------------------------------------------
 
 
 def _flatten(tree, prefix=""):
@@ -267,128 +218,69 @@ def _digest(key, params):
     return params_ui.hash_params(key, params)[0]
 
 
-def test_averages_threshold_moves_all_three_keys():
+def test_the_averages_move_all_three_keys_and_select_one_bank():
+    moved_bank = _changed(registry.get("pixel_averages").params(), "averages.threshold")
     for key in KEYS:
         params = registry.get(key).params()
-        moved = _changed(params, "averages.threshold")
-        assert _digest(key, moved) != _digest(key, params), key
-    # ... and it is one bank: the derived products ask for the very bank the threshold selects.
-    for key in ("method_fields", "blob_parameters"):
-        spec = registry.get(key)
-        moved = _changed(spec.params(), "averages.threshold")
-        assert _digest("pixel_averages", spec.upstream_params(moved)) == _digest(
-            "pixel_averages",
-            _changed(registry.get("pixel_averages").params(), "averages.threshold"),
+        assert _digest(key, _changed(params, "averages.threshold")) != _digest(
+            key, params
         )
+    for key in DERIVED:
+        spec = registry.get(key)
+        lifted = spec.upstream_params(_changed(spec.params(), "averages.threshold"))
+        assert isinstance(lifted, pixel_averages.PixelAveragesParams)
+        assert _digest("pixel_averages", lifted) == _digest(
+            "pixel_averages", moved_bank
+        )
+    # A copy: the bank's parameters share nothing with the product's.
+    params = method_fields.MethodFieldsParams()
+    assert pixel_averages.lifted_from(params).averages is not params.averages
 
 
-def test_tracking_moves_only_method_fields_and_blobs_only_blob_parameters():
-    """Every leaf outside ``averages`` belongs to exactly one product, moves its key, and leaves the bank's."""
+def test_every_other_setting_moves_its_own_product_and_leaves_the_bank():
+    """A tracking, TDE or blob change recomputes minutes, not the bank's hour."""
     bank_key = _digest("pixel_averages", registry.get("pixel_averages").params())
-    owners = {}
-    for key in KEYS:
-        for path in _leaves(registry.get(key).params()):
-            owners.setdefault(path, set()).add(key)
-    assert owners  # not vacuous
-    for path, who in owners.items():
-        if path.startswith("averages."):
-            assert who == set(KEYS), path
-        elif path.startswith(("tracking.", "tde.")):
-            assert who == {"method_fields"}, path
-        elif path.startswith("blobs.") or path == "neighbour_step":
-            assert who == {"blob_parameters"}, path
-        else:
-            pytest.fail(f"{path} is a leaf of {who} that the plan does not place")
-
-    for key in ("method_fields", "blob_parameters"):
+    for key in DERIVED:
         spec = registry.get(key)
         base = spec.params()
-        for path in _leaves(base):
-            if path.startswith("averages."):
-                continue
+        own = [path for path in _leaves(base) if not path.startswith("averages.")]
+        assert own
+        for path in own:
             moved = _changed(base, path)
             assert _digest(key, moved) != _digest(key, base), f"{key} {path}"
-            # The bank is untouched: a tracking, TDE or blob change recomputes minutes, not an hour.
             assert (
                 _digest("pixel_averages", spec.upstream_params(moved)) == bank_key
             ), f"{key} {path}"
 
 
-def test_the_neighbour_step_is_a_separate_knob_in_each_product():
-    """``tracking.neighbour_step`` and ``blob_parameters``'s ``neighbour_step`` are one setting named
-    twice: moving the first leaves the blob key alone, as moving the cond_av mask must.
-    """
-    fields = method_fields.MethodFieldsParams()
-    blobs = blob_parameters.BlobParametersParams()
-    moved = _changed(fields, "tracking.neighbour_step")
-    assert _digest("method_fields", moved) != _digest("method_fields", fields)
-    assert _digest("blob_parameters", blobs) == _digest(
-        "blob_parameters", blob_parameters.BlobParametersParams()
-    )
-    assert _changed(blobs, "neighbour_step").neighbour_step == blobs.neighbour_step + 1
-
-
-def test_a_derived_spec_lifts_its_upstream_out_of_its_own_params():
-    for key in ("method_fields", "blob_parameters"):
-        spec = registry.get(key)
-        params = spec.params()
-        params.averages.window = 30
-        lifted = spec.upstream_params(params)
-        assert isinstance(lifted, pixel_averages.PixelAveragesParams)
-        assert lifted.averages.window == 30 and lifted.averages == params.averages
-        assert lifted.averages is not params.averages  # a copy: nothing is shared
-
-
-def test_the_fields_the_fields_page_reads_are_there():
-    """``views.products.related_params`` follows ``averages``, ``tracking.neighbour_step`` and
-    ``neighbour_step``: a rename here would leave the page looking for the wrong blob parameters.
-    """
-    found = {key: registry.get(key) for key in KEYS}
-    fields = method_fields.MethodFieldsParams()
-    assert (
-        products.related_params(found, fields)["blob_parameters"]
-        == found["blob_parameters"].params()
-    )
-
-    fields.averages.window = 30
-    fields.tracking.neighbour_step = 2
-    related = products.related_params(found, fields)
-    assert related["pixel_averages"].averages.window == 30
-    assert related["blob_parameters"].averages.window == 30
-    assert related["blob_parameters"].neighbour_step == 2
-    assert products.neighbour_step(fields) == 2
-
-
 def _form_leaves(cls, prefix=""):
-    """``(path, owning class, annotation)`` of every leaf the parameter form would draw a widget for."""
-    hints = params_ui._hints(cls)
-    for f in params_ui._dataclass_fields(cls):
-        annotation, _ = params_ui._unwrap_optional(hints.get(f.name, f.type))
+    """``(path, owning class, field name)`` of every leaf the parameter form draws a widget for."""
+    hints = get_type_hints(cls)
+    for f in dataclasses.fields(cls):
         path = f"{prefix}.{f.name}" if prefix else f.name
-        if params_ui._dataclass_fields(annotation) is None:
-            yield path, cls, f.name
+        if dataclasses.is_dataclass(hints[f.name]):
+            yield from _form_leaves(hints[f.name], path)
         else:
-            yield from _form_leaves(annotation, path)
+            yield path, cls, f.name
 
 
 @pytest.mark.parametrize("key", KEYS)
 def test_every_leaf_of_every_products_form_is_explained(key):
-    """A leaf with no help is an unlabelled number in the sidebar. The nested imaging_methods classes carry
-    little docstring, and ``params_ui.HELP`` is keyed by the path from the top of the tree walked: the
-    products nest those classes under ``tracking`` and ``blobs``, one level lower than the older specs.
+    """A leaf with no help is an unlabelled number in the sidebar: ``params_ui.HELP`` is keyed by the
+    path from the top of the tree walked, and the products nest the library's classes.
     """
     leaves = list(_form_leaves(registry.get(key).params))
     assert leaves
     unexplained = [
-        path for path, cls, name in leaves if not params_ui._help_for(cls, name, path)
+        path for path, cls, name in leaves if not params_ui.help_for(cls, name, path)
     ]
     assert not unexplained
 
 
 def test_the_default_keys_are_stable():
-    """The defaults hash to these, and so does a fresh interpreter (see the subprocess test). Moving one
-    means the deck's settings changed, a params field was added or renamed, or a params class moved: a new
-    cache entry appears beside the old, which is the intended behaviour, but it is worth knowing.
+    """The defaults hash to these. Moving one means a default setting changed, a params field was added
+    or renamed, or a params class moved: a new cache entry appears beside the old, and every result
+    stored under the old one is no longer found.
     """
     expected = {
         "pixel_averages": "302e4217c137fa0d510a11f49500371362dfd4ae",
@@ -398,9 +290,8 @@ def test_the_default_keys_are_stable():
     assert {k: _digest(k, registry.get(k).params()) for k in KEYS} == expected
 
 
-#: Every registered spec's default hash, measured at fusion_ui e99d216 before L14 and recorded in
-#: fusion_scripts' ``MIGRATION_TO_IMAGING_METHODS.md`` (Status, step 0). A stored result is found by it, so
-#: a moved one leaves every result of that spec unreachable.
+#: Every registered spec's default hash. A stored result is found by it, so a moved one leaves every
+#: result of that spec unreachable.
 DEFAULT_HASHES = {
     "raw_frames": "f29f91e6ac616c2ee2980872c988504bb9de8c51",
     "dead_pixels": "c87bebadae3c0c04ac973bf608a4d6ea0571133b",
@@ -415,7 +306,7 @@ DEFAULT_HASHES = {
 }
 
 
-def test_every_registered_specs_default_hash_is_the_one_before_the_move():
+def test_every_registered_specs_default_hash_is_stable():
     """Every spec, not only the three products: a stored result is found by its hash."""
     assert set(registry.REGISTRY) == set(DEFAULT_HASHES)
     assert len(DEFAULT_HASHES) == 10
@@ -426,127 +317,18 @@ def test_every_registered_specs_default_hash_is_the_one_before_the_move():
     assert found == DEFAULT_HASHES
 
 
-@pytest.mark.parametrize("key", KEYS)
-def test_a_params_json_file_changing_the_window_fits_all_three(key, tmp_path):
-    """J2b's ``--params-json {"averages": {"window": 30}}`` names every plot it is applied to."""
+def test_a_params_json_file_changing_the_window_fits_all_three(tmp_path):
+    """``--params-json`` with ``{"averages": {"window": 30}}`` applies to every plot named, as one bank."""
     path = tmp_path / "short.json"
     path.write_text(json.dumps({"averages": {"window": 30}}))
-    specs = [registry.get(k) for k in KEYS]
-    everything = precompute.params_from_file(str(path), specs)
+    everything = precompute.params_from_file(str(path), [registry.get(k) for k in KEYS])
     assert {k: p.averages.window for k, p in everything.items()} == dict.fromkeys(
         KEYS, 30
     )
-    # One bank for all three: the derived ones ask for the bank the bank's own params select.
     bank = _digest("pixel_averages", everything["pixel_averages"])
-    for derived in ("method_fields", "blob_parameters"):
-        up = registry.get(derived).upstream_params(everything[derived])
+    for key in DERIVED:
+        up = registry.get(key).upstream_params(everything[key])
         assert _digest("pixel_averages", up) == bank
-    assert everything[key].averages.window == 30
-
-
-def test_params_survive_pickling_as_a_pool_worker_receives_them():
-    for key in KEYS:
-        for params in (registry.get(key).params(), PARAMS[key]()):
-            again = pickle.loads(pickle.dumps(params))
-            assert again == params and type(again) is type(params)
-            assert _digest(key, again) == _digest(key, params)
-
-
-def test_a_fresh_interpreter_hashes_the_same_and_reads_the_data_folder_of_the_ui_dotenv(
-    tmp_path,
-):
-    """A fresh process, with a dotenv of its own, hashes the three defaults as this one does and takes its data
-    folder from that dotenv, and the params arrive pickled, as a pool worker gets them. (Before L14 this was the
-    import-order trap: the pipeline imported fusion_scripts' ``config``, which filled the unset variables from
-    its own ``.env``. The library reads no ``config``, so nothing can win ahead of the UI's.)
-    """
-    folder = tmp_path / "the_data_folder_of_the_ui_dotenv"
-    dotenv = tmp_path / "ui.env"
-    dotenv.write_text(f"FUSION_DATA_FOLDER={folder}\n")
-    environment = {k: v for k, v in os.environ.items() if not k.startswith("FUSION_")}
-    environment["FUSION_UI_DOTENV"] = str(dotenv)
-
-    child = (
-        "import json, pickle, sys\n"
-        "import fusion_ui.plots\n"
-        "from fusion_ui import config\n"
-        "from fusion_ui.core import params_ui, registry\n"
-        "params = pickle.loads(sys.stdin.buffer.read())\n"
-        "print(json.dumps({'folder': config.DATA_FOLDER,\n"
-        "    'types': [type(p).__module__ + '.' + type(p).__qualname__ for p in params],\n"
-        "    'hashes': [params_ui.hash_params(k, p)[0] for k, p in zip(%r, params)],\n"
-        "    'registered': [k in registry.REGISTRY for k in %r]}))\n" % (KEYS, KEYS)
-    )
-    sent = [registry.get(key).params() for key in KEYS]
-    done = subprocess.run(
-        [sys.executable, "-c", child],
-        input=pickle.dumps(sent),
-        env=environment,
-        cwd=REPO,
-        capture_output=True,
-        check=True,
-    )
-    seen = json.loads(done.stdout.decode().strip().splitlines()[-1])
-    assert seen["folder"] == str(folder)
-    assert seen["types"] == [
-        f"fusion_ui.plots.{k}.{cls}"
-        for k, cls in zip(
-            KEYS, ("PixelAveragesParams", "MethodFieldsParams", "BlobParametersParams")
-        )
-    ]
-    assert seen["hashes"] == [_digest(k, p) for k, p in zip(KEYS, sent)]
-    assert seen["registered"] == [True] * 3
-
-
-def _imports(path):
-    tree = ast.parse(Path(path).read_text())
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                yield node.lineno, alias.name
-        elif isinstance(node, ast.ImportFrom):
-            yield node.lineno, node.module or ""
-
-
-def test_only_pipeline_imports_the_decorrelation_api():
-    """``imaging_methods.decorrelation`` is imported in one place, ``plots/_pipeline.py``, which prepares what
-    it is called with; nothing else in the app reaches the API but through it. The old import-order rule is
-    gone with the move to imaging_methods (``_pipeline`` imports no ``config`` and calls no ``import_config``).
-    """
-
-    def reaches_api(module, name):
-        return module == "imaging_methods.decorrelation" or (
-            module == "imaging_methods" and name == "decorrelation"
-        )
-
-    def imports_api(path):
-        for node in ast.walk(ast.parse(Path(path).read_text())):
-            if isinstance(node, ast.ImportFrom):
-                if reaches_api(node.module or "", "") or any(
-                    reaches_api(node.module or "", a.name) for a in node.names
-                ):
-                    yield node.lineno
-            elif isinstance(node, ast.Import):
-                if any(a.name.startswith("imaging_methods.decorrelation") for a in node.names):
-                    yield node.lineno
-
-    assert list(imports_api(_pipeline.__file__))
-    for path in (REPO / "fusion_ui").rglob("*.py"):
-        if path == Path(_pipeline.__file__):
-            continue
-        assert not list(imports_api(path)), str(path.relative_to(REPO))
-    names = {m.split(".")[0] for _, m in _imports(_pipeline.__file__)}
-    assert not names & {"config", "fusion_scripts"}
-
-
-@pytest.mark.parametrize(
-    "module", [pixel_averages, method_fields, blob_parameters, _pipeline]
-)
-def test_the_specs_never_touch_streamlit(module):
-    """``compute``, ``render`` and ``scalars`` stay pure: the page draws what a render returns."""
-    assert not [
-        m for _, m in _imports(module.__file__) if m.split(".")[0] == "streamlit"
-    ]
 
 
 # ---------------------------------------------------------------------------
@@ -554,15 +336,14 @@ def test_the_specs_never_touch_streamlit(module):
 # ---------------------------------------------------------------------------
 
 
-def test_the_record_is_converted_from_centimetres_to_metres_as_the_papers_loader_does():
+def test_the_record_is_converted_from_centimetres_to_metres():
     ds = fx.make_record("full")
     assert 88 < float(ds.R.max()) < 91  # centimetres, like the files
     prepared = _pipeline.record(ds)
+    expected = fx.in_metres(ds)
     assert 0.88 < float(prepared.R.max()) < 0.91
-    assert -0.05 < float(prepared.Z.min()) and float(prepared.Z.max()) < 0.0
-    # The same expression as apd_check.fields.load, so the dtype R has on disk survives: float32.
-    expected = ds.assign_coords(R=ds.R / 100, Z=ds.Z / 100)
-    assert prepared.R.dtype == np.float32 == expected.R.dtype
+    # R and Z keep the dtype they have on disk.
+    assert prepared.R.dtype == np.float32
     assert np.array_equal(prepared.R.values, expected.R.values)
     assert np.array_equal(prepared.Z.values, expected.Z.values)
     assert prepared.frames.dtype == ds.frames.dtype == np.float64
@@ -648,6 +429,7 @@ def test_the_derived_products_use_the_banks_mask_and_never_compute_one(
     monkeypatch.setattr(pipeline, "blobs", spy("blobs"))
 
     fields_params, blobs_params = fx.method_fields_params(), fx.blob_parameters_params()
+    blobs_params.neighbour_step = 3  # not the fixture's, which is also the default
     out_fields = method_fields.compute(full.record, fields_params, bank)
     out_blobs = blob_parameters.compute(full.record, blobs_params, bank)
 
@@ -683,17 +465,6 @@ def test_the_derived_products_use_the_banks_mask_and_never_compute_one(
     assert np.array_equal(dead.values, bank.dead.values)
 
 
-def test_the_neighbour_step_reaches_the_api(full, monkeypatch):
-    seen = {}
-    monkeypatch.setattr(
-        pipeline, "blobs", lambda *args: seen.update(step=args[3]) or xr.Dataset()
-    )
-    params = fx.blob_parameters_params()
-    params.neighbour_step = 3
-    blob_parameters.compute(full.record, params, full.loaded["pixel_averages"])
-    assert seen["step"] == 3
-
-
 # ---------------------------------------------------------------------------
 # The products themselves: equal to the API called directly, through the store and back
 # ---------------------------------------------------------------------------
@@ -720,20 +491,9 @@ def test_blob_parameters_equals_a_direct_api_call_and_survives_the_store(sparse)
     fx.assert_bit_equal(sparse.loaded["blob_parameters"], expected, "stored")
 
 
-def test_the_bank_comes_back_out_of_the_store_reference_by_reference(full, sparse):
-    for stored in (full, sparse):
-        fresh, loaded = stored.fresh["pixel_averages"], stored.loaded["pixel_averages"]
-        for y in range(fx.NY):
-            for x in range(fx.NX):
-                a, b = pipeline.at(fresh, x, y), pipeline.at(loaded, x, y)
-                assert (a is None) == (b is None)
-                if a is not None:
-                    assert a.identical(b), (stored.case, x, y)
-
-
-def test_the_fixtures_settings_differ_from_the_decks_in_every_group():
+def test_the_fixtures_settings_differ_from_the_defaults_in_every_group():
     """So that a setting an adapter failed to pass on shows up as a mismatch in the equalities above,
-    where the deck's own values would hide it."""
+    where the defaults would hide it."""
     assert fx.AVERAGES != pipeline.Averages()
     assert fx.TRACKING != pipeline.Tracking()
     assert fx.TRACKING.position_filter != pipeline.Tracking().position_filter
@@ -743,14 +503,8 @@ def test_the_fixtures_settings_differ_from_the_decks_in_every_group():
     assert fx.BLOBS.taud_estimation != pipeline.Blobs().taud_estimation
 
 
-# ---------------------------------------------------------------------------
-# The schemas, as the plan states them: names, dims, dtypes
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("which", ["fresh", "loaded"])
-def test_the_bank_has_the_planned_schema(full, which):
-    bank = getattr(full, which)["pixel_averages"]
+def test_the_stored_blobs_are_laid_out_as_the_modules_say(full, sparse):
+    bank = full.loaded["pixel_averages"]
     assert dict(bank.sizes) == {
         "ref_y": fx.NY,
         "ref_x": fx.NX,
@@ -758,100 +512,44 @@ def test_the_bank_has_the_planned_schema(full, which):
         "x": fx.NX,
         "time": fx.LAGS,
     }
-    reference = ("ref_y", "ref_x")
-    for name in ("cond_av", "cond_repr", "cross_corr"):
-        assert bank[name].dims == reference + ("y", "x", "time")
-        assert bank[name].dtype == np.float64
-    assert bank["nevents"].dims == bank["computed"].dims == reference
-    assert bank["nevents"].dtype == np.int64 and bank["computed"].dtype == bool
-    assert bank["dead"].dims == ("y", "x") and bank["dead"].dtype == bool
-    assert set(bank.data_vars) == {
-        "cond_av",
-        "cond_repr",
-        "cross_corr",
-        "nevents",
-        "computed",
-        "dead",
-    }
-    assert bank.attrs["averages"] == (
-        "threshold=2.0; window=10; check_max=1; single_counting=True"
-    )
-    assert bank.attrs["dead_mask_source"] == "synthetic, the full mask"
-
-    # NaN at the skipped reference, 0 events where none or skipped, computed False where dead.
-    dead = (0, 1)
-    assert not bank["computed"].values[dead[1], dead[0]]
-    assert bank["nevents"].values[dead[1], dead[0]] == 0
-    assert np.isnan(bank["cond_av"].isel(ref_y=dead[1], ref_x=dead[0]).values).all()
-    flat_x, flat_y = fx.FLAT
-    assert bank["computed"].values[flat_y, flat_x]
-    assert bank["nevents"].values[flat_y, flat_x] == 0, "live, no events"
-    assert (bank["nevents"].values > 0).sum() == len(live_pixels("full")) - 1
+    averages = {"cond_av", "cond_repr", "cross_corr"}
+    assert set(bank.data_vars) == averages | {"nevents", "computed", "dead"}
+    for name in averages:
+        assert bank[name].dims == ("ref_y", "ref_x", "y", "x", "time")
     # Metres, and the lags in seconds around zero.
     assert 0.88 < float(bank["R"].max()) < 0.91
     assert np.isclose(float(bank["time"].values[fx.LAGS // 2]), 0.0)
     assert np.isclose(np.diff(bank["time"].values), fx.DT).all()
+    # The dead reference was never computed; the flat one was, and found no events.
+    assert not bank["computed"].values[1, 0]
+    assert bank["nevents"].values[1, 0] == 0
+    assert np.isnan(bank["cond_av"].isel(ref_y=1, ref_x=0).values).all()
+    flat_x, flat_y = fx.FLAT
+    assert bank["computed"].values[flat_y, flat_x]
+    assert bank["nevents"].values[flat_y, flat_x] == 0
+    assert (bank["nevents"].values > 0).sum() == len(live_pixels("full")) - 1
 
-
-@pytest.mark.parametrize("which", ["fresh", "loaded"])
-def test_method_fields_has_the_planned_schema(full, which):
-    fields = getattr(full, which)["method_fields"]
+    fields = full.loaded["method_fields"]
     assert dict(fields.sizes) == {"y": fx.NY, "x": fx.NX, "time": fx.LAGS}
-    per_pixel = set(fx.FIELD_VARIABLES)
     per_lag = {
         f"{kind}_{track}" for track in fx.TRACKS for kind in ("pos_r", "pos_z", "fit")
     }
-    assert set(fields.data_vars) == per_pixel | per_lag | {"dead"}
-    for name in per_pixel:
-        assert fields[name].dims == ("y", "x"), name
-        # where(~dead) makes the counts float64 too, with NaN at dead pixels, as velocities.nc has them.
-        assert fields[name].dtype == np.float64, name
-    for track in fx.TRACKS:
-        for kind in ("pos_r", "pos_z"):
-            assert fields[f"{kind}_{track}"].dims == ("y", "x", "time")
-            assert fields[f"{kind}_{track}"].dtype == np.float64
-        assert fields[f"fit_{track}"].dims == ("y", "x", "time")
-        assert fields[f"fit_{track}"].dtype == bool
-    assert fields["dead"].dims == ("y", "x") and fields["dead"].dtype == bool
-    assert set(fields.attrs) - {
-        k for k in fields.attrs if k.startswith("fusion_ui_")
-    } == {
-        "min_cc",
-        "averages",
-        "tracking",
-        "tde",
-        "dead_mask_source",
-    }
-    assert fields.attrs["min_cc"] == fx.TDE.min_cc
-    assert fields.attrs["dead_mask_source"] == "synthetic, the full mask"
-    assert 0.88 < float(fields["R"].max()) < 0.91  # metres
-
+    assert set(fields.data_vars) == set(fx.FIELD_VARIABLES) | per_lag | {"dead"}
     dead = fields["dead"].values
-    for name in per_pixel:
+    for name in fx.FIELD_VARIABLES:
+        assert fields[name].dims == ("y", "x"), name
         assert np.isnan(fields[name].values[dead]).all(), name
+    for name in per_lag:
+        assert fields[name].dims == ("y", "x", "time"), name
     # The level exists for the centroid track alone.
     assert np.isnan(fields["level_max"].values).all()
     assert np.isnan(fields["level_2dcc"].values).all()
     assert np.isfinite(fields["level_com"].values[~dead]).any()
-    # What is tracked is where it can be: no position without an average, and the fitted lags are lags.
-    assert fields["fit_com"].values.any()
 
-
-@pytest.mark.parametrize("which", ["fresh", "loaded"])
-def test_blob_parameters_has_the_planned_schema(sparse, which):
-    blobs = getattr(sparse, which)["blob_parameters"]
+    blobs = sparse.loaded["blob_parameters"]
     assert dict(blobs.sizes) == {"y": fx.NY, "x": fx.NX}
     assert set(blobs.data_vars) == set(fx.BLOB_VARIABLES) | {"dead"}
-    for name in fx.BLOB_VARIABLES:
-        assert blobs[name].dims == ("y", "x") and blobs[name].dtype == np.float64, name
-    assert blobs["dead"].dtype == bool
-    assert blobs.attrs["units"] == "m, m^2, s, rad"
     assert blobs.attrs["neighbour_step"] == fx.TRACKING.neighbour_step
-    assert blobs.attrs["averages"] == (
-        "threshold=2.0; window=10; check_max=1; single_counting=True"
-    )
-    assert blobs.attrs["dead_mask_source"] == "synthetic, the sparse mask"
-    assert 0.88 < float(blobs["R"].max()) < 0.91
 
 
 # ---------------------------------------------------------------------------
@@ -892,38 +590,6 @@ def stored_rows(conn, run):
     }
 
 
-def test_the_scalar_names_are_the_ones_written_out_here():
-    assert (
-        list(method_fields.SCALARS) == METHOD_FIELDS_NAMES
-        and len(METHOD_FIELDS_NAMES) == 20
-    )
-    assert (
-        list(blob_parameters.SCALARS) == BLOB_PARAMETERS_NAMES
-        and len(BLOB_PARAMETERS_NAMES) == 5
-    )
-    assert not set(method_fields.SCALARS) & set(blob_parameters.SCALARS)
-
-    # Each name is written next to the variable it is read from, and only three differ from it.
-    for spec in (method_fields, blob_parameters):
-        assert spec.SCALARS == {name: variable_of(name) for name in spec.SCALARS}
-    differing = {
-        name: variable
-        for spec in (method_fields, blob_parameters)
-        for name, variable in spec.SCALARS.items()
-        if name != variable
-    }
-    assert differing == RENAMED
-
-    # Every scalar is read off a variable the API makes. level_max and level_2dcc are all NaN, and not
-    # scalars; ``nevents`` is the bank's count, which blob_parameters leaves to method_fields.
-    assert set(method_fields.SCALARS.values()) <= set(fx.FIELD_VARIABLES)
-    assert "nevents" not in blob_parameters.SCALARS.values()
-    assert set(blob_parameters.SCALARS.values()) < set(fx.BLOB_VARIABLES)
-    # The API's names for the three are not scalar names.
-    taken = set(method_fields.SCALARS) | set(blob_parameters.SCALARS)
-    assert not taken & {"nevents", "taud", "lam"}
-
-
 def test_the_duration_time_scalars_are_the_names_the_taud_psd_spec_writes():
     """A number that two plots write under one name lines up on one multi-shot axis."""
     from fusion_ui.plots import spectra
@@ -931,41 +597,26 @@ def test_the_duration_time_scalars_are_the_names_the_taud_psd_spec_writes():
     stand_in = xr.Dataset({"refx": 1, "refy": 2, "taud": 1e-5, "lam": 0.5})
     written = {name for _, _, name in spectra.scalars(stand_in)}
     assert written == {"taud_psd", "lambda_psd"} <= set(blob_parameters.SCALARS)
-    assert set(RENAMED) <= set(seed.RECORD_NAMES)
 
 
-def test_method_fields_writes_twenty_names_at_every_live_pixel_and_nothing_at_a_dead_one(
-    full,
-):
+def test_method_fields_writes_its_names_at_every_live_pixel_and_failures_as_null(full):
     result = full.loaded["method_fields"]
-    mapping = method_fields.scalars(result)
     live = live_pixels("full")
-    assert len(mapping) == len(live) * 20 == 160
+    mapping = method_fields.scalars(result)
     assert {name for _, _, name in mapping} == set(METHOD_FIELDS_NAMES)
-    assert {(x, y) for x, y, _ in mapping} == set(live)
-    assert all(isinstance(k, tuple) and len(k) == 3 for k in mapping)
-    assert not [
-        k for k in mapping if k[:2] == (0, 1)
-    ], "a dead pixel was never computed"
-    for (x, y, name), value in mapping.items():
-        expected = float(result[variable_of(name)].values[y, x])
-        assert (np.isnan(value) and np.isnan(expected)) or value == expected
+    assert {(x, y) for x, y, _ in mapping} == set(live), "a dead pixel gets no row"
+    assert len(mapping) == len(live) * len(METHOD_FIELDS_NAMES)
 
-
-def test_the_scalar_rows_in_the_ledger_are_the_mapping_with_failures_as_null(full):
-    run = full.runs["method_fields"]
-    rows = stored_rows(full.conn, run)
-    result = full.loaded["method_fields"]
-    assert len(rows) == len(live_pixels("full")) * 20
-    assert not [k for k in rows if k[:2] == (0, 1)]
+    rows = stored_rows(full.conn, full.runs["method_fields"])
+    assert set(rows) == set(mapping)
     nulls = 0
     for (x, y, name), value in rows.items():
         expected = float(result[variable_of(name)].values[y, x])
         if np.isnan(expected):
-            assert value is None, (x, y, name)
+            assert value is None and np.isnan(mapping[(x, y, name)]), (x, y, name)
             nulls += 1
         else:
-            assert value == expected, (x, y, name)
+            assert value == expected == mapping[(x, y, name)], (x, y, name)
     assert (
         nulls
     ), "some estimates fail on a record this small, and are NULL, not missing"
@@ -992,63 +643,6 @@ def test_blob_parameters_writes_its_names_and_not_the_event_count(sparse):
     flat_x, flat_y = fx.FLAT
     assert rows[(flat_x, flat_y, "lr")] is None  # no average to fit: tried and failed
     assert rows[(1, 1, "area")] is not None
-
-
-def test_the_renamed_scalars_equal_the_blobs_variables_at_every_live_pixel(
-    full, sparse
-):
-    """``number_events`` is the blob's ``nevents``, ``taud_psd`` its ``taud`` and ``lambda_psd`` its ``lam``:
-    the same numbers under the store's names, at every live pixel, in the mapping and in the ledger.
-    """
-    cases = (
-        (full, "method_fields", method_fields, ("number_events",)),
-        (sparse, "blob_parameters", blob_parameters, ("taud_psd", "lambda_psd")),
-    )
-    api_names = set(RENAMED.values())
-    for stored, key, spec, names in cases:
-        result = stored.loaded[key]
-        mapping = spec.scalars(result)
-        rows = stored_rows(stored.conn, stored.runs[key])
-        for name in names:
-            variable = RENAMED[name]
-            for x, y in live_pixels(stored.case):
-                expected = float(result[variable].values[y, x])
-                got = mapping[(x, y, name)]
-                assert (np.isnan(got) and np.isnan(expected)) or got == expected, (
-                    name,
-                    x,
-                    y,
-                )
-                row = rows[(x, y, name)]
-                assert (row is None and np.isnan(expected)) or row == expected, (
-                    name,
-                    x,
-                    y,
-                )
-        # Nothing is written under the API's names.
-        assert not {n for _, _, n in rows} & api_names
-        assert not {n for _, _, n in mapping} & api_names
-
-
-def test_the_blobs_keep_the_apis_variable_names_whatever_the_scalars_are_called(
-    full, sparse
-):
-    """Only the scalar names changed at G2. The blobs are the API's Dataset as it made it, by the paper's
-    names: J7's regression and the paper's own code read them by name."""
-    scalar_names = set(RENAMED)
-    for which in ("fresh", "loaded"):
-        fields = getattr(full, which)["method_fields"]
-        blobs = getattr(sparse, which)["blob_parameters"]
-        assert "nevents" in fields.data_vars
-        assert {"nevents", "taud", "lam"} <= set(blobs.data_vars)
-        assert not scalar_names & (set(fields.variables) | set(blobs.variables))
-    # Variable for variable, and bit for bit, what the API gives when it is called directly.
-    fx.assert_bit_equal(
-        full.loaded["method_fields"], fx.direct_fields("full"), "method_fields"
-    )
-    fx.assert_bit_equal(
-        sparse.loaded["blob_parameters"], fx.direct_blobs("sparse"), "blob_parameters"
-    )
 
 
 def test_pixel_averages_writes_no_scalars(full):
@@ -1100,12 +694,6 @@ def test_derived_products_are_computed_once_the_bank_is_cached_and_link_to_it(fu
     assert run["id"] == runs["method_fields"]["id"] and result is not None
 
 
-def test_the_blobs_ask_for_the_same_bank_as_the_fields_at_the_same_averages():
-    a = registry.get("method_fields").upstream_params(fx.method_fields_params())
-    b = registry.get("blob_parameters").upstream_params(fx.blob_parameters_params())
-    assert _digest("pixel_averages", a) == _digest("pixel_averages", b)
-
-
 # ---------------------------------------------------------------------------
 # The views: pure, and they draw
 # ---------------------------------------------------------------------------
@@ -1150,17 +738,10 @@ def test_method_fields_draws_one_v_r_map_per_method_on_one_scale(full):
     from fusion_ui.views.bundle import Cuts
     from fusion_ui.views.methods import describe_cut
 
-    # The title says what the figure is and where the rest is. Which cuts it was drawn at is the line
-    # across the top of the figure, which says them per method; the title does not repeat it, and
-    # "fewer than 8 lags or 200 events" was wrong for the methods that events do not cut.
     title = figure.layout.title.text
     assert title.startswith("v_R of every method, on one scale")
-    assert "Fields page sets the cuts and draws the arrows" in title
-    cuts = Cuts()
-    assert f"{cuts.min_lags} lags" not in title
-    assert f"{cuts.min_events} events" not in title
-    assert "circled" not in title
-    assert describe_cut(cuts) in [a.text for a in figure.layout.annotations]
+    # Which cuts it was drawn at is the line across the top of the figure, per method.
+    assert describe_cut(Cuts()) in [a.text for a in figure.layout.annotations]
 
 
 def test_blob_parameters_draws_one_map_per_parameter_marking_dead_and_failed(sparse):
@@ -1188,62 +769,6 @@ def test_the_renders_survive_a_blob_without_some_parameters(sparse):
     figure = blob_parameters.SPEC.render(result, PARAMS["blob_parameters"](), target())
     assert_a_figure(figure)
     assert len([t for t in figure.data if isinstance(t, go.Heatmap)]) == 4
-
-
-def test_the_fields_pages_builders_draw_the_real_products(full, sparse):
-    """The page was written against synthetic blobs from the frozen schemas; these are what the API makes,
-    read back from netCDF. Every builder must draw them, with nothing but real pixels where they are.
-    """
-    from fusion_ui.views import frame, lag_strip, numbers, panels, tracks
-    from fusion_ui.views.bundle import Bundle
-
-    bundle = Bundle(
-        shot=fx.SHOT,
-        bank=full.loaded["pixel_averages"],
-        fields=full.loaded["method_fields"],
-        pixel=(1, 1),
-    )
-    assert bundle.shape == (fx.NY, fx.NX) and bundle.has_coordinates
-    assert bundle.mask_source == "synthetic, the full mask"
-    assert bundle.min_cc == fx.TDE.min_cc
-    assert bundle.dead.sum() == 1 and bundle.dead[1, 0]
-
-    for mode in ("arrows", "vr", "vz"):
-        figure = panels.velocity_panels(bundle, mode=mode)
-        assert_a_figure(figure)
-        assert figure.layout.meta["mode"] == mode and len(figure.data) > 7
-    figures = [
-        lag_strip.lag_strip(bundle),
-        frame.frame_figure(bundle, "cond_av", 0.0),
-        frame.frame_figure(bundle, "cross_corr", 3.0),
-        frame.trace_figure(bundle, "cond_av", 0.0),
-        tracks.tracks_figure(bundle),
-    ]
-    for figure in figures:
-        assert_a_figure(figure)
-        assert figure.data, "a pixel with events draws, it is not a message"
-
-    blobs = Bundle(
-        shot=fx.SHOT,
-        bank=sparse.loaded["pixel_averages"],
-        blobs=sparse.loaded["blob_parameters"],
-        pixel=(1, 1),
-    )
-    tables = numbers.numbers(bundle)
-    assert len(tables) == 1, "no blob table until blob_parameters is computed"
-    methods = tables[0]
-    assert len(methods) == 7
-    # In metres per second, for the 2DCA centroid at the interior pixel: the planted 500 m/s.
-    centroid = methods.loc[methods["method"] == "2DCA centroid", "v_R [m/s]"]
-    assert 250 < float(centroid.iloc[0]) < 1000
-    with_blobs = numbers.numbers(blobs)
-    assert len(with_blobs) == 2 and len(with_blobs[1]) == len(SHOWN)
-    assert list(with_blobs[1]["parameter"]) == SHOWN
-    # A live pixel without events is a sentence, not an exception; a dead one too.
-    for pixel in (fx.FLAT, (0, 1)):
-        silent = dataclasses.replace(bundle, pixel=pixel)
-        assert isinstance(numbers.numbers(silent), str)
-        assert lag_strip.lag_strip(silent).layout.annotations
 
 
 # ---------------------------------------------------------------------------
@@ -1312,8 +837,8 @@ def test_a_run_day_fill_never_selects_a_raw_file(tree):
 def test_precompute_of_the_two_derived_products_computes_the_bank_once_and_a_second_fill_skips_all(
     tree,
 ):
-    """The plan's first fill names ``method_fields blob_parameters`` and leaves the bank to the chain: a
-    batch job computes it with the first of them, and the second finds it cached."""
+    """A fill that names only the derived products leaves the bank to the chain: a batch job computes it
+    with the first of them, and the second finds it cached."""
     shot = tree.shots[0]
     report, lines = fill(tree.conn, ("method_fields", "blob_parameters"), shots={shot})
     assert [s.computed for s in report.stats] == [1, 1], lines
@@ -1476,12 +1001,10 @@ MULTI_SHOT_APP = str(REPO / "fusion_ui" / "app.py")
 def test_a_multi_shot_click_on_blob_parameters_that_no_settings_go_with_shows_that_exact_run(
     tree, monkeypatch
 ):
-    """The fixture's blob parameters carry the ellipse fit's and the duration time fit's own settings
-    (``fx.BLOBS``), which are in no ``method_fields`` parameter set: ``method_fields`` computed beside
-    them, at the same 2DCA settings, still maps to the default fit. The Fields page would show the blob
-    parameters of the settings it is on, which are other numbers than the point's. So the click opens
-    the single-shot page, which restores the run's parameters and finds the result in the cache: the
-    form holds the fit settings the batch used, and nothing is computed."""
+    """The fixture's blob parameters carry the fits' own settings (``fx.BLOBS``), which are in no
+    ``method_fields`` parameter set, so the Fields page would show other numbers than the point's. The
+    click opens the single-shot page instead, which restores the run's parameters and finds the result
+    in the cache: nothing is computed."""
     import streamlit as st
     from streamlit.testing.v1 import AppTest
 

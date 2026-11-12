@@ -6,14 +6,10 @@ Seven ways to read a velocity at every live pixel, on one record:
   average tracked by its sub-pixel maximum (suffix ``_max``), the average by the centroid of its contour
   (``_com``) and the cross-correlation by its maximum (``_2dcc``);
 - three- and two-point time delay estimation off the record's cross-correlation (``_tde``);
-- the same TDE applied to the conditional average itself (``_catde``): the field sliced the other way, so
-  that a difference from the 2DCA tracks is the slicing alone, with the conditioning taken out.
+- the same TDE applied to the conditional average itself (``_catde``).
 
-``compute`` is ``imaging_methods.decorrelation.fields``, and its Dataset is returned unchanged: the variable names
-are those of the paper's ``apd<shot>_velocities.nc``, which the regression compares by name, and the
-paper's figure code could read a blob as it is. All velocities are in m/s, R and Z in metres, lags in
-seconds. 1 to 3 minutes a shot once the bank exists, so it can be recomputed from the single-shot page
-(``requires="pixel_averages"``, which a page never computes: see ``store.missing_batch_upstreams``).
+``compute`` is ``imaging_methods.decorrelation.fields``, returned unchanged: velocities in m/s, R and Z
+in metres, lags in seconds. It takes 1 to 3 minutes a shot once the bank exists, so a page may compute it.
 
 The blob (``dims y, x, time``)::
 
@@ -29,20 +25,9 @@ The blob (``dims y, x, time``)::
     dead                                     (y, x)  bool: the mask the bank was computed with
     attrs   min_cc, averages, tracking, tde (the settings, stamped), dead_mask_source
 
-**Scalars** are written per *live* pixel as ``(x, y, name)``, twenty of them (:data:`SCALARS`, each name written
-next to the variable it is read from). Nineteen are named as their variables: ``vr_*`` and ``vz_*`` in m/s;
-``nlags_*`` in lags (samples of the average's lag axis); ``level_com`` as a fraction of the average's
-maximum; ``cc_tde`` a correlation coefficient. The twentieth, ``number_events``, is the blob's ``nevents``,
-the events behind the conditional average (a count): it takes the name ``two_dca`` and the seeded rows
-already use for that number, so that they line up on one axis, while the blob keeps the API's name.
-``level_max`` and ``level_2dcc`` are not scalars: a maximum track has no level, so they are NaN everywhere.
-A dead pixel gets no row, since it was never computed; a NaN at a live pixel is written as NULL, "tried and
-failed".
-
-**The settings and the cache key.** ``averages`` is the bank's: it is lifted into the upstream's parameters
-(:func:`~fusion_ui.plots.pixel_averages.lifted_from`), so moving the 2DCA threshold gives the bank and this
-a new entry, while ``tracking`` and ``tde`` move only this one and reuse the bank. Which pixels are drawn
-(minimum lags, minimum events, interior only) is view state and never a parameter.
+**Settings.** ``averages`` selects the bank, so moving the 2DCA threshold gives the bank and this a new
+entry, while ``tracking`` and ``tde`` move only this one and reuse the bank. Which pixels are drawn
+(minimum lags, minimum events) is view state, never a parameter.
 """
 
 from dataclasses import dataclass, field
@@ -62,12 +47,9 @@ from fusion_ui.plots._pipeline import (
 from fusion_ui.views import panels
 from fusion_ui.views.bundle import Bundle, Cuts
 
-#: The twenty scalars this writes per live pixel, in the order the plan lists them: each name, as the store
-#: records it, next to the variable of the blob it is read from. Written out rather than read off the API: a
-#: name is permanent once a batch has written it, so a variable the API gains later must not turn into a
-#: scalar without someone choosing its name. Only ``number_events`` is not its variable's name: the blob
-#: keeps the API's ``nevents`` (the paper's code reads it by that), and the scalar takes the name ``two_dca``
-#: and the seeded rows use for the same count.
+#: The scalars this writes per live pixel: each name, as the store records it, next to the variable of the
+#: blob it is read from. Written out rather than read off the API: a name is permanent once a batch has
+#: written it. ``level_max`` and ``level_2dcc`` are not scalars: a maximum track has no level.
 SCALARS = {
     "vr_max": "vr_max",
     "vz_max": "vz_max",
@@ -107,17 +89,12 @@ class MethodFieldsParams:
     tde: Tde = field(default_factory=Tde)
 
 
-def upstream_params(params):
-    """The bank's parameters, lifted out of these: its 2DCA settings, and nothing else of ours."""
-    return pixel_averages.lifted_from(params)
-
-
 def compute(ds, params, upstream):
     """Every method's field at every live pixel, from the stored bank and the record.
 
-    ``upstream`` is the ``pixel_averages`` result. The mask is the bank's own, with its source, and is not
-    computed again; every live reference's average is read back out of the bank, and the TDE off the
-    record runs at every live pixel in the API's default order, which is part of its result.
+    ``upstream`` is the ``pixel_averages`` result: the mask is the bank's own, and every live
+    reference's average is read back out of it. No ``pixels`` is passed: the TDE's result depends on
+    the order of the pixels, and the API's default order is the one to keep.
     """
     return pipeline.fields(
         record(ds),
@@ -130,19 +107,15 @@ def compute(ds, params, upstream):
 
 
 def scalars(result):
-    """The twenty :data:`SCALARS` at every live pixel, each read off its variable and written under its name."""
+    """The :data:`SCALARS` at every live pixel."""
     return live_scalars(result, SCALARS)
 
 
 def render(result, params, target):
     """One v_R map per method, on one diverging scale.
 
-    Pure: the seven panels of ``fusion_ui.views`` at the view cuts the Fields page starts from. A pixel
-    resting on too few lags or events for its method is circled, not coloured, and dead and failed pixels
-    are marked differently. Which cuts those are is the line across the top of the figure
-    (``views.methods.describe_cut``), because they differ by method: the 2DCC and the TDEs off the record
-    are not cut by events. So the title does not repeat it: it says what the figure is and where the
-    rest is, since the Fields page sets the cuts and draws the arrows and the pixel level.
+    The seven panels of ``fusion_ui.views`` at the cuts the Fields page starts from. The line across
+    the top of the figure says which cuts those are, since they differ by method, so the title does not.
     """
     bundle = Bundle(
         shot=target.shot,
@@ -176,7 +149,7 @@ SPEC = registry.register(
         compute=compute,
         scalars=scalars,
         requires="pixel_averages",
-        upstream_params=upstream_params,
+        upstream_params=pixel_averages.lifted_from,
         preprocessed=True,
         description=(
             "Every method's velocity at every live pixel: three 2DCA tracks (maximum, contour centroid,"

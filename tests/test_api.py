@@ -1,4 +1,4 @@
-"""``fusion_ui.api`` on the real products of J3's synthetic record, as a script would read them.
+"""``fusion_ui.api`` on the real products of the synthetic record, as a script would read them.
 
 The deployment (``tests/real_fixtures``) holds ``blob_parameters`` and ``method_fields`` for one 3 x 3 shot,
 under settings that are not the defaults, with a dead pixel at (0, 0) of the record. What is checked is that

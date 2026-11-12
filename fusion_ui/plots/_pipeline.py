@@ -1,21 +1,9 @@
-"""What the three product specs share: the physics API, and the record it takes.
+"""What the three product specs share: the physics API, and what it is called with.
 
 ``pixel_averages``, ``method_fields`` and ``blob_parameters`` are thin adapters over
-``imaging_methods.decorrelation``, which holds the paper's pipeline (``fusion_scripts``' ``cmod_scan`` calls
-it too, so the paper and the app read the same numbers). It moved there from ``fusion_scripts`` in L14.
-This module is the one place fusion_ui imports it, and the one place that prepares what it is called with.
+``imaging_methods.decorrelation``. This is the one module of fusion_ui that imports it.
 
-**No import order to keep.** The pipeline used to live in ``fusion_scripts``, whose own ``config`` filled
-every unset ``FUSION_*`` variable from its ``.env`` on import (naming a folder the server does not have),
-and which the bare name ``config`` found instead of ``fusion_ui/config.py`` under Streamlit. So
-``fusion_ui.config`` had to be imported first and ``import_config()`` called before the API. The library
-reads no ``config`` and no environment variable, so neither is needed and nothing here depends on the
-order of imports.
-
-The 1160616 files store no dead-pixel mask; ``dead_mask`` takes the hand-made one from
-``experimental_database`` as an argument (:func:`hand_made`).
-
-Nothing in this module touches Streamlit, the database or the filesystem.
+Nothing here touches Streamlit, the database or the filesystem.
 """
 
 import numpy as np
@@ -36,28 +24,17 @@ __all__ = [
     "record",
 ]
 
-#: What R is, in the unit the imaging files store it in, for a machine this can run on: a major radius
-#: between 0.1 m and 7 m (Alcator C-Mod 0.67 m, ASDEX Upgrade 1.65 m, JET 2.96 m, W7-X 5.5 m, ITER 6.2 m),
-#: so 10 to 700 in centimetres. A value outside it is metres, or millimetres on a machine of C-Mod's size
-#: or larger (C-Mod's R reads 880 to 910), not centimetres. A heuristic, and one that cannot tell 300 cm
-#: from 300 mm: it catches the mistakes a C-Mod-sized machine can make, which is the machine there is.
+#: A major radius in centimetres: 0.1 m to 7 m. C-Mod's R reads 88 to 91; in metres or millimetres it
+#: falls outside. A heuristic that cannot tell 300 cm from 300 mm.
 CENTIMETRES = (10.0, 700.0)
 
 
 def record(ds):
-    """The record as ``imaging_methods.decorrelation`` takes it: R and Z in metres, loaded into memory.
+    """The record as the API takes it: R and Z in metres, loaded into memory. ``ds`` is left as it was.
 
-    The APD files hold R and Z in centimetres and the frames' time axis in seconds, so a velocity
-    computed off them as they are would come out in cm/s. The API's outputs are all in SI units, which
-    makes the conversion the adapter's job and keeps ``pipeline`` free of any one machine's convention.
-
-    The magnitude of R is checked rather than the convention trusted: a record that already holds metres
-    (a file written by something else, or another machine's) would be divided by 100 again and every
-    velocity would come out a hundred times too small, with nothing to say so. It raises instead.
-
-    ``ds`` is the record sliced to the discharge window, lazily opened or already in memory (a pool
-    worker loads it). The 2DCA reads every pixel's series once per reference, so a lazy record would
-    re-read the file from disk every time: this loads it. ``ds`` itself is left as it was.
+    The APD files hold R and Z in centimetres, and the API works in SI units. The magnitude of R is
+    checked, since a record already in metres would be divided again and every velocity would come out
+    a hundred times too small. Loaded because the 2DCA reads every pixel's series once per reference.
     """
     for name in ("R", "Z"):
         if name not in ds.coords:
@@ -72,25 +49,22 @@ def record(ds):
             f" ({low:g} to {high:g}, that is 0.1 m to 7 m): it may already be in metres, or in"
             " millimetres. Nothing was converted."
         )
-    # The same expression as the paper's own loader (``apd_check.fields.load``), so that the two prepare
-    # a record bit for bit alike: R and Z keep the dtype they have on disk (float32 for C-Mod).
+    # R and Z keep the dtype they have on disk (float32 for C-Mod).
     return ds.assign_coords(R=ds.R / 100, Z=ds.Z / 100).load()
 
 
 def hand_made():
-    """The hand-made dead-pixel masks by run day (``experimental_database``), for ``dead_mask``'s ``hand_made``."""
+    """The hand-made dead-pixel masks by run day, for the files that store none (``dead_mask``)."""
     from experimental_database import hand_made_dead_pixel_masks
 
     return hand_made_dead_pixel_masks()
 
 
 def bank_mask(bank):
-    """The dead-pixel mask ``bank`` was computed with, as ``fields`` and ``blobs`` take it.
+    """The dead-pixel mask ``bank`` was computed with, with its source, as ``fields`` and ``blobs`` take it.
 
-    The bank's own ``dead`` with its ``dead_mask_source``, which the API reads off the DataArray's
-    attributes. A product built on a bank never computes the mask again: the file may have changed since
-    (a corrected mask), and the bank, the fields and the blobs of one shot must agree on which pixels
-    were never computed.
+    A product built on a bank never computes the mask again: the file may have changed since, and the
+    bank, the fields and the blobs of one shot must agree on which pixels were never computed.
     """
     dead = bank["dead"]
     source = bank.attrs.get("dead_mask_source")
@@ -103,15 +77,11 @@ def average_at(bank):
 
 
 def live_scalars(result, scalars):
-    """``{(x, y, name): value}`` at every live pixel of ``result``, one scalar per entry of ``scalars``.
+    """``{(x, y, name): value}`` at every live pixel of ``result``.
 
     ``scalars`` maps a scalar's name, as the store records it, to the variable of ``result`` it is read
-    from. Each spec writes the two side by side in its ``SCALARS``, because they are not always the same
-    word: the blob keeps the API's variable names, which the paper's code reads it by, while a scalar takes
-    the name the store already uses for that quantity. The value is the variable's, untouched.
-
-    A dead pixel gets no row: it was never computed. A live pixel whose estimate failed gets a NaN, which
-    the store writes as NULL, so "tried and failed" stays different from "never tried".
+    from. A dead pixel gets no row: it was never computed. A live pixel whose estimate failed gets a
+    NaN, which the store writes as NULL.
     """
     live_y, live_x = np.nonzero(~np.asarray(result["dead"].values, dtype=bool))
     out = {}

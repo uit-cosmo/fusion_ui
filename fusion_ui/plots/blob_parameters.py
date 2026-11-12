@@ -1,9 +1,9 @@
 """The blob parameters at every pixel: size, area and duration of the structure behind each average.
 
-``compute`` is ``imaging_methods.decorrelation.blobs``, returned unchanged (variable names as in the paper's
-``apd<shot>_blobs.nc``; R and Z in metres). It reads the stored conditional average and the pixel's own
-series, and takes about a minute a shot once the bank exists. The blob holds every variable the library
-computes; the app shows and stores the six of ``fusion_ui.views.numbers.BLOB_PARAMETERS``:
+``compute`` is ``imaging_methods.decorrelation.blobs``, returned unchanged (R and Z in metres). It reads
+the stored conditional average and the pixel's own series, and takes about a minute a shot once the bank
+exists. The blob holds every variable the library computes; the app shows the six of
+``fusion_ui.views.numbers.BLOB_PARAMETERS``:
 
 - ``nevents``: the events the conditional average rests on;
 - ``area`` [m^2]: the area of the contour at zero lag;
@@ -15,11 +15,6 @@ computes; the app shows and stores the six of ``fusion_ui.views.numbers.BLOB_PAR
 it is the same knob as ``method_fields``'s ``tracking.neighbour_step`` but a separate parameter, so a
 change to one leaves the other's key alone. ``blobs`` holds the settings of the library's ellipse fit and
 of the duration time.
-
-**Scalars** are five, written per *live* pixel as ``(x, y, name)`` (:data:`SCALARS`): ``area``, ``lr``,
-``lz``, and ``taud`` and ``lam`` under the names ``taud_psd`` and ``lambda_psd``, which the ``taud_psd`` spec
-uses for the same fit, so that they line up on one axis. ``nevents`` is written by ``method_fields`` as
-``number_events``. A dead pixel gets no row; a NaN at a live pixel is written as NULL, "tried and failed".
 """
 
 from dataclasses import dataclass, field
@@ -54,8 +49,8 @@ from fusion_ui.views.numbers import BLOB_PARAMETERS as TABLE
 from fusion_ui.views.overlays import Legend
 
 #: The scalars this writes per live pixel: each name, as the store records it, next to the variable of the
-#: blob it is read from. Written out rather than read off the API: a name is permanent once a batch has
-#: written it, so a variable the API gains must not turn into a scalar without someone choosing its name.
+#: blob it is read from. ``taud`` and ``lam`` take the names the ``taud_psd`` spec writes for the same fit,
+#: so that the two line up on one multi-shot axis. ``nevents`` is ``method_fields``'s ``number_events``.
 SCALARS = {
     "area": "area",
     "lr": "lr",
@@ -63,9 +58,6 @@ SCALARS = {
     "taud_psd": "taud",
     "lambda_psd": "lam",
 }
-
-#: The neighbour step of the deck's contour level, from the API's own defaults rather than restated.
-_NEIGHBOUR_STEP = Tracking().neighbour_step
 
 
 @dataclass
@@ -79,20 +71,15 @@ class BlobParametersParams:
     """
 
     averages: Averages = field(default_factory=Averages)
-    neighbour_step: int = _NEIGHBOUR_STEP
+    neighbour_step: int = Tracking().neighbour_step
     blobs: Blobs = field(default_factory=Blobs)
-
-
-def upstream_params(params):
-    """The bank's parameters, lifted out of these: its 2DCA settings, and nothing else of ours."""
-    return pixel_averages.lifted_from(params)
 
 
 def compute(ds, params, upstream):
     """The blob parameters at every live pixel, from the stored bank and the record.
 
-    ``upstream`` is the ``pixel_averages`` result. The mask is the bank's own, with its source, and is
-    not computed again.
+    ``upstream`` is the ``pixel_averages`` result: the mask is the bank's own, and every live
+    reference's average is read back out of it.
     """
     return pipeline.blobs(
         record(ds),
@@ -105,27 +92,20 @@ def compute(ds, params, upstream):
 
 
 def scalars(result):
-    """The :data:`SCALARS` at every live pixel, each read off its variable and written under its name."""
+    """The :data:`SCALARS` at every live pixel."""
     return live_scalars(result, SCALARS)
 
 
-# ---------------------------------------------------------------------------
-# The view: one map per parameter, each on its own scale (they differ in kind and in unit).
-# ---------------------------------------------------------------------------
-
+#: Maps per row of the view: the six parameters shown make two full rows.
 COLUMNS = 3
-
-
-def _label(name, unit):
-    return f"{name} [{unit}]" if unit else name
 
 
 def render(result, params, target):
     """One map of the array per parameter, each on its own colour scale.
 
-    Pure. A dead pixel is a grey square, since it was never computed; a live pixel whose estimate failed
-    is a red cross, which is a different thing (a contour that never closed, a fit that did not converge).
-    The parameters differ in kind and in unit, so nothing is shared between the maps.
+    A dead pixel is a grey square, since it was never computed; a live pixel whose estimate failed is
+    a red cross (a contour that never closed, a fit that did not converge). The parameters differ in
+    kind and in unit, so the maps share no scale.
     """
     shown = [row for row in TABLE if row[0] in result]
     if not shown:
@@ -144,7 +124,6 @@ def render(result, params, target):
     layout, traces, annotations, legend = {}, [], [], Legend()
     for k, (name, meaning, unit) in enumerate(shown, start=1):
         cell = cells[k - 1]
-        row, column = divmod(k - 1, COLUMNS)
         cell_axes(
             layout,
             k,
@@ -152,7 +131,7 @@ def render(result, params, target):
             x_range,
             y_range,
             x_labels=k + COLUMNS > len(shown),
-            y_labels=column == 0,
+            y_labels=(k - 1) % COLUMNS == 0,
             x_title="R [m]",
             y_title="Z [m]",
         )
@@ -205,7 +184,9 @@ def render(result, params, target):
                         yaxis=axes[1],
                     )
                 )
-        annotations.append(cell_title(cell, _label(name, unit), size=12))
+        annotations.append(
+            cell_title(cell, f"{name} [{unit}]" if unit else name, size=12)
+        )
     layout.update(
         annotations=annotations,
         height=max(420, 230 * rows + 120),
@@ -226,7 +207,7 @@ SPEC = registry.register(
         compute=compute,
         scalars=scalars,
         requires="pixel_averages",
-        upstream_params=upstream_params,
+        upstream_params=pixel_averages.lifted_from,
         preprocessed=True,
         description=(
             "Size, area and duration time of the structure at every live pixel: the FWHM along the"

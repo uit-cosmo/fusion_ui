@@ -4,8 +4,8 @@ The record is what a preprocessed APD file holds, in miniature: ``frames`` (y, x
 per pixel; ``R`` and ``Z`` in **centimetres**, float32, as the files have them; a stored ``dead`` mask with its
 ``dead_mask_source``; a ``shot_number`` attribute. It is 3 x 3 pixels at the 1160616027 pitch, sampled every
 3 us, of Gaussian pulses moving at (500, 150) m/s, so that a velocity read off it in m/s can be told from one
-in cm/s or in m/s over a hundred. The recipe is ``decorrelation/tests/make_pipeline_fixture.py``'s, made
-smaller: the 2DCA and the TDE cost seconds on a 3 x 3 record, and the blob parameters 0.7 s a live pixel.
+in cm/s or in m/s over a hundred. On a record this small the 2DCA and the TDE cost seconds, and the blob
+parameters 0.7 s a live pixel.
 
 Two masks over the same data:
 
@@ -16,8 +16,8 @@ Two masks over the same data:
     three live pixels (an edge pixel, the interior one, and the flat one), for the blob parameters, whose
     duration-time fit costs about 0.7 s a live pixel however small the record.
 
-The expected products are the API called directly, the way the paper's code calls it, on the record in metres
-(``direct_*``). They are cached: a test must not modify one.
+The expected products are the API called directly on the record in metres (``direct_*``). They are
+cached: a test must not modify one.
 """
 
 import functools
@@ -47,7 +47,7 @@ CASES = {
     "sparse": {"live": ((0, 0), (1, 1), FLAT)},
 }
 
-#: The plan's names, as an independent statement of the three schemas (docs/PHASE_06_DECORRELATION.md).
+#: The blobs' per-pixel variables, as an independent statement of them.
 TRACKS = ("max", "com", "2dcc")
 FIELD_VARIABLES = (
     tuple(f"{k}_{t}" for t in TRACKS for k in ("vr", "vz", "nlags", "level"))
@@ -65,9 +65,9 @@ def dead_pixels(case):
     return tuple((x, y) for y in range(NY) for x in range(NX) if (x, y) not in live)
 
 
-def make_record(case="full", seed=SEED):
+def make_record(case="full"):
     """The record in centimetres, with the ``case``'s mask stored in it."""
-    rng = np.random.RandomState(seed)
+    rng = np.random.RandomState(SEED)
     r = R0 + DR * np.arange(NX)
     z = Z0 + DZ * np.arange(NY)
     R, Z = np.meshgrid(r, z)  # (y, x)
@@ -115,16 +115,16 @@ def in_metres(ds):
 
 
 # ---------------------------------------------------------------------------
-# Settings: the deck's, with one knob moved in every group, so that a setting an adapter
-# fails to pass on shows up as a mismatch where the deck's own values would hide it.
+# Settings: the defaults, with one knob moved in every group, so that a setting an adapter
+# fails to pass on shows up as a mismatch where the defaults would hide it.
 # ---------------------------------------------------------------------------
 
 AVERAGES = Averages(threshold=2.0, window=10, check_max=1, single_counting=True)
-_DECK = Tracking()
+_TRACKING = Tracking()
 TRACKING = Tracking(
-    position_filter=replace(_DECK.position_filter, mask_signal_factor=0.6),
+    position_filter=replace(_TRACKING.position_filter, mask_signal_factor=0.6),
     cross_corr_mask_signal_factor=0.7,
-    velocity=_DECK.velocity,
+    velocity=_TRACKING.velocity,
     neighbour_step=1,
 )
 TDE = Tde(min_cc=0.4, running_mean=True, interpolate=True)
