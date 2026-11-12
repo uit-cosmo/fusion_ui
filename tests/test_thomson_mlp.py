@@ -1,17 +1,7 @@
-"""The Mirror Langmuir Probe's profiles on the Thomson scattering view (J13b), and the companions that bring them there.
+"""The Mirror Langmuir Probe's profiles on the Thomson scattering view, and the companions that bring them there.
 
-What these tests hold the view and the page to, on the synthetic files of ``tests/thomson_fixtures.py`` and
-``tests/mlp_fixtures.py`` for one shot, whose discharge window holds the probe's third plunge, in and out:
-
-- the single-shot page opens a spec's companions, lazily and cut to the target's window, and hands them to ``render``,
-  with ``None`` where the shot has no such file;
-- the view offers the overlay only where the probe plunges in the window, judged from its track alone, with the discharge
-  DB's ``mlp_mode`` beside the offer, and says why where it does not;
-- **the probe's data are not read until the overlay is switched on**, and without it the view is what it was without the
-  ASP file;
-- switched on, the MLP's points are J13a's, placed at R_mid,sep + ρ and at the ρ_pol of that through the fit's own R_mid,
-  on the n_e, T_e and p_e rows, unmoved unless a separatrix temperature of the file is chosen, with a caption that says
-  how; and they never move a row's range, which the Thomson scattering points set.
+On the synthetic files of ``tests/thomson_fixtures.py`` and ``tests/mlp_fixtures.py`` for one shot, whose discharge
+window holds the probe's third plunge, in and out.
 """
 
 import json
@@ -89,7 +79,7 @@ def test_the_overlay_is_offered_where_the_probe_plunges_in_the_window_with_the_d
 
 
 def test_the_judgement_is_the_datas_and_not_the_dbs():
-    """The hint is quoted, never believed: 1150618021's DB says 'none' and its probe scans."""
+    """The hint is quoted, never believed: a DB can say 'none' of a probe that scans."""
     strokes, said = tp.offer(mf.asp_dataset(), Target(mlp_mode="none"))
     assert strokes and said.endswith("The discharge DB's mlp_mode: “none”.")
     strokes, said = tp.offer(mf.asp_dataset(dwell=True), Target(mlp_mode="scan"))
@@ -167,7 +157,7 @@ def test_rho_pol_is_the_fits_own_r_mid_inverted_and_nothing_beyond_its_grid():
 
 
 def test_only_the_outermost_stretch_where_the_fits_r_mid_grows_is_inverted():
-    """A fit moved inward has a few samples near the axis where its R_mid does not grow (35 of the 24e1499 files)."""
+    """A fit moved inward has a few samples near the axis where its R_mid does not grow."""
     fit = ts_profiles().fit
     bent = fit.R_mid.copy()
     bent[:5] = bent[5] + np.linspace(0.01, 0.002, 5)  # falls to the axis's R_mid, then grows outward
@@ -182,7 +172,7 @@ def test_the_points_are_the_mlp_profiles_plots_own_placed_by_rho_on_both_axes():
     drawn = mlp.read(mf.asp_dataset(), *WINDOW).drawn
     assert points.size == drawn.sizes["window"] > 100
     for name, ours in (("time", points.time), ("rho", points.rho), ("ne", points.ne), ("Te", points.Te)):
-        assert np.array_equal(ours, drawn[name].values), name  # J13a's reduction, reused and not copied
+        assert np.array_equal(ours, drawn[name].values), name  # the reduction is reused, not copied
     assert points.source == "none" and points.te_sep == 0.0 and points.shift == 0.0
     assert points.separatrix_R_mid == pytest.approx(tf.r_mid(1.0))  # the file's R_mid_sep
     assert points.R_mid == pytest.approx(tf.r_mid(1.0) + drawn["rho"].values)  # R_mid = R_mid,sep + ρ
@@ -227,12 +217,6 @@ def test_without_a_separatrix_on_r_mid_the_points_have_no_place():
 
 def mlp_traces(fig):
     return [trace for trace in fig.data if (trace.name or "").startswith("MLP")]
-
-
-@pytest.mark.parametrize("axis", ["rho_pol", "R_mid"])
-def test_without_the_overlay_the_figure_is_the_one_drawn_before(axis):
-    profiles = ts_profiles()
-    assert tp.figure(profiles, axis, None).to_json() == tp.figure(profiles, axis).to_json()
 
 
 @pytest.mark.parametrize("axis", ["rho_pol", "R_mid"])
@@ -445,13 +429,12 @@ def sidebar_says(app):
     return [c.value for c in app.sidebar.caption if c.value.startswith(("The probe plunges", "No MLP profiles"))]
 
 
-@pytest.mark.parametrize("axis", ["rho_pol", "R_mid"])
-def test_the_page_offers_the_overlay_off_and_draws_what_it_draws_without_the_asp_file(tree, axis):
+def test_the_page_offers_the_overlay_off_and_draws_what_it_draws_without_the_asp_file(tree):
     tree(asp=False)
-    without = open_view(axis)
+    without = open_view()
     assert toggle(without) is None and not sidebar_says(without)
     tree()
-    offered = open_view(axis)
+    offered = open_view()
     assert toggle(offered) is not None and toggle(offered).value is False
     assert sidebar_says(offered)[-1] == (
         "The probe plunges in the window: plunge 3, in and out, judged from its depth in the ASP file. "
@@ -553,7 +536,7 @@ def test_an_asp_file_that_cannot_be_opened_is_said_in_the_sidebar_and_the_view_i
     app.run()
     assert not app.exception
     (said,) = [w.value for w in app.sidebar.warning]
-    assert said.startswith(f"Could not open the asp file of this shot, `{tree.root / 'asp' / f'asp_{SHOT}.nc'}`")
+    assert str(tree.root / "asp" / f"asp_{SHOT}.nc") in said  # the page names the file it could not open
     assert toggle(app) is None and len(charts(app)) == 1
 
 

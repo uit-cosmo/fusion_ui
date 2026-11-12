@@ -1,32 +1,15 @@
-"""The MLP profiles view: every quantity of the Mirror Langmuir Probe against ρ, over the probe's plunges in the window.
+"""The MLP profiles view: every quantity of the Mirror Langmuir Probe against ρ, over the plunges in the window.
 
-A *live* spec: nothing is cached. The reduction is the paper's, O E Garcia, J M Losada et al., Plasma Phys. Control.
-Fusion 68 (2026) 055034, section 3 (the 1 ms means, against ρ), and it lives in :mod:`fusion_ui.core.mlp`, which says
-what the file holds and how each step works. This module draws it.
+A live spec. The reduction is :mod:`fusion_ui.core.mlp`; this module draws it: one row each for n_e, T_e, J_s, I_s,
+V_p and V_f against ρ in cm, as 1 ms means of the four pins combined. Each plunge has a colour, by its number in the
+shot, and each stroke a marker pointing the way the probe ran, filled in and open out. The far-SOL e-folding lengths
+of n_e and T_e are drawn dashed over the points they were fitted to.
 
-What is drawn
-    One row each for n_e, T_e, J_s, I_s, V_p and V_f, on one shared axis, ρ in cm: the 1 ms means of the four pins
-    combined, over the plunges in the page's window. **Each plunge, in and out, is told apart**: a colour for the
-    plunge, by its number in the shot, so that plunge 3 has the same colour on every shot, and a marker pointing the
-    way the probe ran, filled on the way in (◀) and open on the way out (▷). The four pins are combined, as the paper
-    draws one profile per discharge and as the group's own code combines them; how they differ is the probe trace's to
-    show, pin by pin. The rows of n_e, T_e, J_s and I_s are logarithmic, as the paper's Fig. 2 is, and those of the
-    potentials linear.
+ρ is the file's unless a separatrix temperature is given (``te_sep``): the profiles are then moved so that T_e is that
+temperature at ρ = 0. The fit range stays on the file's ρ. A window with no plunge is said in words, beside the
+probe's depth over the shot.
 
-    The far-SOL e-folding lengths of n_e and T_e (:func:`fusion_ui.core.mlp.far_sol`) are drawn dashed over the points
-    they were fitted to, from the first to the last within the range, and given under the figure. The separatrix is a
-    dotted line at ρ = 0.
-
-    **ρ is the file's**, the distance to the separatrix that the tree's equilibrium mapping gives, unless a separatrix
-    temperature is given (``te_sep``): the profiles are then moved, as the paper moves its own, so that T_e is that
-    temperature at ρ = 0 (:func:`fusion_ui.core.mlp.shift_to`). The fit range stays on the file's ρ, so a shift moves the
-    axis and not the fit. The file holds nothing to work the temperature out from.
-
-    **No plunge in the window**, as when the probe dwells, is said in words, and the one chart is then the probe's
-    depth over the shot, with the window marked, rather than an empty profile.
-
-Everything but :func:`render` is pure: it takes :func:`fusion_ui.core.mlp.read`'s profiles and returns a figure or text,
-so each can be tested without Streamlit.
+Everything but :func:`render` is pure.
 """
 
 from dataclasses import dataclass
@@ -37,8 +20,8 @@ from plotly.subplots import make_subplots
 
 from fusion_ui.core import decimate, mlp, registry
 
-#: The rows: the file's name, how the hover reads it, the axis title, the factor from SI to what is drawn, the unit drawn,
-#: and whether the axis is logarithmic. n_e as the Thomson scattering view draws it.
+#: The rows: the file's name, the hover's name, the axis title, the factor from SI to what is drawn, the unit, and
+#: whether the axis is logarithmic.
 ROWS = (
     ("ne", "n_e", "n<sub>e</sub> [10<sup>20</sup> m<sup>-3</sup>]", 1e-20, "10²⁰ m⁻³", True),
     ("Te", "T_e", "T<sub>e</sub> [eV]", 1.0, "eV", True),
@@ -51,16 +34,12 @@ ROWS = (
 #: ρ is drawn in cm, as the paper draws it.
 CM = 100.0
 
-#: A plunge's colour, by its number in the shot: the data-viz palette's first three slots, in the steps that clear 3:1 on
-#: a light and on a dark page alike, and pass its checks for a scatter in both. A shot plunges at most three times; a
-#: fourth and later are drawn grey rather than in a fourth hue, which a scatter could not tell from the third.
+#: A plunge's colour, by its number in the shot, so that plunge 3 has the same colour on every shot. A fourth and
+#: later are drawn in the neutral.
 PLUNGE_COLOURS = {1: "#2a78d6", 2: "#d95926", 3: "#199e70"}
-OTHER_COLOUR = "#898781"
-#: The marker of each stroke points the way the probe ran, in towards the core and out towards the wall, and is filled on
-#: the way in and open on the way out, so that the two read apart at a glance as well.
+#: The marker of each stroke points the way the probe ran, filled on the way in and open on the way out.
 STROKE_SYMBOLS = {"in": "triangle-left", "out": "triangle-right-open"}
-#: The far-SOL fits, the separatrix and the depth chart's line, in the neutral the Thomson scattering view gives its
-#: separatrix.
+#: The far-SOL fits, the separatrix and the depth chart's line.
 NEUTRAL = "#898781"
 
 
@@ -113,17 +92,10 @@ def drawn_strokes(profiles):
     return found
 
 
-def held_still(profiles):
-    """What the probe did in the window when no plunge is drawn: ``(depth_min, depth_max, rho_min, rho_max)`` in m over
-    the window, NaN where the file does not say."""
-    combined = profiles.combined
-    depth, rho = combined["depth"].values, combined["rho"].values
-
-    def ends(values):
-        values = values[np.isfinite(values)]
-        return (float(values.min()), float(values.max())) if values.size else (np.nan, np.nan)
-
-    return (*ends(depth), *ends(rho))
+def _ends(values):
+    """The smallest and the largest finite value, NaN where there is none."""
+    values = values[np.isfinite(values)]
+    return (float(values.min()), float(values.max())) if values.size else (np.nan, np.nan)
 
 
 def no_plunge_text(profiles):
@@ -147,7 +119,8 @@ def no_plunge_text(profiles):
         else:
             why = "the file holds no ρ for the milliseconds the MLP recorded, so none of them can be placed"
         return f"**No profile {where}:** the probe plunged, but {why}."
-    depth_min, depth_max, rho_min, rho_max = held_still(profiles)
+    depth_min, depth_max = _ends(profiles.combined["depth"].values)
+    rho_min, rho_max = _ends(profiles.combined["rho"].values)
     if np.isfinite(depth_min):
         at = (
             f"at a depth of {depth_min * CM:.1f} cm"
@@ -276,18 +249,15 @@ def _message(text, height=200):
 
 
 def figure(profiles, params=None):
-    """The six quantities against ρ (cm), one row each, sharing that axis: the combined 1 ms means of each stroke, a colour
-    for each plunge and a marker for each way, the far-SOL fits of n_e and T_e dashed, and the separatrix dotted.
-
-    A row the file holds no quantity for is left out. The x axis is ρ as the file holds it, moved by the profiles'
-    shift when there is one (:attr:`fusion_ui.core.mlp.Profiles.shift`).
-    """
+    """The six quantities against ρ (cm), one row each: the combined 1 ms means of each stroke, the far-SOL fits of
+    n_e and T_e dashed, and the separatrix dotted. A row the file holds no quantity for is left out. ρ is the file's,
+    moved by the profiles' shift when there is one."""
     params = params or MlpProfilesParams()
     drawn = profiles.drawn
     rows = [row for row in ROWS if row[0] in drawn and np.isfinite(drawn[row[0]].values).any()]
     if not drawn.sizes["window"] or not rows:
         return _message("No MLP profile in this window.")
-    shift = profiles.shift.by if profiles.shift.ok else 0.0
+    shift = profiles.shift.by  # 0 where the profiles were not moved
     fits = mlp.far_sol(drawn, params.fit_from / CM, params.fit_to / CM)
 
     fig = make_subplots(rows=len(rows), cols=1, shared_xaxes=True, vertical_spacing=0.025)
@@ -296,7 +266,7 @@ def figure(profiles, params=None):
         mask = (drawn["plunge"].values == number) & (drawn["stroke"].values == stroke)
         part = drawn.isel(window=np.flatnonzero(mask))
         x = (part["rho"].values + shift) * CM
-        colour = PLUNGE_COLOURS.get(number, OTHER_COLOUR)
+        colour = PLUNGE_COLOURS.get(number, NEUTRAL)
         label = stroke_label(number, stroke)
         for k, row in enumerate(rows, start=1):
             fig.add_trace(
@@ -308,7 +278,7 @@ def figure(profiles, params=None):
                     legendgroup=label,
                     showlegend=label not in seen,
                     marker=dict(
-                        symbol=STROKE_SYMBOLS.get(stroke, "circle"),
+                        symbol=STROKE_SYMBOLS[stroke],
                         size=8,
                         color=colour,
                         opacity=0.85,
@@ -367,9 +337,7 @@ def figure(profiles, params=None):
 
 def depth_figure(profiles, track):
     """The probe's depth over the shot (cm), with the page's window shaded: the one chart of a window with no plunge.
-
-    ``track`` is :func:`fusion_ui.core.mlp.track` of the file. Decimated to its envelope, so a spike survives.
-    """
+    ``track`` is :func:`fusion_ui.core.mlp.track` of the file."""
     if track is None:
         return _message("The file has no plunge depth.")
     time, depth = track
