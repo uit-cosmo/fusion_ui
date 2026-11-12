@@ -67,18 +67,6 @@ def health_section(conn):
     )
 
 
-def human_bytes(value):
-    """Byte count as something a person reads. Duplicated from the browser page
-    on purpose -- a page cannot import another page, and one shared formatter
-    is not worth a module."""
-    if not value:
-        return ""
-    for unit in ("B", "kB", "MB", "GB", "TB"):
-        if value < 1024 or unit == "TB":
-            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
-        value /= 1024
-
-
 def _entry(row, run_days):
     """One run day as markdown: the heading line, then its purpose."""
     held = f"{row.on_disk} on disk" if row.on_disk else "none on disk"
@@ -116,7 +104,7 @@ def overview_section():
     days.metric("Run days", len(table))
     curated.metric("Curated shots", int(table["shots"].sum()))
     held.metric("Shots on disk", int(table["on_disk"].sum()))
-    size.metric("Size on disk", human_bytes(int(table["bytes"].sum())) or "0 B")
+    size.metric("Size on disk", ui.human_bytes(int(table["bytes"].sum())) or "0 B")
 
     st.caption(
         "A shot number is `1YYMMDDnnn`, so the first seven digits are the run "
@@ -126,7 +114,7 @@ def overview_section():
     )
 
     st.dataframe(
-        table.assign(size=table["bytes"].map(human_bytes)).drop(
+        table.assign(size=table["bytes"].map(ui.human_bytes)).drop(
             columns=["bytes", "mp"]
         ),
         hide_index=True,
@@ -142,8 +130,7 @@ def overview_section():
                 "on disk", format="%d", help="shots on this day with files indexed here"
             ),
             "diagnostics": st.column_config.TextColumn("diagnostics"),
-            # LinkColumn can only take its cell text from the URL itself, so
-            # the cells read "800" under an "MP" header rather than "MP800".
+            # A LinkColumn takes its cell text from the URL: "800", not "MP800".
             "mp_url": st.column_config.LinkColumn(
                 "MP",
                 display_text=r"/(\d+)\.pdf$",
@@ -163,8 +150,7 @@ def overview_section():
 
 
 def main():
-    # The selection contract every later page reads. Set once, here, so phases
-    # 01-04 do not each invent their own shape for it.
+    # The selection contract every page reads.
     st.session_state.setdefault("selection", None)
     st.session_state.setdefault("shot_selection", [])
 

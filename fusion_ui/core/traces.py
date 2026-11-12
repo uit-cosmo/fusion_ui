@@ -1,22 +1,16 @@
-"""One 1-D series from any diagnostic that has them (:data:`SOURCES`): naming it, and materialising it.
+"""One 1-D series from any diagnostic that has them: naming it and reading it.
 
-Today nothing in the app takes "a trace" as its input. Every analysis is a
-``PlotSpec`` bound to one ``Target`` -- one machine, one shot, one diagnostic --
-and the two ways a 1-D series is obtained are unrelated:
-``loader.pixel_series`` for imaging, ``probes.load_trace`` for the ragged probe
-files. Comparing an APD pixel with a probe channel is not expressible.
-
-This module is the whole point of the statistics page: one type that names a
-1-D series from any of those diagnostics (``TraceRef``), and one function that
-materialises it over an arbitrary time window (``extract``). Pure -- numpy and
-xarray only, no Streamlit, no database.
+``TraceRef`` names a series (a pixel of an imaging file, a channel of a probe
+file) and ``extract`` reads it over a time window. That is what lets the
+Statistics page put an APD pixel and a probe channel on one axis. Pure: no
+Streamlit, no database.
 """
 
 from dataclasses import dataclass
 
 import numpy as np
 
-from fusion_ui.core import loader, probes
+from fusion_ui.core import geometry, loader, probes
 
 #: Diagnostics whose files carry one shared time axis and a 3-D image variable.
 IMAGING = ("apd", "phantom")
@@ -24,8 +18,8 @@ IMAGING = ("apd", "phantom")
 #: Diagnostics whose files carry one ragged time axis per (quantity, position).
 PROBE = ("asp", "fsp")
 
-#: Every diagnostic a trace can be taken from. The others have none to take: a Thomson scattering file holds profiles,
-#: one reading per laser pulse and channel, which the Statistics page's time-trace statistics do not describe.
+#: Every diagnostic a trace can be taken from. A Thomson scattering file holds
+#: profiles, one reading per laser pulse and channel, not traces.
 SOURCES = IMAGING + PROBE
 
 
@@ -42,13 +36,13 @@ class TraceRef:
 
     @property
     def target_key(self):
-        """``cmod_1160616027_apd_p`` -- matches ``Target.key``."""
+        """``cmod_1160616027_apd_p``, as ``Target.key``."""
         suffix = "p" if self.preprocessed else "r"
         return f"{self.machine}_{self.shot}_{self.diagnostic}_{suffix}"
 
     @property
     def key(self):
-        """``cmod_1160616027_apd_p_pixel_6_6`` -- unique per channel."""
+        """``cmod_1160616027_apd_p_pixel_6_6``, unique per channel."""
         return f"{self.target_key}_{'_'.join(str(c) for c in self.channel)}"
 
 
@@ -63,13 +57,11 @@ class Trace:
 
 
 def channels(ds, diagnostic) -> list:
-    """Every selectable channel in this file.
+    """Every channel of this file: all ``("pixel", x, y)`` of an imaging file,
+    every ``("probe", quantity, position)`` of a probe file.
 
-    All ``("pixel", x, y)`` for imaging, every ``("probe", quantity,
-    position)`` from :func:`probes.quantities_and_positions` for a probe.
-    Reads names and shapes only -- no data touched. A diagnostic that is not
-    in :data:`SOURCES` has no traces: that is refused, not answered with an
-    empty list that reads as "a file with no channels".
+    Reads names and shapes only. A diagnostic that is not in :data:`SOURCES`
+    raises: an empty list would read as a file with no channels.
     """
     if diagnostic not in SOURCES:
         raise ValueError(
@@ -89,170 +81,129 @@ def channels(ds, diagnostic) -> list:
     ]
 
 
-def _imaging_coords(ds, x, y):
-    """``{"R", "Z", ...}`` for one imaging pixel, ``None`` where unknown."""
-    coords = {"R": None, "Z": None, "rho": None, "dr_sep": None}
-    try:
-        coords["R"] = float(ds["R"].isel(x=int(x), y=int(y)))
-        coords["Z"] = float(ds["Z"].isel(x=int(x), y=int(y)))
-    except (KeyError, IndexError, ValueError):
-        pass
-    return coords
-
-
 def extract(ds, ref, t_start, t_end):
-    """The series over ``[t_start, t_end]``, or ``None`` when the record
-    misses it entirely.
+    """The series over ``[t_start, t_end]`` in memory, or ``None`` when the
+    record misses the window.
 
-    Imaging pixels are sliced with ``.sel(time=...)`` on the file's shared
-    axis; probe channels are masked on their own ragged time array. ``.load()``
-    happens here, so callers always get in-memory numpy -- and nothing outside
-    the window is ever read.
+    A pixel is sliced on the file's shared time axis, so nothing outside the
+    window is read. A probe channel is masked on its own ragged axis.
     """
     import imaging_methods as im
 
-    kind = ref.channel[0] if ref.channel else None
+    t_start, t_end = float(t_start), float(t_end)
+    coords = {"R": None, "Z": None, "rho": None, "dr_sep": None}
+    kind = ref.channel[0]
     if kind == "pixel":
-        _, x, y = ref.channel
-        variable = loader.image_variable(ds)
-        da = (
-            ds[variable]
-            .isel(x=int(x), y=int(y))
-            .sel({loader.TIME_DIM: slice(float(t_start), float(t_end))})
+        x, y = int(ref.channel[1]), int(ref.channel[2])
+        series = (
+            ds[loader.image_variable(ds)]
+            .isel(x=x, y=y)
+            .sel({loader.TIME_DIM: slice(t_start, t_end)})
             .load()
         )
-        time = np.asarray(da[loader.TIME_DIM].values, dtype=float)
-        value = np.asarray(da.values, dtype=float)
+        time = np.asarray(series[loader.TIME_DIM].values, dtype=float)
+        value = np.asarray(series.values, dtype=float)
         if time.size == 0:
             return None
         dt = float(im.get_dt(ds))
-        coords = _imaging_coords(ds, x, y)
         try:
-            from fusion_ui.core import geometry as _geometry
-
-            dr = _geometry.pixel_dr_sep(
-                ds, int(x), int(y), float((time[0] + time[-1]) / 2)
-            )
-            coords["dr_sep"] = dr
-        except Exception:  # noqa: BLE001 - a label coordinate must never fail a trace
+            coords["R"] = float(ds["R"].isel(x=x, y=y))
+            coords["Z"] = float(ds["Z"].isel(x=x, y=y))
+        except (KeyError, IndexError, ValueError):
             pass
-        return Trace(ref=ref, time=time, value=value, dt=dt, coords=coords, label="")
-    if kind == "probe":
+        coords["dr_sep"] = geometry.pixel_dr_sep(ds, x, y, (time[0] + time[-1]) / 2)
+    elif kind == "probe":
         _, quantity, position = ref.channel
-        trace = probes.load_trace(ds, quantity, int(position))
-        time = np.asarray(trace.time, dtype=float)
-        value = np.asarray(trace.value, dtype=float)
-        mask = (time >= float(t_start)) & (time <= float(t_end))
+        loaded = probes.load_trace(ds, quantity, int(position))
+        time = np.asarray(loaded.time, dtype=float)
+        value = np.asarray(loaded.value, dtype=float)
+        mask = (time >= t_start) & (time <= t_end)
         time, value = time[mask], value[mask]
         if time.size == 0:
             return None
         dt = float(np.median(np.diff(time))) if time.size >= 2 else float("nan")
-        coords = {"R": None, "Z": None, "rho": None, "dr_sep": None}
-        try:
-            from fusion_ui.core import geometry as _geometry
+        coords["rho"] = geometry.probe_rho(ds, quantity, int(position), t_start, t_end)
+    else:
+        raise KeyError(f"unknown channel {ref.channel!r}")
+    return Trace(ref=ref, time=time, value=value, dt=dt, coords=coords, label="")
 
-            coords["rho"] = _geometry.probe_rho(
-                ds, quantity, int(position), float(t_start), float(t_end)
-            )
-        except Exception:  # noqa: BLE001 - a label coordinate must never fail a trace
-            pass
-        return Trace(ref=ref, time=time, value=value, dt=dt, coords=coords, label="")
-    raise KeyError(f"unknown channel {ref.channel!r}")
+
+def channel_text(channel) -> str:
+    """``pixel (6, 6)`` or ``ne_0``."""
+    if channel[0] == "pixel":
+        return f"pixel ({channel[1]}, {channel[2]})"
+    return f"{channel[1]}_{channel[2]}"
+
+
+def magnetic_text(trace) -> str:
+    """``R-R_sep=+1.20 cm`` for a pixel, ``rho=0.42`` for a probe channel,
+    ``""`` when the coordinate is unknown."""
+    kind = trace.ref.channel[0]
+    coords = trace.coords or {}
+    if kind == "pixel" and coords.get("dr_sep") is not None:
+        return f"R-R_sep={coords['dr_sep']:+.2f} cm"
+    if kind == "probe" and coords.get("rho") is not None:
+        return f"rho={coords['rho']:.2f}"
+    return ""
 
 
 def label(trace, style="magnetic") -> str:
-    """A legend/row label for ``trace``.
+    """A legend label for ``trace``: its shot, its diagnostic and where it is.
 
-    ``style`` is ``"channel"`` (``pixel (6, 6)`` / ``ne_0``), ``"rz"``
-    (``R=89.1, Z=-2.3``), or ``"magnetic"`` (``R-R_sep=+1.2 cm`` for pixels,
-    ``rho=0.42`` for probe channels). Falls back to ``"rz"`` -- then to
-    ``"channel"`` -- when a coordinate is ``None``.
+    ``style`` is ``"channel"`` (:func:`channel_text`), ``"rz"``
+    (``R=89.10, Z=-2.30``) or ``"magnetic"`` (:func:`magnetic_text`).
+    ``"magnetic"`` falls back to ``"rz"`` and ``"rz"`` to ``"channel"`` when
+    the coordinate is unknown.
     """
+    if style not in ("channel", "rz", "magnetic"):
+        raise ValueError(f"unknown label style {style!r}")
     ref = trace.ref
-    kind = ref.channel[0] if ref.channel else None
     coords = trace.coords or {}
-
-    def channel_label():
-        if kind == "pixel":
-            _, x, y = ref.channel
-            return f"{ref.shot} {ref.diagnostic} pixel ({x}, {y})"
-        if kind == "probe":
-            _, quantity, position = ref.channel
-            return f"{ref.shot} {ref.diagnostic} {quantity}_{position}"
-        return ref.key
-
-    def rz_label():
-        r, z = coords.get("R"), coords.get("Z")
-        if r is not None and z is not None and kind == "pixel":
-            return f"{ref.shot} {ref.diagnostic} R={r:.2f}, Z={z:.2f}"
-        return channel_label()
-
-    if style == "channel":
-        return channel_label()
-    if style == "rz":
-        return rz_label()
-    if style == "magnetic":
-        if kind == "pixel":
-            dr = coords.get("dr_sep")
-            if dr is not None:
-                return f"{ref.shot} {ref.diagnostic} R-R_sep={dr:+.2f} cm"
-            return rz_label()
-        if kind == "probe":
-            rho = coords.get("rho")
-            if rho is not None:
-                return f"{ref.shot} {ref.diagnostic} rho={rho:.2f}"
-            return channel_label()
-        return channel_label()
-    raise ValueError(f"unknown label style {style!r}")
+    where = magnetic_text(trace) if style == "magnetic" else ""
+    r, z = coords.get("R"), coords.get("Z")
+    if not where and style != "channel" and ref.channel[0] == "pixel":
+        if r is not None and z is not None:
+            where = f"R={r:.2f}, Z={z:.2f}"
+    return f"{ref.shot} {ref.diagnostic} {where or channel_text(ref.channel)}"
 
 
 def _nearest_within_half_step(base, point):
-    """Boolean mask selecting the grid point nearest ``point``.
+    """A mask over ``base`` that selects the grid point nearest ``point``, when
+    it is within half the grid spacing. Otherwise it selects nothing.
 
-    Matches only when the sample rounds to that grid point, i.e. within half
-    the reference spacing -- exact float equality would miss samples computed
-    through different arithmetic on another file's clock. A degenerate
-    single-point base falls back to ``isclose``; anything else (empty base,
-    non-finite or zero spacing, sample too far away) selects nothing.
+    Exact equality would miss a sample whose time came through other
+    arithmetic on another file's clock.
     """
-    import math
-
-    if base.size == 0 or not math.isfinite(float(point)):
-        return np.zeros_like(base, dtype=bool)
+    nothing = np.zeros_like(base, dtype=bool)
+    if base.size == 0 or not np.isfinite(point):
+        return nothing
     if base.size == 1:
         return np.isclose(base, point, rtol=1e-9, atol=1e-12)
     step = np.median(np.diff(base))
-    if not math.isfinite(float(step)) or step <= 0:
+    if not np.isfinite(step) or step <= 0:
         return base == point
     nearest = int(np.argmin(np.abs(base - point)))
-    if abs(float(base[nearest]) - float(point)) <= float(step) / 2:
-        mask = np.zeros_like(base, dtype=bool)
-        mask[nearest] = True
-        return mask
-    return np.zeros_like(base, dtype=bool)
+    if abs(base[nearest] - point) <= step / 2:
+        nothing[nearest] = True
+    return nothing
 
 
 def common_grid(traces, reference) -> list:
     """Every trace linearly interpolated onto ``reference``'s time base.
 
-    Only pairwise statistics need this -- a CCF between two different files is
-    impossible without it, since probe channels live on independent ragged
-    axes. When every trace already shares the reference's time base -- the
-    common case, several pixels of one APD file -- this is a no-op, not a
-    round-trip through ``np.interp``.
+    Pairwise statistics need it: probe channels each have their own time axis.
+    A trace that is already on the reference's base comes back as it is.
 
-    Points of the reference base outside a trace's own range become NaN rather
-    than ``np.interp``'s flat extrapolation: two non-overlapping windows must
-    read as missing data, not as a bogus flat line with a spurious CCF peak.
-    A trace with a single sample cannot be interpolated, so its value lands on
-    the nearest grid point within half the reference spacing (nearest-neighbour
-    binning) and everything else stays NaN.
+    Points of the base outside a trace's own range are NaN, not
+    ``np.interp``'s flat extrapolation, which would give a spurious CCF peak.
+    A trace of one sample cannot be interpolated: its value goes to the nearest
+    grid point within half the spacing.
     """
     base = np.asarray(reference.time, dtype=float)
     out = []
     for trace in traces:
         time = np.asarray(trace.time, dtype=float)
-        if time.shape == base.shape and bool(np.array_equal(time, base)):
+        if np.array_equal(time, base):
             out.append(trace)
             continue
         values = np.asarray(trace.value, dtype=float)
@@ -262,13 +213,12 @@ def common_grid(traces, reference) -> list:
                 resampled[_nearest_within_half_step(base, time[0])] = values[0]
         else:
             resampled = np.interp(base, time, values).astype(float)
-            # np.interp clamps outside xp; mask back to NaN.
             resampled[(base < time.min()) | (base > time.max())] = float("nan")
         out.append(
             Trace(
                 ref=trace.ref,
-                time=np.asarray(base),
-                value=np.asarray(resampled),
+                time=base,
+                value=resampled,
                 dt=trace.dt,
                 coords=trace.coords,
                 label=trace.label,

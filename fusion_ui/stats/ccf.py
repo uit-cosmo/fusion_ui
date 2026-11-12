@@ -1,10 +1,9 @@
 """Cross-correlation of every trace against one reference trace.
 
-``compute(trace, reference, params)`` -- the only pairwise statistic. The two
-arrays must be the same length on the same base, which is what
-:func:`fusion_ui.core.traces.common_grid` guarantees before ``compute`` is
-called. The lag at the maximum and the maximum itself go into the result, and
-into the legend -- that number is usually the reason someone drew the plot.
+The one pairwise statistic: ``compute(trace, reference, params)``. Both must be
+on the same time base, which :func:`fusion_ui.core.traces.common_grid` sees to
+before ``compute`` is called. The lag of the maximum and the maximum go in the
+result and in the legend.
 """
 
 from dataclasses import dataclass
@@ -28,18 +27,8 @@ class CcfParams:
 
 
 def compute(trace, reference, params):
-    """``fppanalysis.corr_fun`` of one trace against the reference, truncated."""
-    from fppanalysis import corr_fun
-
-    values = np.asarray(trace.value, dtype=float)
-    ref_values = np.asarray(reference.value, dtype=float)
-    lags, curve = corr_fun(
-        values, ref_values, float(trace.dt), norm=True, biased=bool(params.biased)
-    )
-    lags = np.asarray(lags, dtype=float)
-    curve = np.asarray(curve, dtype=float)
-    mask = np.abs(lags) <= float(params.max_lag)
-    lags, curve = lags[mask], curve[mask]
+    """The trace's correlation with the reference, and where it peaks."""
+    lags, curve = statistics.correlation(trace, reference, params)
     peak = int(np.argmax(curve))
     return xr.Dataset(
         {
@@ -53,35 +42,19 @@ def compute(trace, reference, params):
 
 def render(items, params):
     """One cross-correlation per trace, peak lag and value in the legend."""
-    from plotly.colors import qualitative
-
-    cycle = qualitative.Plotly
     figure = go.Figure()
     for index, (trace, result) in enumerate(items):
-        colour = cycle[index % len(cycle)]
-        name = trace.label or trace.ref.key
-        name = (
-            f"{name}  peak {float(result['peak_lag']):.3g} s "
-            f"({float(result['peak_value']):.3g})"
+        statistics.add_line(
+            figure,
+            index,
+            result["lag"].values,
+            result["ccf"].values,
+            f"{statistics.name(trace)}  peak {float(result['peak_lag']):.3g} s "
+            f"({float(result['peak_value']):.3g})",
         )
-        figure.add_trace(
-            go.Scatter(
-                x=result["lag"].values,
-                y=result["ccf"].values,
-                mode="lines",
-                line=dict(color=colour),
-                name=name,
-            )
-        )
-    figure.update_layout(
-        xaxis_title="lag [s]",
-        yaxis_title="cross-correlation",
-        height=440,
-        margin=dict(l=10, r=10, t=40, b=10),
-        legend=dict(orientation="h", y=-0.2),
-        title=f"CCF of {len(items)} traces",
+    return statistics.finish(
+        figure, f"CCF of {len(items)} traces", "lag [s]", "cross-correlation"
     )
-    return figure
 
 
 SPEC = statistics.register(

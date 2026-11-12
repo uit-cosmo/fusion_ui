@@ -1,21 +1,14 @@
 """Multi shot: one scalar against an axis, across a selection of shots.
 
-Reads the scalar store (:func:`fusion_ui.core.store.scalar_frame`) and the shot
-catalog's metadata, collapses per-pixel scalars to one number per shot, and
-draws the scatter coloured by confinement mode. Clicking a point jumps to that
-shot's single-shot view with the parameters that produced it, so an outlier is
-one click from being explained. A point from ``method_fields`` or
-``blob_parameters`` opens the Fields page instead (:mod:`fusion_ui.jump`): on
-that shot and settings, and on the pixel when the aggregate is a fixed pixel.
-A ``blob_parameters`` point that no ``method_fields`` settings go with still
-opens the single-shot page on its exact run, since the Fields page would show
-other blob numbers than the one clicked.
+Reads the scalar store and the shot table's metadata, collapses per-pixel
+scalars to one number per shot, and draws the scatter coloured by confinement
+mode. The scalars and their sources are whatever the store holds; a scalar is
+named by its label where :mod:`fusion_ui.core.scalar_labels` has one, and by
+its stored name otherwise.
 
-The page owns no analysis of its own: the scalar names come from whatever the
-store already holds -- the retired ``density_scan`` seed (plot key ``density_scan_import``), or results computed through
-the single-shot view or ``fusion-ui precompute``. The scalar picker and the
-y-axis name a scalar by what it is when :mod:`fusion_ui.core.scalar_labels`
-knows it, and by its stored name otherwise.
+A click on a point opens what it came from (:mod:`fusion_ui.jump`): the Fields
+page for ``method_fields`` and ``blob_parameters`` when it has settings to open
+on, the single-shot page otherwise.
 """
 
 import json
@@ -45,14 +38,21 @@ def source_label(source):
     return f"{plot} · {diagnostic} ({kind}) · {params_hash[:8]}"
 
 
-def jump_to_single_shot(conn, machine, shot, source):
-    """Set the selection (and, for a real spec, the parameters) and navigate.
+def pick(label, options, key, **kwargs):
+    """A sidebar selectbox. A stored choice that is no longer offered falls
+    back to the first option."""
+    if key in st.session_state and st.session_state[key] not in options:
+        st.session_state[key] = options[0]
+    return st.sidebar.selectbox(label, options, key=key, **kwargs)
 
-    The single-shot page reads ``selection`` and, when ``spec.{diagnostic}`` is
-    set, that plot; seeding the parameter widgets from the stored ``params_json``
-    and marking the run ready means the click lands directly on the plot that
-    produced the point, from cache. Seeded imports (plot ``density_scan_import``)
-    have no spec to restore, so the jump is just the shot.
+
+def jump_to_single_shot(conn, machine, shot, source):
+    """Open the single-shot page on the plot and parameters that made a point.
+
+    The page reads ``selection`` and ``spec.{diagnostic}``. Its parameter
+    widgets are seeded from the stored ``params_json`` and the run is marked
+    ready, so the plot is drawn from the cache. A source whose plot is not
+    registered has no spec to restore: the jump is the shot alone.
     """
     plot, params_hash, diagnostic, preprocessed = source
     st.session_state["selection"] = jump.selection(machine, shot, source)
@@ -74,16 +74,13 @@ def jump_to_single_shot(conn, machine, shot, source):
 def fields_settings(conn, machine, shot, source):
     """The ``method_fields`` settings the Fields page opens on for a point, or ``None``.
 
-    The Fields page's settings are ``method_fields`` parameter sets: a point
-    from ``method_fields`` names its own, and one from ``blob_parameters`` is
-    matched to the sets that go with it (:func:`fusion_ui.jump.settings_for`).
-    ``None`` is a point the Fields page has nothing to open for: another
-    source, a deployment without ``method_fields``, or a ``blob_parameters``
-    run that no settings go with. The ledger is read here and nothing is
-    written.
+    A ``method_fields`` point names its own, and a ``blob_parameters`` point is
+    matched to the settings that go with it
+    (:func:`fusion_ui.jump.settings_for`). ``None`` for any other source, and
+    for a ``blob_parameters`` run that no settings go with.
     """
     plot, params_hash, _, _ = source
-    if not jump.opens_fields(plot) or "method_fields" not in registry.REGISTRY:
+    if not jump.opens_fields(plot):
         return None
     found, _ = prod.specs(registry)
     options = prod.settings(conn, found["method_fields"], machine)
@@ -91,32 +88,21 @@ def fields_settings(conn, machine, shot, source):
     return jump.settings_for(plot, params_hash, found, options, good)
 
 
-def jump_to_fields(machine, shot, source, settings, how, pixel):
-    """Open the Fields page on the shot, the settings and, for a fixed pixel, the pixel.
-
-    The selection is set as for any jump, so that the other pages follow, and
-    the Fields page reads ``fields.open`` once (its ``apply_request``).
-    """
-    st.session_state["selection"] = jump.selection(machine, shot, source)
-    st.session_state["fields.open"] = jump.fields_request(shot, settings, how, pixel)
-    st.switch_page("pages/5_fields.py")
-
-
 def jump_to_point(conn, machine, shot, source, how, pixel):
     """Open what a clicked point came from.
 
-    The Fields page when it has settings to open on (the two phase-06
-    products), the single-shot page otherwise: every other source, and a
-    ``blob_parameters`` run that no ``method_fields`` settings go with. The
-    Fields page shows the blob parameters of the settings it is on, not of an
-    arbitrary run, so for that run only the single-shot page can show the
-    numbers that were clicked, from the parameters that made them.
+    The Fields page shows the blob parameters of the settings it is on. So a
+    ``blob_parameters`` run that no settings go with opens the single-shot
+    page, like every other source: only there are the numbers the ones clicked.
     """
     settings = fields_settings(conn, machine, shot, source)
     if settings is None:
         jump_to_single_shot(conn, machine, shot, source)
-    else:
-        jump_to_fields(machine, shot, source, settings, how, pixel)
+        return
+    # The Fields page reads `fields.open` once.
+    st.session_state["selection"] = jump.selection(machine, shot, source)
+    st.session_state["fields.open"] = jump.fields_request(shot, settings, how, pixel)
+    st.switch_page("pages/5_fields.py")
 
 
 def main():
@@ -126,12 +112,8 @@ def main():
     st.title("Multi shot")
 
     conn = ui.get_connection()
-    # One machine at a time. `rescan` only ever deletes its own machine's rows,
-    # so an index can hold two machines at once (the single-shot page picks
-    # between them); shot numbers are not unique across machines, and neither
-    # the selection carried over from the browser nor the metadata join is
-    # keyed by machine, so an unscoped frame would silently overlay two
-    # different discharges on one point.
+    # One machine at a time: shot numbers are not unique across machines, and
+    # neither the browser's selection nor the metadata join names the machine.
     machine = config.MACHINE
     frame = store.scalar_frame(conn, machine=machine)
     if frame.empty:
@@ -143,19 +125,19 @@ def main():
         )
         return
 
-    names = multishot.distinct_names(frame)
-
     # ---- sidebar: what to plot -------------------------------------------
-    # Shown as "name — label" where there is a label; the value stays the stored name.
-    name = st.sidebar.selectbox(
-        "Scalar", names, format_func=scalar_labels.option, key="ms.scalar"
+    # Shown as "name — label" where there is a label; the value is the stored name.
+    name = pick(
+        "Scalar",
+        multishot.distinct_names(frame),
+        "ms.scalar",
+        format_func=scalar_labels.option,
     )
-
-    sources = multishot.distinct_sources(frame, name)
-    if "ms.source" in st.session_state and st.session_state["ms.source"] not in sources:
-        st.session_state["ms.source"] = sources[0]
-    source = st.sidebar.selectbox(
-        "Source", sources, format_func=source_label, key="ms.source"
+    source = pick(
+        "Source",
+        multishot.distinct_sources(frame, name),
+        "ms.source",
+        format_func=source_label,
     )
 
     shot_level = multishot.is_shot_level(frame, source, name)
@@ -174,20 +156,8 @@ def main():
         if not pairs:
             st.sidebar.warning("No pixel-indexed values for this source.")
             return
-        xs = sorted({x for x, _ in pairs})
-        if (
-            "ms.pixel.x" in st.session_state
-            and st.session_state["ms.pixel.x"] not in xs
-        ):
-            st.session_state["ms.pixel.x"] = xs[0]
-        x = st.sidebar.selectbox("x", xs, key="ms.pixel.x")
-        ys = sorted({y for px, y in pairs if px == x})
-        if (
-            "ms.pixel.y" in st.session_state
-            and st.session_state["ms.pixel.y"] not in ys
-        ):
-            st.session_state["ms.pixel.y"] = ys[0]
-        y = st.sidebar.selectbox("y", ys, key="ms.pixel.y")
+        x = pick("x", sorted({x for x, _ in pairs}), "ms.pixel.x")
+        y = pick("y", sorted({y for px_, y in pairs if px_ == x}), "ms.pixel.y")
         pixel = (x, y)
 
     x_axis = st.sidebar.selectbox(
@@ -212,8 +182,7 @@ def main():
     # ---- the number itself ----------------------------------------------
     aggregated = multishot.aggregate(frame, source, name, how, pixel)
     if shot_selection:
-        selected = set(shot_selection)
-        aggregated = aggregated[aggregated["shot"].isin(selected)]
+        aggregated = aggregated[aggregated["shot"].isin(set(shot_selection))]
 
     if aggregated.empty:
         st.info("No stored values fall in this selection.", icon="ℹ️")
@@ -239,10 +208,8 @@ def main():
         )
         return
 
-    # A shot-level scalar (x = y = -1) is already one number per shot and
-    # `aggregate` hands it back untouched, so naming a collapse would describe
-    # the axis as something the values never went through.
-    collapse = None if shot_level else multishot.AGGREGATES.get(how, how)
+    # A shot-level scalar is one number per shot: there is no collapse to name.
+    collapse = None if shot_level else multishot.AGGREGATES[how]
     st.caption(
         f"{name} · {collapse or 'one value per shot'} · "
         f"{len(plot_frame)} shots on `{machine}` · click a point to open that shot"
@@ -277,12 +244,10 @@ def main():
         selection_mode="points",
         key="ms.scatter",
     )
-    selection = decimate.selection_points(event)
-    for point in selection:
+    for point in decimate.selection_points(event):
         clicked = multishot.clicked_shot(point)
         if clicked is not None:
-            machine, shot = clicked
-            jump_to_point(conn, machine, shot, source, how, pixel)
+            jump_to_point(conn, *clicked, source, how, pixel)
             break
 
 

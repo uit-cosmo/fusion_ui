@@ -19,8 +19,29 @@ class _Params:
     source: str = "test"
 
 
+def seed(conn, plot, params, scalars, shot=None, machine="cmod"):
+    """One ``ok`` run of ``plot`` on a preprocessed APD shot, with its scalars: what a compute leaves
+    in the ledger, without a blob. Returns the params hash."""
+    target = registry.Target(machine, shot or SHOT, "apd", True, "", 0.0, 0.0, "none")
+    digest, _ = store.record_params(conn, plot, params)
+    run = store.record_run(
+        conn,
+        target,
+        plot,
+        digest,
+        blob_path=None,
+        status="ok",
+        error=None,
+        seconds=None,
+        code_version="test",
+    )
+    store.write_scalars(conn, run["id"], scalars)
+    return digest
+
+
 @pytest.fixture
-def deployment(monkeypatch, tmp_path, data_folder, discharge_db):
+def empty_deployment(monkeypatch, tmp_path, data_folder, discharge_db):
+    """The conftest tree, indexed, with nothing in the scalar store."""
     import streamlit as st
 
     database = tmp_path / "state" / "shot_explorer.sqlite"
@@ -32,7 +53,6 @@ def deployment(monkeypatch, tmp_path, data_folder, discharge_db):
 
     conn = db.open_db(database)
     catalog.rescan(conn, str(data_folder), "cmod", str(discharge_db))
-    _write_scalars(conn)
     conn.close()
 
     st.cache_data.clear()
@@ -42,27 +62,22 @@ def deployment(monkeypatch, tmp_path, data_folder, discharge_db):
     st.cache_resource.clear()
 
 
-def _write_scalars(conn, machine="cmod", scalars=None):
-    """Two shots with stored ``vx_c`` values, one source, per-pixel."""
-    for shot, values in scalars or [
-        (1160616027, {(6, 6): 400.0, (6, 5): 380.0}),
-        (1110201007, {(6, 6): 100.0}),
-    ]:
-        target = registry.Target(machine, shot, "apd", True, "", 0.0, 0.0, "none")
-        params_hash, _ = store.record_params(conn, "synthetic", _Params())
-        run = store.record_run(
-            conn,
-            target,
-            "synthetic",
-            params_hash,
-            blob_path=None,
-            status="ok",
-            error=None,
-            seconds=None,
-            code_version="test",
-        )
-        mapping = {(x, y, "vx_c"): v for (x, y), v in values.items()}
-        store.write_scalars(conn, run["id"], mapping)
+@pytest.fixture
+def deployment(empty_deployment):
+    """Two shots with stored ``vx_c`` values from one unregistered source, per pixel."""
+    conn = db.open_db(empty_deployment)
+    seed(conn, "synthetic", _Params(), {(6, 6, "vx_c"): 400.0, (6, 5, "vx_c"): 380.0})
+    seed(conn, "synthetic", _Params(), {(6, 6, "vx_c"): 100.0}, shot=1110201007)
+    conn.close()
+    return empty_deployment
+
+
+def seed_shot_level(database):
+    """``number_events`` on both shots, as one number per shot (``x = y = -1``)."""
+    conn = db.open_db(database)
+    for shot in (1160616027, 1110201007):
+        seed(conn, "shotlevel", _Params(), {"number_events": 42.0}, shot=shot)
+    conn.close()
 
 
 def run(path, default_timeout=60):
@@ -79,28 +94,13 @@ def widget(app, kind, label):
     return matches[0]
 
 
-def test_an_empty_store_explains_itself(
-    monkeypatch, tmp_path, data_folder, discharge_db
-):
-    import streamlit as st
+def y_axis_title(app):
+    (chart,) = app.get("plotly_chart")
+    return json.loads(chart.proto.spec)["layout"]["yaxis"]["title"]["text"]
 
-    database = tmp_path / "state" / "shot_explorer.sqlite"
-    monkeypatch.setenv("FUSION_DATA_FOLDER", str(data_folder))
-    monkeypatch.setenv("FUSION_DISCHARGE_DB", str(discharge_db))
-    monkeypatch.setenv("FUSION_UI_DB", str(database))
-    monkeypatch.setenv("FUSION_UI_CACHE", str(tmp_path / "cache"))
-    monkeypatch.setenv("FUSION_MACHINE", "cmod")
 
-    conn = db.open_db(database)
-    catalog.rescan(conn, str(data_folder), "cmod", str(discharge_db))
-    conn.close()
-    st.cache_data.clear()
-    st.cache_resource.clear()
-
-    app = run(MULTI_SHOT)
-    assert app.warning
-    st.cache_data.clear()
-    st.cache_resource.clear()
+def test_an_empty_store_explains_itself(empty_deployment):
+    assert run(MULTI_SHOT).warning
 
 
 def test_the_page_offers_the_stored_scalar_and_renders(deployment):
@@ -108,6 +108,8 @@ def test_the_page_offers_the_stored_scalar_and_renders(deployment):
     assert widget(app, "selectbox", "Scalar").options == ["vx_c"]
     # Both shots have a stored value, so the scatter carries two points.
     assert any("2 shots" in c.value for c in app.caption)
+    # A scalar without a label keeps its stored name on the axis.
+    assert y_axis_title(app) == "vx_c (mean over pixels)"
 
 
 def test_a_carried_over_selection_restricts_the_scatter(deployment):
@@ -133,7 +135,7 @@ def test_another_machines_scalars_are_left_out(deployment):
     """`rescan` only deletes its own machine's rows, so an index can hold two
     machines at once -- and shot numbers are not unique across them."""
     conn = db.open_db(deployment)
-    _write_scalars(conn, machine="aug", scalars=[(1160616027, {(6, 6): -1.0})])
+    seed(conn, "synthetic", _Params(), {(6, 6, "vx_c"): -1.0}, machine="aug")
     conn.close()
 
     app = run(MULTI_SHOT)
@@ -142,25 +144,8 @@ def test_another_machines_scalars_are_left_out(deployment):
 
 def test_a_shot_level_scalar_is_not_labelled_as_a_pixel_collapse(deployment):
     """`x = y = -1` is already one number per shot: there is no collapse to
-    name, and the Aggregate picker is hidden rather than defaulting to mean."""
-    conn = db.open_db(deployment)
-    for shot in (1160616027, 1110201007):
-        target = registry.Target("cmod", shot, "apd", True, "", 0.0, 0.0, "none")
-        params_hash, _ = store.record_params(conn, "shotlevel", _Params())
-        run = store.record_run(
-            conn,
-            target,
-            "shotlevel",
-            params_hash,
-            blob_path=None,
-            status="ok",
-            error=None,
-            seconds=None,
-            code_version="test",
-        )
-        store.write_scalars(conn, run["id"], {"number_events": 42.0})
-    conn.close()
-
+    name, on the caption or the axis, and the Aggregate picker is hidden."""
+    seed_shot_level(deployment)
     app = AppTest.from_file(MULTI_SHOT, default_timeout=60)
     app.session_state["ms.scalar"] = "number_events"
     app.run()
@@ -169,10 +154,13 @@ def test_a_shot_level_scalar_is_not_labelled_as_a_pixel_collapse(deployment):
     caption = next(c.value for c in app.caption if "shots on" in c.value)
     assert "mean over pixels" not in caption
     assert "one value per shot" in caption
+    assert (
+        y_axis_title(app) == "number of events in the conditional average<br>[no unit]"
+    )
 
 
 # ---------------------------------------------------------------------------
-# The two phase-06 products in the ledger, as a batch leaves them.
+# method_fields and blob_parameters in the ledger, as a batch leaves them.
 # ---------------------------------------------------------------------------
 
 APP = str(REPO_ROOT / "fusion_ui" / "app.py")
@@ -242,25 +230,8 @@ class Products:
 
     @staticmethod
     def seed(conn, plot, params, *names):
-        target = registry.Target("cmod", SHOT, "apd", True, "", 0.0, 0.0, "none")
-        digest, _ = store.record_params(conn, plot, params)
-        run = store.record_run(
-            conn,
-            target,
-            plot,
-            digest,
-            blob_path=None,
-            status="ok",
-            error=None,
-            seconds=None,
-            code_version="test",
-        )
-        store.write_scalars(
-            conn,
-            run["id"],
-            {(x, y, name): value for name in names for x, y, value in PIXELS},
-        )
-        return digest
+        scalars = {(x, y, name): value for name in names for x, y, value in PIXELS}
+        return seed(conn, plot, params, scalars)
 
     def source(self, plot, key):
         return (plot, self.hash[plot, key], "apd", 1)
@@ -278,11 +249,6 @@ def products(deployment):
 # ---------------------------------------------------------------------------
 # What the y-axis calls a scalar: its label, or its stored name when it has none.
 # ---------------------------------------------------------------------------
-
-
-def y_axis_title(app):
-    (chart,) = app.get("plotly_chart")
-    return json.loads(chart.proto.spec)["layout"]["yaxis"]["title"]["text"]
 
 
 def test_the_axis_title_names_a_labelled_scalar_by_what_it_is(deployment):
@@ -327,44 +293,10 @@ def test_a_long_title_is_broken_into_lines_the_axis_has_room_for(deployment):
     assert any("(mean over pixels)" in line for line in lines)
 
 
-def test_the_axis_title_of_a_shot_level_labelled_scalar_has_no_collapse(deployment):
-    """``number_events`` is shared with ``two_dca`` and the seed, and one number per shot here."""
-    conn = db.open_db(deployment)
-    for shot in (1160616027, 1110201007):
-        target = registry.Target("cmod", shot, "apd", True, "", 0.0, 0.0, "none")
-        params_hash, _ = store.record_params(conn, "shotlevel", _Params())
-        run = store.record_run(
-            conn,
-            target,
-            "shotlevel",
-            params_hash,
-            blob_path=None,
-            status="ok",
-            error=None,
-            seconds=None,
-            code_version="test",
-        )
-        store.write_scalars(conn, run["id"], {"number_events": 42.0})
-    conn.close()
-    app = AppTest.from_file(MULTI_SHOT, default_timeout=60)
-    app.session_state["ms.scalar"] = "number_events"
-    app.run()
-    assert not app.exception, app.exception
-    assert (
-        y_axis_title(app) == "number of events in the conditional average<br>[no unit]"
-    )
-
-
-def test_a_scalar_without_a_label_keeps_its_stored_name_on_the_axis(deployment):
-    app = run(MULTI_SHOT)
-    assert widget(app, "selectbox", "Scalar").options == ["vx_c"]
-    assert y_axis_title(app) == "vx_c (mean over pixels)"
-
-
 def test_the_scalar_picker_shows_a_labelled_name_with_its_label_and_stores_the_name(
     deployment,
 ):
-    """``vx_c`` is in the store with no label, and three of the 32 names are beside it."""
+    """``vx_c`` is in the store with no label, and three labelled names are beside it."""
     conn = db.open_db(deployment)
     Products(conn)
     conn.close()
@@ -410,8 +342,8 @@ def test_a_stored_name_set_before_the_page_runs_is_still_found_by_the_picker(
 
 
 # ---------------------------------------------------------------------------
-# A click on a point: the Fields page for the two phase-06 products, the
-# single-shot page for every other source.
+# A click on a point: the Fields page for method_fields and blob_parameters,
+# the single-shot page for every other source.
 # ---------------------------------------------------------------------------
 
 
@@ -545,6 +477,9 @@ def test_a_blob_parameters_point_opens_on_the_method_fields_settings_that_go_wit
     assert sidebar(app, "Shot").value == SHOT
     assert app.session_state["fields.pixel"] == (5, 4)
     assert app.session_state["selection"] == SELECTION
+    # The single-shot page is not the destination: its form is not seeded.
+    assert "spec.apd" not in app.session_state
+    assert not [k for k in app.session_state.filtered_state if k.startswith("params.")]
 
 
 def test_a_blob_point_that_several_settings_go_with_opens_on_the_one_with_fields_on_the_shot(
@@ -619,21 +554,6 @@ def test_a_blob_point_no_settings_go_with_opens_the_single_shot_page_on_its_exac
     assert app.session_state[f"ready.blob_parameters.cmod_{SHOT}_apd_p"] is True
 
 
-@pytest.mark.parametrize("key", ["default", "short"])
-def test_a_blob_point_with_settings_still_opens_the_fields_page(
-    deployment, products, monkeypatch, key
-):
-    """The other branch: when ``method_fields`` settings go with the blob run, nothing changes. The
-    single-shot page is not the destination, and the form of ``blob_parameters`` is not seeded.
-    """
-    click(monkeypatch)
-    app = open_multi_shot(**fixed_pixel(products.source("blob_parameters", key), "lr"))
-    assert titles(app) == ["Fields"]
-    assert sidebar(app, "Settings").value == products.hash["method_fields", key]
-    assert "spec.apd" not in app.session_state
-    assert not [k for k in app.session_state.filtered_state if k.startswith("params.")]
-
-
 def test_the_jump_reads_the_ledger_and_writes_nothing(
     deployment, products, monkeypatch
 ):
@@ -653,7 +573,7 @@ def test_the_jump_reads_the_ledger_and_writes_nothing(
 def test_a_point_from_an_unregistered_source_opens_the_single_shot_page(
     deployment, monkeypatch
 ):
-    """The seed's rows, and any plot this deployment no longer has: the jump is the shot alone."""
+    """Rows under a plot key that is not registered: the jump is the shot alone."""
     click(monkeypatch)
     app = open_multi_shot(ms__scalar="vx_c")
     assert titles(app) == ["Single shot"]
@@ -665,22 +585,8 @@ def test_a_point_from_a_registered_source_opens_the_single_shot_page_on_its_plot
     deployment, monkeypatch
 ):
     conn = db.open_db(deployment)
-    spec = registry.get("taud_psd")
-    params = spec.params(refx=3, refy=2)
-    target = registry.Target("cmod", SHOT, "apd", True, "", 0.0, 0.0, "none")
-    digest, _ = store.record_params(conn, "taud_psd", params)
-    run = store.record_run(
-        conn,
-        target,
-        "taud_psd",
-        digest,
-        blob_path=None,
-        status="ok",
-        error=None,
-        seconds=None,
-        code_version="test",
-    )
-    store.write_scalars(conn, run["id"], {(3, 2, "taud_psd"): 2e-5})
+    params = registry.get("taud_psd").params(refx=3, refy=2)
+    seed(conn, "taud_psd", params, {(3, 2, "taud_psd"): 2e-5})
     conn.close()
 
     click(monkeypatch)
@@ -691,19 +597,4 @@ def test_a_point_from_a_registered_source_opens_the_single_shot_page_on_its_plot
     assert app.session_state["spec.apd"].key == "taud_psd"
     assert app.session_state["params.taud_psd.refx"] == 3
     assert app.session_state["params.taud_psd.refy"] == 2
-    assert "fields.open" not in app.session_state
-
-
-def test_a_product_point_falls_back_to_the_single_shot_page_without_a_fields_page(
-    deployment, products, monkeypatch
-):
-    """A deployment that has not registered method_fields has nothing for the Fields page to read."""
-    from fusion_ui.core import registry as registry_module
-
-    click(monkeypatch)
-    monkeypatch.delitem(registry_module.REGISTRY, "method_fields")
-    app = open_multi_shot(
-        **fixed_pixel(products.source("method_fields", "short"), "vr_com")
-    )
-    assert titles(app) == ["Single shot"]
     assert "fields.open" not in app.session_state

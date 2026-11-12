@@ -1,9 +1,7 @@
-"""Probability density over one trace: histogram or KDE.
+"""Probability density of one trace's samples: histogram or KDE.
 
-``fppanalysis.distributions.get_hist(v, bins)`` for the histogram,
-``distribution(v, bins, kernel=True)`` for the KDE. Neither normalises its
-input, so ``standardise`` is applied here -- and it is on by default because a
-pixel in counts and a probe in m^-3 are otherwise not on the same axis at all.
+``fppanalysis`` normalises neither, so ``standardise`` is applied here. It is
+on by default: a pixel in counts and a probe in m^-3 share no axis otherwise.
 """
 
 from dataclasses import dataclass
@@ -59,36 +57,25 @@ def compute(trace, params):
 
 
 def render(items, params):
-    """One smooth curve per trace, colour-cycled, log-y when asked.
-
-    Splined in the drawing, not in the data: the stored bins are untouched,
-    Plotly just stops drawing the histogram steps.
-    """
-    from plotly.colors import qualitative
-
-    cycle = qualitative.Plotly
+    """One curve per trace, log-y when asked. The spline is in the drawing
+    only: the bins are as computed."""
     figure = go.Figure()
     for index, (trace, result) in enumerate(items):
-        colour = cycle[index % len(cycle)]
-        figure.add_trace(
-            go.Scatter(
-                x=result["value"].values,
-                y=result["pdf"].values,
-                mode="lines",
-                line=dict(color=colour, shape="spline", smoothing=0.8),
-                name=trace.label or trace.ref.key,
-            )
+        statistics.add_line(
+            figure,
+            index,
+            result["value"].values,
+            result["pdf"].values,
+            statistics.name(trace),
+            line=dict(shape="spline", smoothing=0.8),
         )
-    figure.update_layout(
-        xaxis_title="standardised samples" if params.standardise else "samples",
-        yaxis_title="probability density",
+    return statistics.finish(
+        figure,
+        f"PDF of {len(items)} traces",
+        "standardised samples" if params.standardise else "samples",
+        "probability density",
         yaxis_type="log" if params.log_y else "linear",
-        height=440,
-        margin=dict(l=10, r=10, t=40, b=10),
-        legend=dict(orientation="h", y=-0.2),
-        title=f"PDF of {len(items)} traces",
     )
-    return figure
 
 
 SPEC = statistics.register(

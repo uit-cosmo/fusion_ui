@@ -1,8 +1,8 @@
-"""Shot browser -- every shot on disk, joined to the discharge metadata.
+"""Shot browser: every shot on disk, joined to the discharge metadata.
 
-Reads the ``shots`` table only; it never walks the data tree. Shots whose files
-are on disk but which nobody has curated yet are listed like any other, flagged
-in the ``meta`` column, so a newly copied shot is visible the moment it lands.
+Reads the ``shots`` table only; it never walks the data tree. A shot with files
+but no discharge-DB entry is listed like any other, flagged in the ``meta``
+column.
 """
 
 import math
@@ -21,22 +21,13 @@ _RANGE_FILTERS = [
     ("n_e_bar", "Line-averaged density [10²⁰ m⁻³]"),
 ]
 
-# Only a quarter of the curated shots carry every quantity, so "no value" has to
-# be a first-class option on each filter rather than a silent exclusion.
+# Most shots lack some of these, so each filter says what it does with a
+# shot that has no value.
 _MISSING_LABEL = {
     "f_GW": "…keep shots with no f_GW",
     "I_p": "…keep shots with no I_p",
     "n_e_bar": "…keep shots with no density",
 }
-
-
-def human_bytes(value):
-    if not value:
-        return ""
-    for unit in ("B", "kB", "MB", "GB", "TB"):
-        if value < 1024 or unit == "TB":
-            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
-        value /= 1024
 
 
 def rescan_now():
@@ -57,11 +48,8 @@ def rescan_now():
 
 
 def range_filter(table, column, label):
-    """A slider over the finite values, plus what to do with the missing ones.
-
-    Most metadata columns are only partly filled in, so silently dropping the
-    NaNs would hide most of the collection behind a filter nobody touched.
-    """
+    """A slider over the finite values, and a checkbox that keeps the shots
+    with none."""
     values = table[column].dropna()
     values = values[values.apply(math.isfinite)]
     if values.empty:
@@ -126,11 +114,8 @@ def sidebar_filters(table):
 
 
 def default_target(row):
-    """The (diagnostic, preprocessed) a click on this shot should land on.
-
-    Preprocessed wins where it exists -- it is what every analysis actually
-    consumes -- and diagnostics are tried in the enum's order.
-    """
+    """The ``(diagnostic, preprocessed)`` a click on this shot lands on: the
+    first diagnostic it has a file of, preprocessed where there is one."""
     for diagnostic in catalog.DIAGNOSTICS:
         available = row[diagnostic]
         if available:
@@ -169,13 +154,12 @@ def main():
 
     shown = filtered.assign(
         meta=filtered["has_metadata"].map({True: "✓", False: "⚠"}),
-        size=filtered["bytes"].map(human_bytes),
+        size=filtered["bytes"].map(ui.human_bytes),
         window=[
             "" if not math.isfinite(a) or not math.isfinite(b) else f"{a:.2f}–{b:.2f}"
             for a, b in zip(filtered["t_start"], filtered["t_end"])
         ],
-        # Seconds in the store, microseconds on screen: fast-camera intervals
-        # are single-digit µs, and four leading zeros help nobody sort.
+        # Seconds in the store, microseconds on screen.
         phantom_dt_us=filtered["phantom_dt"] * 1e6,
     )
     columns = [
@@ -195,10 +179,8 @@ def main():
     if filtered["machine"].nunique() > 1:
         columns.insert(0, "machine")
 
-    # Missing measurements show as a greyed "None": st.dataframe renders NaN
-    # that way and neither a Styler's na_rep nor column_config overrides it.
-    # Left as numeric columns anyway -- sorting on f_GW and I_p is the point of
-    # this table, and a formatted string column sorts lexicographically.
+    # st.dataframe shows a missing number as a greyed "None", whatever the
+    # column config says. The columns stay numeric so that they sort.
     event = st.dataframe(
         shown[columns],
         hide_index=True,
@@ -250,7 +232,7 @@ def main():
         selection_row.success(
             f"Selected shot **{int(row['shot'])}** "
             f"({diagnostic}{', preprocessed' if preprocessed else ''}) — "
-            "the single-shot view lands in phase 01.",
+            "the Single shot page opens on it.",
             icon="🎯",
         )
     elif picked is not None:

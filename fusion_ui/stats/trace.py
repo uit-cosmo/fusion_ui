@@ -1,10 +1,9 @@
 """The windowed time series themselves, one line per trace.
 
-Raw or preprocessed is a property of the file each trace came from, not of
-this view: a trace off a raw file draws raw counts, one off a preprocessed
-file draws the normalised series. Long traces are min/max-envelope decimated
-to a per-trace point budget on the way in -- Plotly dies above roughly 50k
-points, and a full APD window is 583k samples.
+A trace off a raw file draws raw counts, one off a preprocessed file the
+normalised series. Long traces are min/max-envelope decimated to a point budget
+per trace: Plotly dies above roughly 50k points, and a full APD window is 583k
+samples.
 """
 
 from dataclasses import dataclass
@@ -27,145 +26,99 @@ class TraceParams:
 
 def compute(trace, params):
     """The trace's windowed series, decimated for Plotly."""
-    time = np.asarray(trace.time, dtype=float)
-    values = np.asarray(trace.value, dtype=float)
-    time, values = decimate.envelope(time, values, int(params.max_points))
-    return xr.Dataset(
-        {"signal": ("time", np.asarray(values, dtype=float))},
-        coords={"time": np.asarray(time, dtype=float)},
+    time, values = decimate.envelope(
+        np.asarray(trace.time, dtype=float),
+        np.asarray(trace.value, dtype=float),
+        int(params.max_points),
     )
+    return xr.Dataset({"signal": ("time", values)}, coords={"time": time})
 
 
-from plotly.colors import qualitative
-
-_CYCLE = qualitative.Plotly
+def _figure(series):
+    """``[(name, time, signal), …]`` on one axis."""
+    figure = go.Figure()
+    for index, (label, time, signal) in enumerate(series):
+        statistics.add_line(figure, index, time, signal, label)
+    # The traces are decimated, so zooming the axes alone shows nothing new: a
+    # drag must draw a selection box.
+    return statistics.finish(
+        figure,
+        f"Time traces ({len(series)} traces)",
+        "time [s]",
+        "signal",
+        dragmode="select",
+    )
 
 
 def figure(items, params):
-    """The overview: every trace's (decimated) series on one axis.
-
-    Pure, like every other ``render`` -- this is what the zoomable
-    :func:`render` draws first, and what unit tests assert on.
-    """
-    overview = go.Figure()
-    for index, (trace, result) in enumerate(items):
-        colour = _CYCLE[index % len(_CYCLE)]
-        overview.add_trace(
-            go.Scatter(
-                x=result["time"].values,
-                y=result["signal"].values,
-                mode="lines",
-                line=dict(color=colour),
-                name=trace.label or trace.ref.key,
-            )
-        )
-    overview.update_layout(
-        xaxis_title="time [s]",
-        yaxis_title="signal",
-        height=440,
-        margin=dict(l=10, r=10, t=40, b=10),
-        legend=dict(orientation="h", y=-0.2),
-        title=f"Time traces ({len(items)} traces)",
-        dragmode="select",
+    """The overview: every trace's decimated series on one axis. Pure."""
+    return _figure(
+        [
+            (statistics.name(trace), result["time"].values, result["signal"].values)
+            for trace, result in items
+        ]
     )
-    return overview
 
 
 def render(items, params):
     """The zoomable trace view, drawn into Streamlit; returns ``None``.
 
-    The overview draws the envelope-decimated series, and zooming the Plotly
-    axes alone could never show more than the envelope kept -- so a box/lasso
-    selection slices each trace's full-resolution data to that window first
-    and the detail redraws off the slices, spending the whole point budget
-    where the user is looking. The same loop
-    :func:`fusion_ui.core.decimate.zoomable_trace` closes for one trace, done
-    here for the whole basket at once. The zoom window is view state, never a
-    parameter.
+    A box selection cuts each trace's full-resolution data to that window and
+    decimates it again, so a zoom shows what the overview's envelope left out.
+    The zoom window is view state, never a parameter.
     """
     import streamlit as st
-
-    from fusion_ui.core import decimate
 
     zoom_key = "stats.trace_zoom"
     gen_key = "stats.trace_zoomgen"
     gen = st.session_state.get(gen_key, 0)
     window = st.session_state.get(zoom_key)
 
+    dropped = 0
     if window is not None:
-        sliced = [
-            (trace, decimate.slice_to_window(trace.time, trace.value,
-                                             window[0], window[1]))
+        cut = [
+            decimate.slice_to_window(trace.time, trace.value, window[0], window[1])
             for trace, _ in items
         ]
-        kept = [(t, xy) for t, xy in sliced if len(xy[0]) >= 2]
-        if not kept:
-            # Stale window (the basket or window changed underneath it):
-            # drop it rather than drawing empty traces.
+        series = [
+            (statistics.name(trace), *decimate.envelope(x, y, int(params.max_points)))
+            for (trace, _), (x, y) in zip(items, cut)
+            if len(x) >= 2
+        ]
+        dropped = len(items) - len(series)
+        if not series:
+            # A window left from another basket or time window: drop it.
             st.session_state.pop(zoom_key, None)
-        else:
-            detail = go.Figure()
-            for index, (trace, (x, y)) in enumerate(kept):
-                colour = _CYCLE[index % len(_CYCLE)]
-                x, y = decimate.envelope(x, y, int(params.max_points))
-                detail.add_trace(
-                    go.Scatter(
-                        x=x, y=y, mode="lines", line=dict(color=colour),
-                        name=trace.label or trace.ref.key,
-                    )
-                )
-            detail.update_layout(
-                xaxis_title="time [s]", yaxis_title="signal", height=440,
-                margin=dict(l=10, r=10, t=40, b=10),
-                legend=dict(orientation="h", y=-0.2),
-                title=f"Time traces ({len(kept)} traces)",
-                # A plain drag must draw a selection box, not a client-side
-                # zoom: the traces are decimated, so zooming the axes alone
-                # shows nothing new.
-                dragmode="select",
-            )
-            event = st.plotly_chart(
-                detail, on_select="rerun", selection_mode=["box", "lasso"],
-                key=f"stats.trace.detail.{gen}", use_container_width=True,
-            )
-            narrowed = decimate.selected_x_range(event)
-            if narrowed is not None and tuple(narrowed) != tuple(window):
-                # Remount under a new key, as the pixel selector does: the
-                # chart's selection lives in widget state and would otherwise
-                # overwrite the window that was just chosen on the next run.
-                st.session_state[zoom_key] = (float(narrowed[0]),
-                                              float(narrowed[1]))
-                st.session_state[gen_key] = gen + 1
-                st.rerun()
-                return None
-            dropped = len(sliced) - len(kept)
-            st.caption(
-                f"Zoomed to {window[0]:.6f}–{window[1]:.6f} s"
-                + (f" ({dropped} traces have no samples here)" if dropped else "")
-                + ". Drag a box to zoom deeper."
-            )
-            if st.button("Reset zoom", key="stats.trace.reset"):
-                st.session_state.pop(zoom_key, None)
-                st.session_state[gen_key] = gen + 1
-                st.rerun()
-            return None
+            window = None
 
     event = st.plotly_chart(
-        figure(items, params), on_select="rerun",
-        selection_mode=["box", "lasso"], key=f"stats.trace.overview.{gen}",
+        figure(items, params) if window is None else _figure(series),
+        on_select="rerun",
+        selection_mode=["box", "lasso"],
+        key=f"stats.trace.{'overview' if window is None else 'detail'}.{gen}",
         use_container_width=True,
     )
     ranged = decimate.selected_x_range(event)
     if ranged is not None and (window is None or tuple(ranged) != tuple(window)):
-        st.session_state[zoom_key] = (float(ranged[0]), float(ranged[1]))
+        decimate._apply_window(st, zoom_key, gen_key, gen, ranged)
+        return None
+
+    if window is None:
+        total = sum(len(trace.time) for trace, _ in items)
+        st.caption(
+            f"{total} samples in window, one envelope-decimated trace per series. "
+            "Drag a box to zoom in."
+        )
+        return None
+    st.caption(
+        f"Zoomed to {window[0]:.6f}–{window[1]:.6f} s"
+        + (f" ({dropped} traces have no samples here)" if dropped else "")
+        + ". Drag a box to zoom deeper."
+    )
+    if st.button("Reset zoom", key="stats.trace.reset"):
+        st.session_state.pop(zoom_key, None)
         st.session_state[gen_key] = gen + 1
         st.rerun()
-        return None
-    total = sum(len(trace.time) for trace, _ in items)
-    st.caption(
-        f"{total} samples in window, one envelope-decimated trace per series. "
-        "Drag a box to zoom in."
-    )
     return None
 
 

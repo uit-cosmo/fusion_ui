@@ -25,23 +25,16 @@ class AcfParams:
 
 
 def compute(trace, params):
-    """``fppanalysis.corr_fun`` of one trace against itself, truncated."""
-    from fppanalysis import corr_fun
-
-    values = np.asarray(trace.value, dtype=float)
-    dt = float(trace.dt)
-    lags, curve = corr_fun(values, values, dt, norm=True, biased=bool(params.biased))
-    lags = np.asarray(lags, dtype=float)
-    curve = np.asarray(curve, dtype=float)
-    mask = np.abs(lags) <= float(params.max_lag)
-    lags, curve = lags[mask], curve[mask]
-
+    """The trace's correlation with itself, and the fit when asked."""
+    lags, curve = statistics.correlation(trace, trace, params)
     data = {"acf": ("lag", curve)}
     if params.fit:
         estimator = im.DurationTimeEstimator(
             im.SecondOrderStatistic.ACF, im.Analytics.TwoSided
         )
-        taud, lam = estimator.estimate_duration_time(values, dt)
+        taud, lam = estimator.estimate_duration_time(
+            np.asarray(trace.value, dtype=float), float(trace.dt)
+        )
         data["acf_fit"] = ("lag", np.asarray(autocorrelation(lags, taud, lam)))
         data["taud"] = float(taud)
         data["lam"] = float(lam)
@@ -50,47 +43,12 @@ def compute(trace, params):
 
 def render(items, params):
     """One autocorrelation per trace; each fit dashed in its curve's colour."""
-    from plotly.colors import qualitative
-
-    cycle = qualitative.Plotly
     figure = go.Figure()
     for index, (trace, result) in enumerate(items):
-        colour = cycle[index % len(cycle)]
-        group = f"trace-{index}"
-        lags = result["lag"].values
-        name = trace.label or trace.ref.key
-        if "taud" in result:
-            name = f"{name}  tau_d={float(result['taud']):.3g} s"
-        figure.add_trace(
-            go.Scatter(
-                x=lags,
-                y=result["acf"].values,
-                mode="lines",
-                line=dict(color=colour),
-                legendgroup=group,
-                name=name,
-            )
-        )
-        if "acf_fit" in result:
-            figure.add_trace(
-                go.Scatter(
-                    x=lags,
-                    y=result["acf_fit"].values,
-                    mode="lines",
-                    line=dict(color=colour, dash="dash"),
-                    legendgroup=group,
-                    showlegend=False,
-                )
-            )
-    figure.update_layout(
-        xaxis_title="lag [s]",
-        yaxis_title="autocorrelation",
-        height=440,
-        margin=dict(l=10, r=10, t=40, b=10),
-        legend=dict(orientation="h", y=-0.2),
-        title=f"ACF of {len(items)} traces",
+        statistics.add_fitted(figure, index, trace, result, "acf")
+    return statistics.finish(
+        figure, f"ACF of {len(items)} traces", "lag [s]", "autocorrelation"
     )
-    return figure
 
 
 SPEC = statistics.register(

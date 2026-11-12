@@ -1,11 +1,14 @@
 """Many-pixel mode: eligibility, pixel stamping, estimates, overlays."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 import xarray as xr
+from streamlit.testing.v1 import AppTest
 
 import fusion_ui.plots  # noqa: F401 - registers every spec
-from fusion_ui.core import multipixel, precompute, registry, store
+from fusion_ui.core import catalog, db, multipixel, registry, store
 from fusion_ui.plots import spectra
 
 CACHED_ELIGIBLE = {"taud_psd", "velocity_tde"}
@@ -17,25 +20,21 @@ def test_supported_matches_the_per_pixel_specs_and_the_live_trace():
         for key, spec in registry.REGISTRY.items()
         if multipixel.supported(spec) and spec.cached
     } == CACHED_ELIGIBLE
-    # The frame viewer is live -- nothing to stamp, nothing to cache -- and is
-    # eligible through its overlay, which reads each trace off the open file.
+    # The frame viewer is live and eligible through its overlay.
     assert multipixel.supported(registry.get("raw_frames"))
     assert not multipixel.supported(registry.get("probe_trace"))
     # A cached spec that sweeps every pixel itself has no refx/refy to stamp.
     assert not multipixel.supported(registry.get("dead_pixels"))
 
 
-def test_with_pixel_stamps_a_top_level_pair_without_mutating():
+def test_with_pixel_stamps_a_copy_and_leaves_other_params_alone():
     params = spectra.TaudPsdParams(refx=6, refy=6)
     stamped = multipixel.with_pixel(params, 2, 3)
     assert (stamped.refx, stamped.refy) == (2, 3)
     assert (params.refx, params.refy) == (6, 6)
-
-
-def test_precompute_still_stamps_the_pixel_after_the_refactor():
-    spec = registry.get("taud_psd")
-    params = precompute.default_params(spec, pixel=(2, 3))
-    assert (params.refx, params.refy) == (2, 3)
+    # `precompute --pixel` hands every plot named through it.
+    whole_array = registry.get("dead_pixels").params()
+    assert multipixel.with_pixel(whole_array, 2, 3) == whole_array
 
 
 def test_pixels_from_points_reads_customdata_deduplicates_and_sorts():
@@ -94,15 +93,14 @@ def test_estimate_counts_cached_pixels_from_the_ledger(conn, cache, target):
     )
     assert (est.total, est.cached, est.to_compute) == (3, 2, 1)
     # Median of the seeded 10 s and 20 s runs prices the one miss.
-    assert est.seconds_per_pixel == pytest.approx(15.0)
     assert est.eta_seconds == pytest.approx(15.0)
+    assert multipixel.describe(est) == "3 pixels · 2 cached · ~15 s"
 
 
 def test_estimate_with_no_history_has_no_eta(conn, cache, target):
     spec = registry.get("taud_psd")
     est = multipixel.estimate(conn, spec, target, spec.params(), [(0, 0)])
     assert est.to_compute == 1
-    assert est.seconds_per_pixel is None
     assert est.eta_seconds is None
 
 
@@ -169,7 +167,7 @@ def test_scalar_data_skips_shot_level_scalars(target):
 
 
 # ---------------------------------------------------------------------------
-# End to end through the store, in the test_plots_roundtrip.py style
+# End to end through the store
 # ---------------------------------------------------------------------------
 
 
@@ -234,16 +232,18 @@ def test_raw_overlay_draws_one_decimated_trace_per_pixel(target):
 
 
 # ---------------------------------------------------------------------------
-# Smoke test: Many mode on the single-shot page
+# Many mode on the single-shot page
 # ---------------------------------------------------------------------------
 
+SINGLE_SHOT = str(
+    Path(__file__).resolve().parent.parent / "fusion_ui" / "pages" / "2_single_shot.py"
+)
 
-def test_many_mode_renders_the_selector(monkeypatch, tmp_path, apd_dataset_path):
+
+@pytest.fixture
+def page(monkeypatch, tmp_path, apd_dataset_path):
+    """The single-shot page over one indexed tiny APD file (shot 1234), not yet run."""
     import streamlit as st
-    from pathlib import Path
-    from streamlit.testing.v1 import AppTest
-
-    from fusion_ui.core import catalog, db
 
     data_folder = apd_dataset_path.parent.parent  # .../alcator
     database = tmp_path / "state" / "shot_explorer.sqlite"
@@ -258,121 +258,53 @@ def test_many_mode_renders_the_selector(monkeypatch, tmp_path, apd_dataset_path)
     conn.close()
     st.cache_data.clear()
     st.cache_resource.clear()
-    try:
-        single_shot = str(
-            Path(__file__).resolve().parent.parent / "fusion_ui" / "pages"
-            / "2_single_shot.py"
-        )
-        app = AppTest.from_file(single_shot, default_timeout=60)
-        app.session_state["spec.apd"] = registry.get("taud_psd")
-        app.run()
-        assert not app.exception, app.exception
-
-        radios = [w for w in app.sidebar.radio if w.label == "Pixels"]
-        assert radios, "expected the One/Many pixel-mode radio"
-        radios[0].set_value("Many").run()
-        assert not app.exception, app.exception
-        assert app.get("plotly_chart"), "expected the pixel-map selector to render"
-    finally:
-        st.cache_data.clear()
-        st.cache_resource.clear()
+    app = AppTest.from_file(SINGLE_SHOT, default_timeout=60)
+    app.database = database
+    yield app
+    st.cache_data.clear()
+    st.cache_resource.clear()
 
 
-def test_many_mode_on_the_live_trace_draws_selector_and_overlay(
-    monkeypatch, tmp_path, apd_dataset_path
-):
+def many(app):
+    """Run the page and switch it to Many."""
+    app.run()
+    assert not app.exception, app.exception
+    radios = [w for w in app.sidebar.radio if w.label == "Pixels"]
+    assert radios, "expected the One/Many pixel-mode radio"
+    radios[0].set_value("Many").run()
+    assert not app.exception, app.exception
+    return app
+
+
+def test_many_mode_renders_the_selector(page):
+    page.session_state["spec.apd"] = registry.get("taud_psd")
+    app = many(page)
+    assert app.get("plotly_chart"), "expected the pixel-map selector to render"
+
+
+def test_many_mode_on_the_live_trace_draws_selector_and_overlay(page):
     """The pixel trace needs no run and no button: selector plus overlay."""
-    import streamlit as st
-    from pathlib import Path
-    from streamlit.testing.v1 import AppTest
+    # raw_frames is the default spec for apd: no need to pick one.
+    page.session_state["pixels.cmod_1234_apd_r"] = [(0, 0), (1, 1)]
+    app = many(page)
+    assert len(app.get("plotly_chart")) >= 2
+    assert any("Drag a box to zoom in" in c.value for c in app.caption)
+    labels = [b.label for b in app.button]
+    assert not any(
+        label.startswith("Run on") or label == "Compute" for label in labels
+    ), f"live mode must offer no run button, found {labels}"
 
-    from fusion_ui.core import catalog, db
-
-    data_folder = apd_dataset_path.parent.parent  # .../alcator
-    database = tmp_path / "state" / "shot_explorer.sqlite"
-    monkeypatch.setenv("FUSION_DATA_FOLDER", str(data_folder))
-    monkeypatch.setenv("FUSION_DISCHARGE_DB", str(tmp_path / "no_such_discharges.json"))
-    monkeypatch.setenv("FUSION_UI_DB", str(database))
-    monkeypatch.setenv("FUSION_UI_CACHE", str(tmp_path / "cache"))
-    monkeypatch.setenv("FUSION_MACHINE", "cmod")
-
-    conn = db.open_db(database)
-    catalog.rescan(conn, str(data_folder), "cmod", None)
+    conn = db.connect(app.database)
+    (runs,) = conn.execute("SELECT COUNT(*) FROM runs").fetchone()
     conn.close()
-    st.cache_data.clear()
-    st.cache_resource.clear()
-    try:
-        single_shot = str(
-            Path(__file__).resolve().parent.parent / "fusion_ui" / "pages"
-            / "2_single_shot.py"
-        )
-        app = AppTest.from_file(single_shot, default_timeout=60)
-        # raw_frames is the default spec for apd: no need to pick one.
-        app.session_state["pixels.cmod_1234_apd_r"] = [(0, 0), (1, 1)]
-        app.run()
-        assert not app.exception, app.exception
-
-        radios = [w for w in app.sidebar.radio if w.label == "Pixels"]
-        assert radios, "expected the One/Many pixel-mode radio"
-        radios[0].set_value("Many").run()
-        assert not app.exception, app.exception
-        # Selector plus the two-trace overlay, drawn with no Compute in sight.
-        assert len(app.get("plotly_chart")) >= 2
-        assert any("Drag a box to zoom in" in c.value for c in app.caption)
-        labels = [b.label for b in app.button]
-        assert not any(
-            label.startswith("Run on") or label == "Compute" for label in labels
-        ), f"live mode must offer no run button, found {labels}"
-
-        conn = db.connect(database)
-        (runs,) = conn.execute("SELECT COUNT(*) FROM runs").fetchone()
-        conn.close()
-        assert runs == 0, "a live overlay must not write ledger rows"
-    finally:
-        st.cache_data.clear()
-        st.cache_resource.clear()
+    assert runs == 0, "a live overlay must not write ledger rows"
 
 
-def test_many_mode_live_trace_zoom_resamples_the_window(
-    monkeypatch, tmp_path, apd_dataset_path
-):
+def test_many_mode_live_trace_zoom_resamples_the_window(page):
     """A stored zoom window slices the dataset before the overlay redraws."""
-    import streamlit as st
-    from pathlib import Path
-    from streamlit.testing.v1 import AppTest
-
-    from fusion_ui.core import catalog, db
-
-    data_folder = apd_dataset_path.parent.parent  # .../alcator
-    database = tmp_path / "state" / "shot_explorer.sqlite"
-    monkeypatch.setenv("FUSION_DATA_FOLDER", str(data_folder))
-    monkeypatch.setenv("FUSION_DISCHARGE_DB", str(tmp_path / "no_such_discharges.json"))
-    monkeypatch.setenv("FUSION_UI_DB", str(database))
-    monkeypatch.setenv("FUSION_UI_CACHE", str(tmp_path / "cache"))
-    monkeypatch.setenv("FUSION_MACHINE", "cmod")
-
-    conn = db.open_db(database)
-    catalog.rescan(conn, str(data_folder), "cmod", None)
-    conn.close()
-    st.cache_data.clear()
-    st.cache_resource.clear()
-    try:
-        single_shot = str(
-            Path(__file__).resolve().parent.parent / "fusion_ui" / "pages"
-            / "2_single_shot.py"
-        )
-        app = AppTest.from_file(single_shot, default_timeout=60)
-        app.session_state["pixels.cmod_1234_apd_r"] = [(0, 0), (1, 1)]
-        # The tiny fixture spans 1.0-1.02 s; zoom to its middle.
-        app.session_state["multizoom.cmod_1234_apd_r"] = (1.005, 1.010)
-        app.run()
-        assert not app.exception, app.exception
-
-        radios = [w for w in app.sidebar.radio if w.label == "Pixels"]
-        radios[0].set_value("Many").run()
-        assert not app.exception, app.exception
-        assert any("Zoomed to" in c.value for c in app.caption)
-        assert "Reset zoom" in [b.label for b in app.button]
-    finally:
-        st.cache_data.clear()
-        st.cache_resource.clear()
+    page.session_state["pixels.cmod_1234_apd_r"] = [(0, 0), (1, 1)]
+    # The tiny fixture spans 1.0-1.02 s; zoom to its middle.
+    page.session_state["multizoom.cmod_1234_apd_r"] = (1.005, 1.010)
+    app = many(page)
+    assert any("Zoomed to" in c.value for c in app.caption)
+    assert "Reset zoom" in [b.label for b in app.button]

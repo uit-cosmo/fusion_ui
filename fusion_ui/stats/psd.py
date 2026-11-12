@@ -1,14 +1,9 @@
 """Welch power spectrum of one trace, with an optional duration-time fit.
 
-Mirrors :mod:`fusion_ui.plots.spectra` so a number here and a ``taud_psd``
-number are the same number: the same ``DurationTimeEstimator`` over
-``SecondOrderStatistic.PSD`` / ``Analytics.TwoSided``, the plotted curve from
-the same private ``_get_second_order_statistic`` call (a second Welch call
-could drift out of step with the fit's normalisation), and the fit from
-``estimate_duration_time`` plus ``imaging_methods.utils.power_spectral_density``.
-
-The cached ``taud_psd`` spec stays the per-pixel, scalar-producing spectrum;
-this is its exploratory, cross-diagnostic cousin.
+The estimator is the one :mod:`fusion_ui.plots.spectra` uses, so a duration
+time here and a ``taud_psd`` are the same number. The curve comes from the
+estimator's own ``_get_second_order_statistic``: a second Welch call could
+differ from the fit's normalisation.
 """
 
 from dataclasses import dataclass
@@ -67,49 +62,17 @@ def compute(trace, params):
 
 def render(items, params):
     """Log-log spectra; each fit dashed in its curve's colour, tau_d in the legend."""
-    from plotly.colors import qualitative
-
-    cycle = qualitative.Plotly
     figure = go.Figure()
     for index, (trace, result) in enumerate(items):
-        colour = cycle[index % len(cycle)]
-        group = f"trace-{index}"
-        omega = result["omega"].values
-        name = trace.label or trace.ref.key
-        if "taud" in result:
-            name = f"{name}  tau_d={float(result['taud']):.3g} s"
-        figure.add_trace(
-            go.Scatter(
-                x=omega,
-                y=result["psd"].values,
-                mode="lines",
-                line=dict(color=colour),
-                legendgroup=group,
-                name=name,
-            )
-        )
-        if "psd_fit" in result:
-            figure.add_trace(
-                go.Scatter(
-                    x=omega,
-                    y=result["psd_fit"].values,
-                    mode="lines",
-                    line=dict(color=colour, dash="dash"),
-                    legendgroup=group,
-                    showlegend=False,
-                )
-            )
-    figure.update_layout(
-        xaxis_title="angular frequency [rad/s]",
-        yaxis_title="power spectral density",
+        statistics.add_fitted(figure, index, trace, result, "psd")
+    return statistics.finish(
+        figure,
+        f"PSD of {len(items)} traces",
+        "angular frequency [rad/s]",
+        "power spectral density",
         xaxis_type="log",
         yaxis_type="log",
-        height=440,
-        margin=dict(l=10, r=10, t=40, b=10),
-        legend=dict(orientation="h", y=-0.2),
-        title=f"PSD of {len(items)} traces",
     )
-    return figure
 
 
 SPEC = statistics.register(
@@ -121,7 +84,9 @@ SPEC = statistics.register(
         render=render,
         description=(
             "Welch spectrum of each trace with an optional duration-time fit. "
-            "The exploratory cousin of the cached Duration time (PSD fit) plot."
+            "The same estimator as the cached Duration time (PSD fit) on the "
+            "single-shot page, but across diagnostics and not stored: trust "
+            "the cached one for numbers on a multi-shot axis."
         ),
     )
 )

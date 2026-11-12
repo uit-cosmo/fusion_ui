@@ -1,13 +1,9 @@
-"""Statistics over arbitrary traces: time trace, PDF, PSD, ACF and CCF on one axis.
+"""Statistics over a basket of traces: time trace, PDF, PSD, ACF and CCF.
 
-A basket of traces -- pixels off any imaging shot, channels off any probe
-shot, mixed freely -- drawn together under one statistic, labelled with
-magnetic coordinates. Statistics are live: a Welch PSD or a histogram is tens
-of milliseconds, so widgets take effect on the next rerun with no Compute
-button, and the page writes nothing to the run ledger. The cached
-``taud_psd`` plot on the single-shot page stays the per-pixel,
-scalar-producing spectrum; the PSD here is its exploratory,
-cross-diagnostic cousin.
+Pixels of any imaging shot and channels of any probe shot, mixed freely, are
+drawn together under one statistic and labelled with magnetic coordinates.
+Statistics are live: widgets take effect on the next rerun, there is no Compute
+button, and nothing is written to the run ledger.
 """
 
 import dataclasses
@@ -18,123 +14,86 @@ import streamlit as st
 
 import fusion_ui.stats  # noqa: F401 - importing the package registers every spec
 from fusion_ui import ui
-from fusion_ui.core import catalog, loader, multipixel, params_ui, probes, statistics, traces
+from fusion_ui.core import loader, multipixel, params_ui, registry, statistics, traces
 
 st.set_page_config(page_title="Statistics · Shot Explorer", layout="wide")
 
-#: Warn once past this many samples across the basket: about 160 MB, roughly
-#: 32 full APD windows.
+#: Warn past this many samples across the basket: about 160 MB, roughly 32
+#: full APD windows.
 SAMPLE_BUDGET = 20_000_000
 
-LABEL_STYLES = ("magnetic", "channel", "rz")
+#: The label styles of :func:`fusion_ui.core.traces.label`, as the sidebar names them.
+LABEL_STYLES = {
+    "magnetic": "magnetic (R-R_sep / ρ)",
+    "channel": "channel",
+    "rz": "R, Z",
+}
 
 
 @st.cache_data(show_spinner=False)
-def _cached_trace(path, mtime, machine, shot, diagnostic, preprocessed,
-                   channel, t_start, t_end):
-    """One extracted trace, memoised on ``(path, mtime, ref, window)``.
-
-    ``mtime`` is not used in the body -- it is in the signature so a re-copied
-    file busts the cache, the same trick ``loader._cached_times`` uses. Dragging
-    a widget then does not re-read the trace off disk.
-    """
-    ds = loader.open_dataset(path)
-    ref = traces.TraceRef(
-        machine=machine,
-        shot=int(shot),
-        diagnostic=diagnostic,
-        preprocessed=bool(preprocessed),
-        channel=tuple(channel),
-    )
-    return traces.extract(ds, ref, float(t_start), float(t_end))
-
-
-def discharge_for_shot(shot):
-    path, error = ui.resolve("DISCHARGE_DB_PATH")
-    if error or not os.path.exists(path or ""):
-        return None
-    return catalog.load_discharges(path).get(shot)
-
-
-def available_targets(row):
-    """``{diagnostic: (has_raw, has_preprocessed)}`` for one shot_table row: the diagnostics a trace can be taken
-    from (``traces.SOURCES``), not every diagnostic the index holds."""
-    targets = {}
-    for diagnostic in catalog.DIAGNOSTICS:
-        if diagnostic not in traces.SOURCES:
-            continue
-        availability = row[diagnostic] if diagnostic in row else ""
-        if availability:
-            targets[diagnostic] = ("R" in availability, "P" in availability)
-    return targets
+def _cached_trace(path, mtime, ref, t_start, t_end):
+    """One extracted trace. ``mtime`` is a cache key only, so that a file
+    copied again is read again."""
+    return traces.extract(loader.open_dataset(path), ref, t_start, t_end)
 
 
 def with_traces(table):
-    """``table`` cut to the shots that have a file a trace can come from (``traces.SOURCES``).
+    """``table`` cut to the shots that have a file a trace can come from.
 
-    A shot with only a Thomson scattering file is on the shot browser and the single-shot page, but it has nothing
-    to add here, and the page would open on the lowest shot number, as often as not one of those.
+    A shot with only a Thomson scattering file has nothing to add here.
     """
-    have = [diagnostic for diagnostic in traces.SOURCES if diagnostic in table.columns]
-    if table.empty or not have:
+    if table.empty:
         return table
-    return table[(table[have] != "").any(axis=1)]
+    return table[(table[list(traces.SOURCES)] != "").any(axis=1)]
+
+
+def shots_of(table, machine):
+    return sorted(table[table["machine"].astype(str) == machine]["shot"].astype(int))
+
+
+def targets_of(table, machine, shot):
+    """``{diagnostic: (has_raw, has_preprocessed)}`` over the files of one shot
+    that a trace can come from."""
+    rows = table[table["machine"].astype(str) == machine]
+    row = rows[rows["shot"].astype(int) == int(shot)].iloc[0]
+    return ui.available_targets(row, traces.SOURCES)
 
 
 def default_picker(table):
-    """``(machine, shot)`` -- the browser's selection when it is on the table."""
-    selection = st.session_state.get("selection")
+    """``(machine, shot)``: the browser's selection when it is on the table,
+    the first of each otherwise."""
+    selection = st.session_state.get("selection") or {}
     machines = sorted(table["machine"].astype(str).unique())
-    machine = machines[0]
-    if selection and selection.get("machine") in machines:
-        machine = selection["machine"]
-    shots = sorted(table[table["machine"].astype(str) == machine]["shot"].astype(int))
-    shot = shots[0]
-    if (
-        selection
-        and selection.get("machine") == machine
-        and selection.get("shot") in shots
-    ):
-        shot = selection["shot"]
-    return machine, int(shot)
+    machine = selection.get("machine")
+    if machine not in machines:
+        machine, selection = machines[0], {}
+    shots = shots_of(table, machine)
+    shot = selection.get("shot")
+    return machine, int(shot if shot in shots else shots[0])
 
 
-def ensure_window(machine, shot, diagnostic, preprocessed):
-    """Seed the window from the discharge window once, for the first shot."""
+def ensure_window(table):
+    """Seed the time window once, from the discharge window of the shot the
+    picker opens on."""
     if "stats.t_start" in st.session_state and "stats.t_end" in st.session_state:
         return
+    machine, shot = default_picker(table)
+    targets = targets_of(table, machine, shot)
+    diagnostic = next(iter(targets))
     try:
-        path = loader.dataset_path(machine, shot, diagnostic, preprocessed)
-        ds = loader.open_dataset(path)
+        path = loader.dataset_path(machine, shot, diagnostic, targets[diagnostic][1])
+        t_start, t_end, _ = loader.time_window(
+            loader.open_dataset(path), ui.discharge(shot)
+        )
     except (OSError, KeyError, ValueError):
         return
-    t_start, t_end, _ = loader.time_window(ds, discharge_for_shot(shot))
     st.session_state.setdefault("stats.t_start", float(t_start))
     st.session_state.setdefault("stats.t_end", float(t_end))
 
 
-def channel_text(channel):
-    kind = channel[0] if channel else ""
-    if kind == "pixel":
-        return f"pixel ({channel[1]}, {channel[2]})"
-    if kind == "probe":
-        return f"{channel[1]}_{channel[2]}"
-    return str(channel)
-
-
-def magnetic_text(trace):
-    coords = trace.coords or {}
-    kind = trace.ref.channel[0] if trace.ref.channel else ""
-    if kind == "pixel" and coords.get("dr_sep") is not None:
-        return f"R-R_sep={coords['dr_sep']:+.2f} cm"
-    if kind == "probe" and coords.get("rho") is not None:
-        return f"rho={coords['rho']:.2f}"
-    return ""
-
-
 def add_picker(table):
     """The "Add traces" expander: shot, diagnostic, pixels or channels."""
-    basket = st.session_state.get("stats.basket", [])
+    basket = st.session_state["stats.basket"]
     with st.expander("Add traces", expanded=not basket):
         if table.empty:
             st.warning(
@@ -144,136 +103,81 @@ def add_picker(table):
                 icon="⚠️",
             )
             return
-        machine, default_shot = default_picker(table)
+        machine, shot = default_picker(table)
         machines = sorted(table["machine"].astype(str).unique())
         if len(machines) > 1:
-            machine = st.selectbox(
-                "Machine", machines, index=machines.index(machine)
-            )
-        shots = sorted(
-            table[table["machine"].astype(str) == machine]["shot"].astype(int)
-        )
+            machine = st.selectbox("Machine", machines, index=machines.index(machine))
+        shots = shots_of(table, machine)
         shot = st.selectbox(
-            "Shot", shots, index=shots.index(default_shot)
+            "Shot", shots, index=shots.index(shot) if shot in shots else 0
         )
-        row = table[table["machine"].astype(str) == machine]
-        row = row[row["shot"].astype(int) == int(shot)].iloc[0]
-        targets = available_targets(row)
-        if not targets:
-            st.warning("No diagnostic files indexed for this shot.", icon="⚠️")
-            return
-        names = list(targets)
-        diagnostic = st.radio("Diagnostic", names, horizontal=True)
-        has_raw, has_preprocessed = targets[diagnostic]
-        if has_raw and has_preprocessed:
+        targets = targets_of(table, machine, shot)
+        diagnostic = st.radio("Diagnostic", list(targets), horizontal=True)
+        has_raw, preprocessed = targets[diagnostic]
+        if has_raw and preprocessed:
             preprocessed = (
                 st.radio("Version", ["Preprocessed", "Raw"], horizontal=True)
                 == "Preprocessed"
             )
-        else:
-            preprocessed = has_preprocessed
 
         path = loader.dataset_path(machine, int(shot), diagnostic, preprocessed)
         if not os.path.exists(path):
             st.error(f"File not found: `{path}`", icon="⚠️")
             return
         ds = loader.open_dataset(path)
-        target = loader_target(machine, int(shot), diagnostic, preprocessed, path)
 
         if diagnostic in traces.IMAGING:
-            pixels = multipixel.selector(ds, target)
-            add_label = f"Add {len(pixels)} selected pixels"
-            if st.button(add_label, key="stats.add_pixels", disabled=not pixels):
-                for x, y in pixels:
-                    ref = traces.TraceRef(
-                        machine, int(shot), diagnostic, preprocessed,
-                        ("pixel", int(x), int(y)),
-                    )
-                    if ref not in basket:
-                        basket.append(ref)
-                st.session_state["stats.basket"] = basket
-                st.rerun()
+            # The selector reads only the target's key.
+            target = registry.Target(
+                machine, int(shot), diagnostic, preprocessed, path,
+                float("nan"), float("nan"), "none",
+            )
+            picked = [("pixel", x, y) for x, y in multipixel.selector(ds, target)]
+            noun = "pixels"
         else:
-            found = probes.quantities_and_positions(ds)
-            options = [
-                f"{quantity}_{position}"
-                for quantity, positions in sorted(found.items())
-                for position in positions
-            ]
-            picked = st.multiselect("Channels", options, key="stats.channels")
-            if st.button(
-                f"Add {len(picked)} selected channels",
-                key="stats.add_channels",
-                disabled=not picked,
-            ):
-                lookup = {
-                    f"{quantity}_{position}": ("probe", quantity, position)
-                    for quantity, positions in found.items()
-                    for position in positions
-                }
-                for name in picked:
-                    ref = traces.TraceRef(
-                        machine, int(shot), diagnostic, preprocessed,
-                        lookup[name],
-                    )
-                    if ref not in basket:
-                        basket.append(ref)
-                st.session_state["stats.basket"] = basket
-                st.rerun()
-
-
-def loader_target(machine, shot, diagnostic, preprocessed, path):
-    """A ``Target`` for the pixel selector, which only reads ``target.key``."""
-    from fusion_ui.core import registry
-
-    return registry.Target(
-        machine=machine,
-        shot=int(shot),
-        diagnostic=diagnostic,
-        preprocessed=bool(preprocessed),
-        path=path,
-        t_start=float("nan"),
-        t_end=float("nan"),
-        window_source="none",
-    )
+            names = {traces.channel_text(c): c for c in traces.channels(ds, diagnostic)}
+            chosen = st.multiselect("Channels", list(names), key="stats.channels")
+            picked = [names[name] for name in chosen]
+            noun = "channels"
+        if st.button(
+            f"Add {len(picked)} selected {noun}",
+            key=f"stats.add_{noun}",
+            disabled=not picked,
+        ):
+            for channel in picked:
+                ref = traces.TraceRef(machine, int(shot), diagnostic, preprocessed, channel)
+                if ref not in basket:
+                    basket.append(ref)
+            st.session_state["stats.basket"] = basket
+            st.rerun()
 
 
 def basket_frame(basket, t_start, t_end, style):
-    """The basket as a dataframe, extracting each trace through the cache."""
+    """``(table, traces, refs left out)``: each trace of the basket extracted
+    through the cache and labelled. A trace that cannot be read, or has no
+    sample in the window, is left out."""
     rows, extracted, missed = [], [], []
     for ref in basket:
         try:
             path = loader.dataset_path(
                 ref.machine, ref.shot, ref.diagnostic, ref.preprocessed
             )
-            mtime = os.path.getmtime(path)
-        except OSError:
-            missed.append(ref)
-            continue
-        try:
-            trace = _cached_trace(
-                path, mtime, ref.machine, ref.shot, ref.diagnostic,
-                ref.preprocessed, tuple(ref.channel), t_start, t_end,
-            )
+            trace = _cached_trace(path, os.path.getmtime(path), ref, t_start, t_end)
         except Exception:  # noqa: BLE001 - one bad trace must not fail the page
-            missed.append(ref)
-            continue
+            trace = None
         if trace is None:
             missed.append(ref)
             continue
-        try:
-            labelled = dataclasses.replace(trace, label=traces.label(trace, style))
-        except Exception:  # noqa: BLE001 - a label must never fail a trace
-            labelled = trace
-        extracted.append(labelled)
+        trace = dataclasses.replace(trace, label=traces.label(trace, style))
+        extracted.append(trace)
         rows.append(
             {
                 "shot": ref.shot,
                 "diagnostic": ref.diagnostic,
-                "channel": channel_text(ref.channel),
-                "label": labelled.label,
-                "magnetic": magnetic_text(labelled),
-                "samples": len(labelled.time),
+                "channel": traces.channel_text(ref.channel),
+                "label": trace.label,
+                "magnetic": traces.magnetic_text(trace),
+                "samples": len(trace.time),
             }
         )
     return pd.DataFrame(rows), extracted, missed
@@ -290,56 +194,44 @@ def main():
     table = with_traces(ui.cached_shot_table())
 
     # ---- sidebar ---------------------------------------------------------
-    specs = statistics.all_specs()
-    keys = [s.key for s in specs]
-    if "stats.spec" not in st.session_state or st.session_state["stats.spec"] not in keys:
-        st.session_state["stats.spec"] = keys[0]
-    st.sidebar.selectbox(
-        "Statistic", keys, format_func=lambda k: statistics.get(k).label,
-        key="stats.spec",
+    spec = statistics.get(
+        st.sidebar.selectbox(
+            "Statistic",
+            list(statistics.REGISTRY),
+            format_func=lambda key: statistics.get(key).label,
+            key="stats.spec",
+        )
     )
-    spec = statistics.get(st.session_state["stats.spec"])
     if spec.description:
         st.sidebar.caption(spec.description)
-    if spec.key == "psd":
-        st.sidebar.caption(
-            "The exploratory cousin of the cached Duration time (PSD fit) on "
-            "the single-shot page: same estimator, but cross-diagnostic and "
-            "uncached. Trust the cached one for numbers on a multi-shot axis."
-        )
 
-    params = params_ui.form(spec.params, f"stats.params.{spec.key}",
-                            container=st.sidebar)
+    params = params_ui.form(
+        spec.params, f"stats.params.{spec.key}", container=st.sidebar
+    )
 
     if not table.empty:
-        machine, shot = default_picker(table)
-        row = table[table["machine"].astype(str) == machine]
-        row = row[row["shot"].astype(int) == int(shot)].iloc[0]
-        targets = available_targets(row)
-        first_diag = next(iter(targets)) if targets else "apd"
-        _, first_prep = targets.get(first_diag, (True, False))
-        ensure_window(machine, int(shot), first_diag, bool(first_prep))
-    t_start = st.sidebar.number_input("Start time [s]", format="%g",
-                                      key="stats.t_start")
-    t_end = st.sidebar.number_input("End time [s]", format="%g", key="stats.t_end")
-    if st.sidebar.button("Reset to the discharge window",
-                         key="stats.reset_window"):
+        ensure_window(table)
+    t_start = float(
+        st.sidebar.number_input("Start time [s]", format="%g", key="stats.t_start")
+    )
+    t_end = float(
+        st.sidebar.number_input("End time [s]", format="%g", key="stats.t_end")
+    )
+    if st.sidebar.button("Reset to the discharge window", key="stats.reset_window"):
         st.session_state.pop("stats.t_start", None)
         st.session_state.pop("stats.t_end", None)
         st.rerun()
-    st.sidebar.radio(
-        "Labels", LABEL_STYLES,
-        format_func=lambda s: {"magnetic": "magnetic (R-R_sep / ρ)",
-                               "channel": "channel",
-                               "rz": "R, Z"}[s],
+    style = st.sidebar.radio(
+        "Labels",
+        list(LABEL_STYLES),
+        format_func=LABEL_STYLES.get,
         key="stats.labels",
     )
-    style = st.session_state.get("stats.labels", "magnetic")
 
     # ---- main ------------------------------------------------------------
     add_picker(table)
 
-    basket = st.session_state.get("stats.basket", [])
+    basket = st.session_state["stats.basket"]
     if not basket:
         st.info(
             "The basket is empty — add pixel traces or probe channels above, "
@@ -348,12 +240,10 @@ def main():
         )
         return
 
-    frame, extracted, missed = basket_frame(basket, float(t_start), float(t_end),
-                                            style)
+    frame, extracted, missed = basket_frame(basket, t_start, t_end, style)
     if missed:
         st.warning(
-            "Left out of the window "
-            f"({float(t_start):.4f}–{float(t_end):.4f} s): "
+            f"Left out of the window ({t_start:.4f}–{t_end:.4f} s): "
             + ", ".join(r.key for r in missed),
             icon="⚠️",
         )
@@ -364,10 +254,8 @@ def main():
     total = int(frame["samples"].sum())
     if total > SAMPLE_BUDGET:
         st.warning(
-            f"The basket holds {total / 1e6:.0f} M samples "
-            "(about {0:.0f} MB) — narrow the window for a snappier redraw.".format(
-                total * 8 / 1e6
-            ),
+            f"The basket holds {total / 1e6:.0f} M samples (about "
+            f"{total * 8 / 1e6:.0f} MB) — narrow the window for a snappier redraw.",
             icon="⚠️",
         )
 
@@ -378,8 +266,7 @@ def main():
     )
     left, right = st.columns(2)
     if left.button("Remove selected", key="stats.remove"):
-        rows = sorted(event.selection.rows, reverse=True)
-        for index in rows:
+        for index in sorted(event.selection.rows, reverse=True):
             if 0 <= index < len(basket):
                 basket.pop(index)
         st.session_state["stats.basket"] = basket
@@ -389,42 +276,32 @@ def main():
         st.session_state["stats.reference"] = 0
         st.rerun()
 
-    reference = None
-    ref_index = 0
+    # A pairwise statistic gets every trace on the reference's time base.
+    reference = ()
     if spec.pairwise:
         ref_index = int(st.session_state.get("stats.reference", 0))
-        if ref_index >= len(extracted):
-            ref_index = 0
-        labels = [t.label or t.ref.key for t in extracted]
-        ref_index = int(st.selectbox(
-            "Reference", range(len(extracted)),
-            format_func=lambda i: labels[i], index=ref_index,
-            key="stats.reference_box",
-        ))
+        labels = [statistics.name(trace) for trace in extracted]
+        ref_index = int(
+            st.selectbox(
+                "Reference",
+                range(len(extracted)),
+                format_func=lambda i: labels[i],
+                index=ref_index if ref_index < len(extracted) else 0,
+                key="stats.reference_box",
+            )
+        )
         st.session_state["stats.reference"] = ref_index
-
-    if spec.pairwise:
-        try:
-            gridded = traces.common_grid(extracted, extracted[ref_index])
-        except Exception as error:  # noqa: BLE001 - resampling must not kill page
-            st.error(f"{type(error).__name__}: {error}", icon="⚠️")
-            return
+        gridded = traces.common_grid(extracted, extracted[ref_index])
         if any(new is not old for new, old in zip(gridded, extracted)):
             st.caption("Some traces were resampled onto the reference's time base.")
-        reference = gridded[ref_index]
-        items, failures = [], []
-        for trace in gridded:
-            try:
-                items.append((trace, spec.compute(trace, reference, params)))
-            except Exception as error:  # noqa: BLE001 - one bad trace must not fail the page
-                failures.append(f"{trace.ref.key}: {error}")
-    else:
-        items, failures = [], []
-        for trace in extracted:
-            try:
-                items.append((trace, spec.compute(trace, params)))
-            except Exception as error:  # noqa: BLE001 - one bad trace must not fail the page
-                failures.append(f"{trace.ref.key}: {error}")
+        extracted, reference = gridded, (gridded[ref_index],)
+
+    items, failures = [], []
+    for trace in extracted:
+        try:
+            items.append((trace, spec.compute(trace, *reference, params)))
+        except Exception as error:  # noqa: BLE001 - one bad trace must not fail the page
+            failures.append(f"{trace.ref.key}: {error}")
     if failures:
         st.warning(
             f"{len(failures)} of {len(extracted)} traces failed and are left out"
@@ -443,8 +320,7 @@ def main():
     if figure is not None:
         st.plotly_chart(figure, use_container_width=True)
     st.caption(
-        "Window "
-        f"{float(t_start):.4f}–{float(t_end):.4f} s · {len(items)} traces · "
+        f"Window {t_start:.4f}–{t_end:.4f} s · {len(items)} traces · "
         "R-R_sep is the horizontal distance to the separatrix at the pixel's "
         "own height, not a flux coordinate · probe ρ is the window mean, and "
         "the probe moves during its plunge."

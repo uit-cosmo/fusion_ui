@@ -1,17 +1,12 @@
 """Pure helpers for the multi-shot view.
 
-The page reads scalars from the store and metadata from the catalog; the work
-of turning per-pixel rows into one number per shot, and of joining that to the
-discharge descriptor, lives here so it can be tested without a Streamlit
-runtime. Nothing in this module touches Streamlit, the database or the
+They turn per-pixel scalar rows into one number per shot and join that to the
+discharge metadata. Nothing here touches Streamlit, the database or the
 filesystem.
 
-A scalar value is per-pixel (``x`` / ``y``), and the multi-shot scatter needs
-one number per shot, so the page offers a choice of how to collapse the grid.
-Which choice is right is a research judgement -- mean over the array, a fixed
-reference pixel, a median over a region and the pixel of maximum signal all
-give different answers -- which is why the choice is shown in the axis label
-rather than silently baked in.
+How a grid of pixels becomes one number is a judgement (the mean, the median,
+the maximum and a fixed pixel all differ), so the page offers the choice and
+names it on the axis.
 """
 
 import pandas as pd
@@ -33,6 +28,8 @@ X_AXES = {
     "I_p": ("I_p", "plasma current I_p [MA]"),
 }
 
+_SOURCE_COLUMNS = ["plot", "params_hash", "diagnostic", "preprocessed"]
+
 
 def distinct_names(frame):
     """The scalar names present in ``frame``, sorted."""
@@ -42,50 +39,46 @@ def distinct_names(frame):
 def distinct_sources(frame, name):
     """The ``(plot, params_hash, diagnostic, preprocessed)`` tuples carrying ``name``.
 
-    A scalar name can be written by several parameter sets -- and, for the
-    seeded rows, by the import rather than by a live analysis -- so picking a
-    name is not enough to say *which* values to plot. Each distinct source is
-    one entry in the page's source picker.
+    Several plots and parameter sets can write the same scalar name, so a name
+    alone does not say which values to plot.
     """
     sub = frame[frame["name"] == name]
-    columns = ["plot", "params_hash", "diagnostic", "preprocessed"]
     return [
         tuple(row)
-        for row in sub[columns]
+        for row in sub[_SOURCE_COLUMNS]
         .drop_duplicates()
-        .sort_values(columns, kind="stable")
+        .sort_values(_SOURCE_COLUMNS, kind="stable")
         .itertuples(index=False)
     ]
 
 
-def _finite(frame):
-    values = pd.to_numeric(frame["value"], errors="coerce")
-    return frame[values.notna()]
+def _rows(frame, source, name):
+    """The rows of ``frame`` that hold ``name`` from ``source``."""
+    keep = frame["name"] == name
+    for column, value in zip(_SOURCE_COLUMNS, source):
+        keep &= frame[column] == value
+    return frame[keep]
+
+
+def _shot_level(rows):
+    """Whether every row is a shot-level scalar, stored at ``x = y = -1``."""
+    return (rows["x"] == -1).all() and (rows["y"] == -1).all()
 
 
 def aggregate(frame, source, name, how, pixel=None):
     """One value per ``(machine, shot)`` for one source, collapsed over pixels.
 
-    ``source`` is a ``(plot, params_hash, diagnostic, preprocessed)`` tuple as
-    returned by :func:`distinct_sources`. ``how`` is a key of
-    :data:`AGGREGATES`; ``pixel`` is an ``(x, y)`` tuple required when ``how``
-    is ``"pixel"``. Shot-level scalars (``x = y = -1``) already have one value
-    per shot and are returned unchanged whatever ``how`` is.
+    ``how`` is a key of :data:`AGGREGATES`; ``pixel`` is the ``(x, y)`` that
+    ``"pixel"`` needs. Values that are not finite numbers are dropped.
+    Shot-level scalars are already one value per shot and come back unchanged
+    whatever ``how`` is.
     """
-    plot, params_hash, diagnostic, preprocessed = source
-    sub = frame[
-        (frame["name"] == name)
-        & (frame["plot"] == plot)
-        & (frame["params_hash"] == params_hash)
-        & (frame["diagnostic"] == diagnostic)
-        & (frame["preprocessed"] == preprocessed)
-    ]
-    empty = pd.DataFrame(columns=["machine", "shot", "value"])
-    sub = _finite(sub)
+    sub = _rows(frame, source, name)
+    sub = sub[pd.to_numeric(sub["value"], errors="coerce").notna()]
     if sub.empty:
-        return empty
+        return pd.DataFrame(columns=["machine", "shot", "value"])
 
-    if (sub["x"] == -1).all() and (sub["y"] == -1).all():
+    if _shot_level(sub):
         return (
             sub[["machine", "shot", "value"]].drop_duplicates().reset_index(drop=True)
         )
@@ -107,44 +100,26 @@ def aggregate(frame, source, name, how, pixel=None):
 
 
 def pixel_choices(frame, source, name):
-    """The ``(x, y)`` pairs a fixed-pixel picker may offer for one source.
+    """The ``(x, y)`` pairs that occur for one source, sorted.
 
-    Returned as the pairs that actually occur, sorted and de-duplicated -- the
-    page chains the two selectboxes on these, because offering x and y
-    independently would let someone pick a combination the data never has.
+    The page chains its two selectboxes on these, so that nobody can pick a
+    pair the data does not have.
     """
-    plot, params_hash, diagnostic, preprocessed = source
-    sub = frame[
-        (frame["name"] == name)
-        & (frame["plot"] == plot)
-        & (frame["params_hash"] == params_hash)
-        & (frame["diagnostic"] == diagnostic)
-        & (frame["preprocessed"] == preprocessed)
-    ]
+    sub = _rows(frame, source, name)
     sub = sub[(sub["x"] != -1) | (sub["y"] != -1)]
-    pairs = sorted(zip(sub["x"], sub["y"]))
-    return [(int(x), int(y)) for x, y in dict.fromkeys(pairs)]
+    return sorted({(int(x), int(y)) for x, y in zip(sub["x"], sub["y"])})
 
 
 def is_shot_level(frame, source, name):
     """Whether every value for ``source``/``name`` is a shot-level scalar."""
-    plot, params_hash, diagnostic, preprocessed = source
-    sub = frame[
-        (frame["name"] == name)
-        & (frame["plot"] == plot)
-        & (frame["params_hash"] == params_hash)
-        & (frame["diagnostic"] == diagnostic)
-        & (frame["preprocessed"] == preprocessed)
-    ]
-    return (sub["x"] == -1).all() and (sub["y"] == -1).all()
+    return _shot_level(_rows(frame, source, name))
 
 
 def with_metadata(aggregated, shot_table):
     """Join per-shot values to the discharge metadata the axes read.
 
-    The shot table is keyed by ``(machine, shot)``; a value for a shot that has
-    since left the index (or belongs to a different machine) comes back with
-    missing metadata and is dropped by whichever axis needs it.
+    A value for a shot that is not in the index comes back with missing
+    metadata, and the axis that needs it drops it.
     """
     columns = ["machine", "shot", "f_GW", "n_e_bar", "I_p", "mode", "has_metadata"]
     return aggregated.merge(
@@ -156,17 +131,10 @@ def clicked_shot(point):
     """``(machine, shot)`` for one selected scatter point, or ``None``.
 
     ``plotly_express`` appends the ``hover_data`` columns to ``customdata``
-    after the ``custom_data`` ones, so a point carries
-    ``[machine, shot, f_GW, ...]`` rather than exactly ``[machine, shot]`` --
-    read the first two by position instead of unpacking, and return ``None``
-    for anything unrecognised rather than crashing the page on a click.
+    after ``[machine, shot]``, so the first two are read by position.
     """
-    custom = point.get("customdata", point.get("customData")) if hasattr(
-        point, "get"
-    ) else None
-    if not isinstance(custom, (list, tuple)) or len(custom) < 2:
-        return None
     try:
-        return custom[0], int(custom[1])
-    except (TypeError, ValueError):
+        machine, shot = point["customdata"][:2]
+        return machine, int(shot)
+    except (TypeError, KeyError, ValueError):
         return None
