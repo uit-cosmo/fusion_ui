@@ -11,7 +11,7 @@ from streamlit.testing.v1 import AppTest
 
 import fusion_ui.plots  # noqa: F401 - registers the specs the page offers
 from fusion_ui import config
-from fusion_ui.core import catalog, db, registry, store
+from fusion_ui.core import catalog, db, precompute, registry, store
 from fusion_ui.plots import dead_pixels
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -20,9 +20,8 @@ BROWSER = str(REPO_ROOT / "fusion_ui" / "pages" / "1_shot_browser.py")
 SINGLE_SHOT = str(REPO_ROOT / "fusion_ui" / "pages" / "2_single_shot.py")
 
 
-@pytest.fixture
-def deployment(monkeypatch, tmp_path, data_folder, discharge_db):
-    """Point the whole app at the throwaway tree, index it, clear the caches."""
+def point_app_at(monkeypatch, tmp_path, data_folder, discharge_db, index=True):
+    """Set the app's environment to a throwaway tree, index it and clear the caches."""
     import streamlit as st
 
     database = tmp_path / "state" / "shot_explorer.sqlite"
@@ -31,16 +30,29 @@ def deployment(monkeypatch, tmp_path, data_folder, discharge_db):
     monkeypatch.setenv("FUSION_UI_DB", str(database))
     monkeypatch.setenv("FUSION_UI_CACHE", str(tmp_path / "cache"))
     monkeypatch.setenv("FUSION_MACHINE", "cmod")
-
-    conn = db.open_db(database)
-    catalog.rescan(conn, str(data_folder), "cmod", str(discharge_db))
-    conn.close()
-
+    if index:
+        conn = db.open_db(database)
+        known = str(discharge_db) if discharge_db.exists() else None
+        catalog.rescan(conn, str(data_folder), "cmod", known)
+        conn.close()
     st.cache_data.clear()
     st.cache_resource.clear()
-    yield database
+    return database
+
+
+@pytest.fixture(autouse=True)
+def clear_streamlit_caches():
+    import streamlit as st
+
+    yield
     st.cache_data.clear()
     st.cache_resource.clear()
+
+
+@pytest.fixture
+def deployment(monkeypatch, tmp_path, data_folder, discharge_db):
+    """The conftest tree of empty files with its discharge DB, indexed."""
+    return point_app_at(monkeypatch, tmp_path, data_folder, discharge_db)
 
 
 def run(path):
@@ -79,19 +91,11 @@ def test_landing_page_lists_every_run_day_with_its_purpose(deployment):
 
 
 def test_landing_page_survives_a_missing_data_folder(monkeypatch, tmp_path):
-    monkeypatch.setenv("FUSION_DATA_FOLDER", str(tmp_path / "gone"))
-    monkeypatch.setenv("FUSION_DISCHARGE_DB", str(tmp_path / "gone.json"))
-    monkeypatch.setenv("FUSION_UI_DB", str(tmp_path / "app.sqlite"))
-    monkeypatch.setenv("FUSION_UI_CACHE", str(tmp_path / "cache"))
-    import streamlit as st
-
-    st.cache_data.clear()
-    st.cache_resource.clear()
-    app = run(APP)
+    point_app_at(
+        monkeypatch, tmp_path, tmp_path / "gone", tmp_path / "gone.json", index=False
+    )
     # It reports the broken paths rather than dying on them.
-    assert app.error
-    st.cache_data.clear()
-    st.cache_resource.clear()
+    assert run(APP).error
 
 
 def test_shot_browser_lists_every_shot(deployment):
@@ -120,55 +124,23 @@ def test_selecting_a_shot_writes_the_selection_contract(deployment):
 
 
 def test_browser_says_so_when_the_index_is_empty(monkeypatch, tmp_path, discharge_db):
-    monkeypatch.setenv("FUSION_DATA_FOLDER", str(tmp_path / "empty"))
-    monkeypatch.setenv("FUSION_DISCHARGE_DB", str(discharge_db))
-    monkeypatch.setenv("FUSION_UI_DB", str(tmp_path / "app.sqlite"))
-    monkeypatch.setenv("FUSION_UI_CACHE", str(tmp_path / "cache"))
-    import streamlit as st
-
-    st.cache_data.clear()
-    st.cache_resource.clear()
-    app = run(BROWSER)
-    assert app.warning
-    st.cache_data.clear()
-    st.cache_resource.clear()
+    point_app_at(monkeypatch, tmp_path, tmp_path / "empty", discharge_db, index=False)
+    assert run(BROWSER).warning
 
 
 @pytest.fixture
 def single_shot_deployment(monkeypatch, tmp_path, apd_dataset_path, asp_dataset_path):
-    """A data tree with one real (tiny) APD file and one real ASP file.
-
-    Unlike ``deployment``, no discharge DB is set up -- the point is to also
-    exercise the single-shot page's "no metadata yet" default-window path.
-    """
-    import streamlit as st
-
+    """A data tree with one real (tiny) APD file and one real ASP file, and no
+    discharge DB, so the single-shot page takes its default window."""
     data_folder = apd_dataset_path.parent.parent  # .../alcator, shared with asp
-    database = tmp_path / "state" / "shot_explorer.sqlite"
-    monkeypatch.setenv("FUSION_DATA_FOLDER", str(data_folder))
-    monkeypatch.setenv("FUSION_DISCHARGE_DB", str(tmp_path / "no_such_discharges.json"))
-    monkeypatch.setenv("FUSION_UI_DB", str(database))
-    monkeypatch.setenv("FUSION_UI_CACHE", str(tmp_path / "cache"))
-    monkeypatch.setenv("FUSION_MACHINE", "cmod")
-
-    conn = db.open_db(database)
-    catalog.rescan(conn, str(data_folder), "cmod", None)
-    conn.close()
-
-    st.cache_data.clear()
-    st.cache_resource.clear()
-    yield database
-    st.cache_data.clear()
-    st.cache_resource.clear()
+    return point_app_at(
+        monkeypatch, tmp_path, data_folder, tmp_path / "no_such_discharges.json"
+    )
 
 
 def widget(app, kind, label):
-    """One widget by label rather than by position.
-
-    The single-shot page is assembled from the registry now, so which widgets
-    exist depends on which spec is selected; indexing into ``app.selectbox[0]``
-    would make every one of these tests a hostage to widget ordering.
-    """
+    """One widget by its label: which widgets the single-shot page has, and
+    in what order, depends on the spec selected."""
     matches = [w for w in getattr(app, kind) if w.label == label]
     assert (
         matches
@@ -387,7 +359,7 @@ def toy_bank(single_shot_deployment):
     TOY_CALLS.clear()
 
 
-def fill_toy_bank(database, bank):
+def fill_toy_bank(database, bank, **changes):
     """What `fusion-ui precompute toy_bank --shot 1234` leaves behind."""
     conn = db.open_db(database)
     target = registry.Target(
@@ -399,7 +371,8 @@ def fill_toy_bank(database, bank):
         t_start=1.0,
         t_end=1.02,
     )
-    _, run = store.result(conn, bank, target, ToyBankParams(), ds=None, batch=True)
+    params = ToyBankParams(**changes)
+    _, run = store.result(conn, bank, target, params, ds=None, batch=True)
     conn.close()
     TOY_CALLS.clear()
     return run
@@ -436,9 +409,12 @@ def test_a_batch_only_spec_is_shown_from_cache_without_computing(
     buttons = [b.label for b in app.button]
     assert "Show" in buttons and "Compute" not in buttons
     assert "Recompute" not in buttons
-    assert any(
-        "fusion-ui precompute toy_bank --shot 1234 --force" in c for c in captions(app)
-    )
+    assert (
+        "Computed in batch only. To compute it again, run "
+        "`fusion-ui precompute toy_bank --shot 1234 --force`."
+    ) in captions(app)
+    # The defaults need no --params-json file, and none is shown.
+    assert not app.code and not [c for c in captions(app) if "saved as" in c]
     # Nor is it offered on many pixels.
     assert not [r for r in app.sidebar.radio if r.label == "Pixels"]
 
@@ -461,19 +437,48 @@ def test_a_missing_batch_only_spec_names_its_command_and_computes_nothing(
 
 
 def test_a_batch_only_spec_with_other_parameters_shows_them_to_save(
-    single_shot_deployment, toy_bank
+    single_shot_deployment, toy_bank, tmp_path
 ):
+    """The command names a ``--params-json`` file the page cannot write, so the
+    page shows what goes in it: for a missing result and for a cached one."""
+
+    def page():
+        app = AppTest.from_file(SINGLE_SHOT, default_timeout=60)
+        app.session_state["spec.apd"] = bank
+        app.session_state["params.toy_bank.window"] = 30
+        app.run()
+        assert not app.exception, app.exception
+        return app
+
     bank, _ = toy_bank
-    app = AppTest.from_file(SINGLE_SHOT, default_timeout=60)
-    app.session_state["spec.apd"] = bank
-    app.session_state["params.toy_bank.window"] = 30
-    app.run()
-    assert not app.exception, app.exception
-    command, saved = [c.value for c in app.code]
+    missing = page()
+    command, saved = [c.value for c in missing.code]
     assert command == (
         "fusion-ui precompute toy_bank --shot 1234 --params-json params.json"
     )
     assert '"window": 30' in saved and '"plot": "toy_bank"' in saved
+    assert "with these parameters saved as `params.json`:" in captions(missing)
+
+    # Saved under that name, it is the parameter set the command reads.
+    file = tmp_path / precompute.PARAMS_FILE
+    file.write_text(saved)
+    assert precompute.params_from_file(file, [bank]) == {
+        "toy_bank": ToyBankParams(window=30)
+    }
+
+    fill_toy_bank(single_shot_deployment, bank, window=30)
+    cached = page()
+    assert TOY_CALLS == []  # a lookup: nothing was computed
+    # Under the provenance line, in its column: the sentence with the command,
+    # running on into what the file holds, then the same block.
+    left = [(c.type, c.value) for c in cached.columns[0].children.values()]
+    assert [kind for kind, _ in left[1:]] == ["caption", "caption", "code"]
+    assert left[1][1] == (
+        "Computed in batch only. To compute it again, run `fusion-ui precompute"
+        " toy_bank --shot 1234 --params-json params.json --force`"
+    )
+    assert left[2][1] == "with these parameters saved as `params.json`:"
+    assert left[3][1] == saved
 
 
 def test_a_spec_built_on_a_missing_batch_only_result_computes_nothing(
@@ -552,14 +557,8 @@ def test_a_spec_built_on_a_cached_batch_only_result_computes_inline(
 
 @pytest.fixture
 def two_machine_deployment(single_shot_deployment):
-    """The same shot numbers indexed under two machines.
-
-    ``rescan`` runs for one machine and only deletes that machine's rows, so
-    repointing ``FUSION_MACHINE`` leaves the previous machine indexed for good
-    -- there is no "switch machines" that also forgets the old one. The
-    fixture reuses the real tree so both machines carry shots 1234 and 5678,
-    which is the collision the picker has to survive.
-    """
+    """The same shot numbers indexed under two machines: a rescan deletes only
+    its own machine's rows, so an index can come to hold both."""
     import streamlit as st
 
     conn = db.open_db(single_shot_deployment)
@@ -573,29 +572,23 @@ def two_machine_deployment(single_shot_deployment):
 def test_a_shot_number_on_two_machines_still_picks_exactly_one_row(
     two_machine_deployment,
 ):
-    """Keyed on the shot alone, ``table.set_index("shot").loc[1234]`` returns
-    both machines' rows and ``available_targets`` then asks for the truth
-    value of a Series -- so the page dies on a ValueError rather than showing
-    the wrong shot."""
+    """Picked on the shot number alone, shot 1234 would be two rows."""
     app = AppTest.from_file(SINGLE_SHOT, default_timeout=60).run()
     assert not app.exception, app.exception
 
     machine = widget(app, "selectbox", "Machine")
     assert machine.options == ["cmod", "other"]
     assert machine.value == "cmod"
-    # Each machine offers its own shots, not the union counted twice.
-    # AppTest serialises selectbox options as strings; what matters is that
-    # each machine offers its own two shots, not the union counted twice.
+    # Each machine offers its own two shots, not the union counted twice.
+    # (AppTest gives selectbox options as strings.)
     assert widget(app, "selectbox", "Shot").options == ["1234", "5678"]
 
 
 def test_switching_machine_keeps_the_target_on_that_machine(two_machine_deployment):
     app = AppTest.from_file(SINGLE_SHOT, default_timeout=60).run()
-    # Target.key names the cache blob and every session-state entry, so a
-    # picker that dropped the machine would give both machines one key and let
-    # them overwrite each other's view state. Proven here through the pixel
-    # the frame view reports: it is read out of session state under that key,
-    # so it only comes back if the target really moved to "other".
+    # Target.key names the blob and the view state, so it must carry the
+    # machine. The frame view reads its pixel from session state under that
+    # key: it comes back only if the target moved to "other".
     app.session_state["pixel.other_1234_apd_r"] = (2, 3)
     widget(app, "selectbox", "Machine").set_value("other").run()
     assert not app.exception, app.exception

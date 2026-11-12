@@ -1,8 +1,6 @@
-"""Each statistic's compute against a trace with a planted answer.
-
-The blob-fixture philosophy applied to statistics: a sine peaks where the sine
-is, an autocorrelation is 1 at zero lag, a shifted copy peaks at the shift.
-"""
+"""Each statistic's compute against a trace with a planted answer: a sine
+peaks where the sine is, an autocorrelation is 1 at zero lag, a shifted copy
+peaks at the shift."""
 
 import numpy as np
 import pytest
@@ -40,7 +38,7 @@ def _ornstein_uhlenbeck(tau, n=10000, seed=11):
     return out
 
 
-def test_registry_holds_five_specs_in_plan_order():
+def test_registry_holds_the_five_specs_in_the_order_the_page_offers():
     assert [s.key for s in statistics.all_specs()] == [
         "trace", "pdf", "psd", "acf", "ccf",
     ]

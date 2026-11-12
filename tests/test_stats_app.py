@@ -1,10 +1,5 @@
-"""Smoke tests for the statistics page.
-
-Uses a ``statistics_deployment`` fixture holding **an APD file and an ASP file
-under the same shot number**. The real tree has no such shot (45 APD shots;
-one ASP shot, 1150618021, with no APD), so the fixture is the only place the
-cross-diagnostic path gets exercised.
-"""
+"""Smoke tests for the statistics page, over a tree that holds an APD file
+and an ASP file of the same shot, so that a basket can mix the two."""
 
 from pathlib import Path
 
@@ -81,9 +76,21 @@ def statistics_deployment(monkeypatch, tmp_path):
     st.cache_resource.clear()
 
 
-def run(path, **kwargs):
+def run(path):
     app = AppTest.from_file(path, default_timeout=120).run()
     assert not app.exception, app.exception
+    return app
+
+
+def with_two_pixels():
+    """The page with two pixels of the APD file in the basket."""
+    app = AppTest.from_file(STATISTICS, default_timeout=120)
+    app.session_state["pixels.cmod_9999_apd_r"] = [(0, 0), (1, 1)]
+    app.run()
+    assert not app.exception, app.exception
+    add_button(app).click().run()
+    assert not app.exception, app.exception
+    assert len(basket_rows(app)) == 2
     return app
 
 
@@ -113,14 +120,7 @@ def test_the_page_renders_with_an_empty_basket(statistics_deployment):
 
 
 def test_adding_two_pixels_draws_a_figure(statistics_deployment):
-    app = AppTest.from_file(STATISTICS, default_timeout=120)
-    app.session_state["pixels.cmod_9999_apd_r"] = [(0, 0), (1, 1)]
-    app.run()
-    assert not app.exception, app.exception
-
-    add_button(app).click().run()
-    assert not app.exception, app.exception
-    assert len(basket_rows(app)) == 2
+    app = with_two_pixels()
     # The pixel-map selector plus the time-trace overview, which zooms by
     # resampling rather than by stretching its axes.
     assert len(app.get("plotly_chart")) >= 2
@@ -128,12 +128,7 @@ def test_adding_two_pixels_draws_a_figure(statistics_deployment):
 
 
 def test_trace_zoom_resamples_the_window(statistics_deployment):
-    app = AppTest.from_file(STATISTICS, default_timeout=120)
-    app.session_state["pixels.cmod_9999_apd_r"] = [(0, 0), (1, 1)]
-    app.run()
-    assert not app.exception, app.exception
-    add_button(app).click().run()
-    assert not app.exception, app.exception
+    app = with_two_pixels()
 
     # The tiny fixture spans 1.0-1.02 s; zoom to its middle.
     app.session_state["stats.trace_zoom"] = (1.005, 1.010)
@@ -146,14 +141,7 @@ def test_trace_zoom_resamples_the_window(statistics_deployment):
 def test_switching_the_statistic_redraws_without_clearing_the_basket(
     statistics_deployment,
 ):
-    app = AppTest.from_file(STATISTICS, default_timeout=120)
-    app.session_state["pixels.cmod_9999_apd_r"] = [(0, 0), (1, 1)]
-    app.run()
-    assert not app.exception, app.exception
-    add_button(app).click().run()
-    assert not app.exception, app.exception
-    assert len(basket_rows(app)) == 2
-
+    app = with_two_pixels()
     widget(app, "selectbox", "Statistic").set_value("acf").run()
     assert not app.exception, app.exception
     assert len(basket_rows(app)) == 2
@@ -161,12 +149,7 @@ def test_switching_the_statistic_redraws_without_clearing_the_basket(
 
 
 def test_ccf_asks_for_a_reference_and_draws_against_it(statistics_deployment):
-    app = AppTest.from_file(STATISTICS, default_timeout=120)
-    app.session_state["pixels.cmod_9999_apd_r"] = [(0, 0), (1, 1)]
-    app.run()
-    assert not app.exception, app.exception
-    add_button(app).click().run()
-    assert not app.exception, app.exception
+    app = with_two_pixels()
 
     widget(app, "selectbox", "Statistic").set_value("ccf").run()
     assert not app.exception, app.exception
@@ -175,12 +158,7 @@ def test_ccf_asks_for_a_reference_and_draws_against_it(statistics_deployment):
 
 
 def test_a_mixed_basket_draws_and_reports_the_resampling(statistics_deployment):
-    app = AppTest.from_file(STATISTICS, default_timeout=120)
-    app.session_state["pixels.cmod_9999_apd_r"] = [(0, 0), (1, 1)]
-    app.run()
-    assert not app.exception, app.exception
-    add_button(app).click().run()
-    assert not app.exception, app.exception
+    app = with_two_pixels()
 
     widget(app, "selectbox", "Statistic").set_value("pdf").run()
     assert not app.exception, app.exception

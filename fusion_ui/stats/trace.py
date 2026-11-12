@@ -101,7 +101,6 @@ def render(items, params):
     ranged = decimate.selected_x_range(event)
     if ranged is not None and (window is None or tuple(ranged) != tuple(window)):
         decimate._apply_window(st, zoom_key, gen_key, gen, ranged)
-        return None
 
     if window is None:
         total = sum(len(trace.time) for trace, _ in items)

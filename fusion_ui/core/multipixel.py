@@ -244,7 +244,6 @@ def selector(ds, target) -> list:
     picked = pixels_from_points(decimate.selection_points(event))
     if picked and picked != sorted(current):
         select(picked)
-        return picked
 
     left, right = st.columns(2)
     if left.button("Select all", key=f"pixelmap.all.{target.key}"):
@@ -321,11 +320,7 @@ def _live_overlay(ds, spec, target, params, pixels) -> None:
     )
     ranged = decimate.selected_x_range(event)
     if ranged is not None and (window is None or tuple(ranged) != tuple(window)):
-        # Remounted under a new key, as in `selector`.
-        st.session_state[zoom_key] = (float(ranged[0]), float(ranged[1]))
-        st.session_state[gen_key] = gen + 1
-        st.rerun()
-        return
+        decimate._apply_window(st, zoom_key, gen_key, gen, ranged)
 
     samples = int(view_ds.sizes[loader.TIME_DIM])
     if window is None:
@@ -380,7 +375,6 @@ def view(conn, spec, target, params, ds) -> None:
             (pair, result) for pair, result, _ in items if result is not None
         ]
         st.rerun()
-        return
 
     cached = st.session_state.get(key)
     if not cached:

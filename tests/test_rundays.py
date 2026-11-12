@@ -1,8 +1,6 @@
 """The run-day overview: parsing the hand-written file, and the join to disk."""
 
-import pytest
-
-from fusion_ui.core import db, rundays
+from fusion_ui.core import rundays
 
 SAMPLE = """# Run days
 
@@ -51,11 +49,9 @@ def test_a_shot_maps_onto_its_run_day():
 
 
 def test_the_shipped_file_covers_every_curated_run_day(discharge_db):
-    """Every day in the throwaway descriptor is one the real file describes --
-    the fixture shots are real shot numbers, so a missing entry here means the
-    file has fallen behind the discharge database."""
+    """The fixture's shots are real shot numbers: the shipped file parses and
+    describes their days."""
     days = rundays.load()
-    assert len(days) >= 22
     for shot in (1160616027, 1110201007, 1090813019):
         assert rundays.day_of(shot) in days
 

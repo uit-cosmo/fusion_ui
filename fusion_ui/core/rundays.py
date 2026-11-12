@@ -1,17 +1,13 @@
-"""Run days: what each day of shots was actually for.
+"""Run days: what each day of shots was for.
 
-A shot number is ``1YYMMDDnnn`` -- the first seven digits are the run day, and a
-run day is the unit the group thinks in: one miniproposal (occasionally two or
-three) owns the day, the session leader writes a plan, and every shot taken that
-day serves it. The discharge database carries none of that, so the prose lives
-in ``fusion_ui/data/run_days.md``, **hand-written** from the C-Mod run pages.
+A shot number is ``1YYMMDDnnn``: its first seven digits are the run day, which
+one miniproposal usually owns. The discharge DB says nothing of that, so the
+prose is hand-written in ``fusion_ui/data/run_days.md`` from the C-Mod run
+pages.
 
-There is deliberately no scraper. The run pages sit behind
-``www-internal.psfc.mit.edu`` with a certificate that does not verify, they are
-written once and never again, and a landing page that reaches the network is a
-landing page that hangs when the network is not there. Adding a run day is a
-section in the markdown file, which a physicist can write without touching
-Python.
+There is no scraper, on purpose: the run pages are on MIT's internal web and
+never change once written, and a landing page that reaches the network hangs
+when the network is not there.
 """
 
 import os
@@ -28,10 +24,8 @@ RUN_DAYS_PATH = os.path.join(
     "run_days.md",
 )
 
-# The run page links each miniproposal to a PDF under this path; the number in
-# the markdown file is the whole of it, so the URL is derived rather than
-# written down twice. Served over http on the run page, but https works and is
-# what we link to.
+# A miniproposal's PDF, from its number. Reachable from the group server and
+# from MIT only; nothing here fetches it.
 MINIPROPOSAL_URL = (
     "https://www-internal.psfc.mit.edu/research/alcator/miniproposals/{}.pdf"
 )
@@ -57,12 +51,7 @@ class RunDay:
 
     @property
     def url(self):
-        """The miniproposal PDF on the C-Mod internal web.
-
-        Reachable from the group server and from MIT; from anywhere else it
-        simply will not load. Nothing here fetches it -- it is a link for the
-        person reading the page.
-        """
+        """The miniproposal PDF on the C-Mod internal web."""
         return MINIPROPOSAL_URL.format(self.mp.removeprefix("MP"))
 
 
@@ -72,18 +61,15 @@ def day_of(shot):
 
 
 def day_to_date(day):
-    """``"1160616"`` -> ``"2016-06-16"``.
-
-    The leading 1 is C-Mod's machine digit, not part of the date; the two after
-    it are the year within 2000..2099, which every C-Mod run day satisfies --
-    the machine ran from 1993 under a different numbering and shut down in 2016.
-    """
+    """``"1160616"`` -> ``"2016-06-16"``. The leading 1 is not part of the
+    date, and the two digits after it are a year of this century."""
     return f"20{day[1:3]}-{day[3:5]}-{day[5:7]}"
 
 
 def parse(text):
-    """``{day: RunDay}`` from the markdown. Sections with no bold MP line are
-    skipped -- that is the file's own preamble, and a half-written entry."""
+    """``{day: RunDay}`` from the markdown: a ``## <seven digits>`` heading,
+    one bold ``**MP<n> — <title>**`` line, then the summary. A section with no
+    MP line is skipped."""
     days, day, mp, title, body = {}, None, None, None, []
 
     def flush():
@@ -108,8 +94,7 @@ def parse(text):
 
 
 def load(path=None):
-    """The run-day file, parsed. Missing file means no summaries, not a crash:
-    the overview still lists the days, just without their purpose."""
+    """The run-day file, parsed; ``{}`` when it is missing."""
     path = path or RUN_DAYS_PATH
     if not os.path.exists(path):
         return {}
@@ -134,15 +119,13 @@ TABLE_COLUMNS = [
 ]
 
 
-def run_day_table(conn, discharge_db_path, run_days=None):
+def run_day_table(conn, discharge_db_path):
     """One row per run day: how many shots, how many are on disk, what for.
 
-    Every curated day appears whether or not its files are here -- the point of
-    the overview is the campaign, not this machine's copy of it -- and a day
-    with files but no curated shots appears too, the same way the shot browser
-    lists an uncurated shot rather than hiding it.
+    Every day in the discharge DB is listed whether or not its files are here,
+    and so is a day with files but no shot in the discharge DB.
     """
-    run_days = load() if run_days is None else run_days
+    run_days = load()
 
     curated = {}
     for shot in catalog.load_discharges(discharge_db_path) if discharge_db_path else {}:

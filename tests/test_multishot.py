@@ -27,11 +27,11 @@ def two_shot_frame():
     """Two shots, two pixels each, under one source; plus a NaN to be dropped."""
     return frame(
         [
-            ("cmod", 1, "apd", 1, "velocity_contour", "h", 0, 0, "vx_c", 10.0),
-            ("cmod", 1, "apd", 1, "velocity_contour", "h", 0, 1, "vx_c", 20.0),
-            ("cmod", 2, "apd", 1, "velocity_contour", "h", 0, 0, "vx_c", 30.0),
-            ("cmod", 2, "apd", 1, "velocity_contour", "h", 0, 1, "vx_c", float("nan")),
-            ("cmod", 1, "apd", 1, "velocity_contour", "h", 0, 0, "area_c", 1.0),
+            ("cmod", 1, "apd", 1, "tracking", "h", 0, 0, "vx_c", 10.0),
+            ("cmod", 1, "apd", 1, "tracking", "h", 0, 1, "vx_c", 20.0),
+            ("cmod", 2, "apd", 1, "tracking", "h", 0, 0, "vx_c", 30.0),
+            ("cmod", 2, "apd", 1, "tracking", "h", 0, 1, "vx_c", float("nan")),
+            ("cmod", 1, "apd", 1, "tracking", "h", 0, 0, "area_c", 1.0),
         ]
     )
 
@@ -43,25 +43,25 @@ def test_distinct_names_are_sorted():
 def test_distinct_sources_group_by_plot_hash_diagnostic_and_preprocessed():
     rows = two_shot_frame()
     extra = frame(
-        [("cmod", 3, "apd", 1, "velocity_contour", "other", 0, 0, "vx_c", 5.0)]
+        [("cmod", 3, "apd", 1, "tracking", "other", 0, 0, "vx_c", 5.0)]
     )
     sources = multishot.distinct_sources(pd.concat([rows, extra]), "vx_c")
     assert sources == [
-        ("velocity_contour", "h", "apd", 1),
-        ("velocity_contour", "other", "apd", 1),
+        ("tracking", "h", "apd", 1),
+        ("tracking", "other", "apd", 1),
     ]
 
 
 def test_mean_aggregates_over_pixels():
     result = multishot.aggregate(
-        two_shot_frame(), ("velocity_contour", "h", "apd", 1), "vx_c", "mean"
+        two_shot_frame(), ("tracking", "h", "apd", 1), "vx_c", "mean"
     )
     values = dict(zip(result["shot"], result["value"]))
     assert values == {1: 15.0, 2: 30.0}
 
 
 def test_median_and_maximum():
-    source = ("velocity_contour", "h", "apd", 1)
+    source = ("tracking", "h", "apd", 1)
     median = multishot.aggregate(two_shot_frame(), source, "vx_c", "median")
     maximum = multishot.aggregate(two_shot_frame(), source, "vx_c", "maximum")
     assert dict(zip(median["shot"], median["value"])) == {1: 15.0, 2: 30.0}
@@ -71,7 +71,7 @@ def test_median_and_maximum():
 def test_a_nan_is_dropped_not_averaged():
     """Shot 2 has one NaN pixel and one 30.0 pixel; the mean must be 30, not 15."""
     result = multishot.aggregate(
-        two_shot_frame(), ("velocity_contour", "h", "apd", 1), "vx_c", "mean"
+        two_shot_frame(), ("tracking", "h", "apd", 1), "vx_c", "mean"
     )
     assert result.set_index("shot").loc[2, "value"] == 30.0
 
@@ -79,7 +79,7 @@ def test_a_nan_is_dropped_not_averaged():
 def test_fixed_pixel_selects_one_pixel():
     result = multishot.aggregate(
         two_shot_frame(),
-        ("velocity_contour", "h", "apd", 1),
+        ("tracking", "h", "apd", 1),
         "vx_c",
         "pixel",
         pixel=(0, 1),
@@ -90,7 +90,7 @@ def test_fixed_pixel_selects_one_pixel():
 def test_fixed_pixel_requires_a_pixel():
     with pytest.raises(TypeError, match="pixel"):
         multishot.aggregate(
-            two_shot_frame(), ("velocity_contour", "h", "apd", 1), "vx_c", "pixel"
+            two_shot_frame(), ("tracking", "h", "apd", 1), "vx_c", "pixel"
         )
 
 
@@ -159,8 +159,7 @@ def test_with_metadata_joins_and_leaves_the_missing_ones_blank():
 
 
 def test_clicked_shot_reads_through_appended_hover_columns():
-    # plotly_express appends hover_data to customdata: this is the click that
-    # crashed the page with "too many values to unpack (expected 2)".
+    # plotly_express appends hover_data to customdata.
     point = {"customdata": ["cmod", 1160616027, 0.52, 1.1, 0.9]}
     assert multishot.clicked_shot(point) == ("cmod", 1160616027)
 
