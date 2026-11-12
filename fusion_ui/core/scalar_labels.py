@@ -1,26 +1,19 @@
 """What the multi-shot axis calls a stored scalar: the quantity and its unit.
 
 The store's names are permanent keys (``vr_com``); a person reading a scatter needs to know what the
-number is (``v_R, 2DCA centroid [m/s]``). :data:`LABELS` holds that for the names the products write
-(``method_fields`` and ``blob_parameters``). A name without an entry shows as its raw name: nothing is
-guessed for it.
+number is (``v_R, 2DCA centroid [m/s]``). :data:`LABELS` holds that for the names ``method_fields`` and
+``blob_parameters`` write. A name without an entry shows as its raw name: nothing is guessed for it.
 
-**Every label carries a unit, or says outright that it has none.** The unit is the last thing in the
-label, in square brackets, and one of :data:`UNITS`. A number with no unit (a count, a fraction, a
-correlation coefficient) says ``[no unit]``, so that a unit someone forgot cannot be mistaken for one
-that does not exist.
-
-**Labels are per name, not per source** (:data:`SHARED`): the axis shows the same label whichever source
-is picked, so each is worded by what the quantity is, never by the spec that writes it.
-
-Nothing in this module touches Streamlit, the database or the filesystem.
+Every label ends in its unit in square brackets, one of :data:`UNITS`. A number with no unit says
+``[no unit]``, so that a forgotten unit cannot be mistaken for none. A label is per name, not per source:
+the axis shows it whichever spec wrote the value, so it says what the quantity is and names no spec.
 """
 
 import re
 import textwrap
 from dataclasses import dataclass
 
-#: The unit of a number that has none, said outright: a count, a fraction, a coefficient.
+#: The unit of a number that has none: a count, a fraction, a coefficient.
 NO_UNIT = "no unit"
 
 #: The units a label may carry.
@@ -38,22 +31,11 @@ class Label:
         return f"{self.quantity} [{self.unit}]"
 
 
-#: The names an older source writes as well as a product, and which sources those are: plot keys, and the
-#: retired seed's ``density_scan_import``. A label here has to read true for every one of them.
-SHARED = {
-    "number_events": ("density_scan_import",),
-    "taud_psd": ("taud_psd", "density_scan_import"),
-    "lambda_psd": ("taud_psd", "density_scan_import"),
-    "lr": ("density_scan_import",),
-    "lz": ("density_scan_import",),
-}
-
-#: The method names are the Fields page's panel titles (``fusion_ui.views.methods``), so that a point
-#: on the scatter and the panel it opens call a method the same thing. Where a panel says "on the CA",
-#: the label says conditional average: an axis title is read without the page beside it.
+#: The method names are the Fields page's panel titles (``fusion_ui.views.methods``), so that a point on
+#: the scatter and the panel it opens call a method the same thing. Where a panel says "on the CA", the
+#: label says conditional average: an axis title is read without the page beside it.
 LABELS = {
-    # -- method_fields, the three 2DCA tracks: the velocity each reads off the average, and the lags it
-    # rests on. The contour level exists only for the centroid track.
+    # method_fields: the three 2DCA tracks
     "vr_max": Label("v_R, 2DCA max", "m/s"),
     "vz_max": Label("v_Z, 2DCA max", "m/s"),
     "nlags_max": Label("number of lags the 2DCA max slope rests on", NO_UNIT),
@@ -67,10 +49,8 @@ LABELS = {
     "vr_2dcc": Label("v_R, 2DCC", "m/s"),
     "vz_2dcc": Label("v_Z, 2DCC", "m/s"),
     "nlags_2dcc": Label("number of lags the 2DCC slope rests on", NO_UNIT),
-    # The events the conditional average rests on: the blob's ``nevents``.
     "number_events": Label("number of events in the conditional average", NO_UNIT),
-    # -- method_fields, time delay estimation off the record's cross-correlation, and on the
-    # conditional average.
+    # method_fields: time delay estimation off the record, and on the conditional average
     "vr3_tde": Label("v_R, 3TDE (CC), from the record", "m/s"),
     "vz3_tde": Label("v_Z, 3TDE (CC), from the record", "m/s"),
     "vr2_tde": Label("v_R, 2TDE (CC), from the record", "m/s"),
@@ -80,44 +60,33 @@ LABELS = {
     "vz3_catde": Label("v_Z, 3TDE on the conditional average", "m/s"),
     "vr2_catde": Label("v_R, 2TDE on the conditional average", "m/s"),
     "vz2_catde": Label("v_Z, 2TDE on the conditional average", "m/s"),
-    # -- blob_parameters, the structure behind each pixel's average.
+    # blob_parameters. R varies along a row of the array and Z along a column.
     "area": Label("area of the zero-lag contour", "m²"),
-    # R varies along a row of the array and Z along a column: lr and lz are the FWHM in each direction.
     "lr": Label("radial FWHM of the conditional average", "m"),
     "lz": Label("poloidal FWHM of the conditional average", "m"),
-    # The two-sided exponential pulse fitted to the PSD of the pixel's own record.
     "taud_psd": Label("duration time τ_d from the PSD fit", "s"),
     "lambda_psd": Label("pulse asymmetry λ from the PSD fit, between 0 and 1", NO_UNIT),
 }
 
 
-def has_label(name):
-    """Whether ``name`` has a label."""
-    return name in LABELS
-
-
 def label(name):
-    """The text an axis shows for ``name``: its label, or the raw name when it has none."""
-    entry = LABELS.get(name)
-    return name if entry is None else str(entry)
+    """What an axis shows for ``name``: its label, or the raw name when it has none."""
+    return str(LABELS.get(name, name))
 
 
 def option(name):
     """What the scalar picker shows for ``name``: ``name — label``, or the raw name when it has no label.
 
-    Only what is shown: the picker still stores the raw name, which is the store's key and what the page
-    reads values by. The name comes first so that the picker can still be searched by it, and the label is
-    the same text the axis shows.
+    The name comes first so that the picker can be searched by it.
     """
-    entry = LABELS.get(name)
-    return name if entry is None else f"{name} — {entry}"
+    return f"{name} — {LABELS[name]}" if name in LABELS else name
 
 
 def axis_title(name, collapse=None):
     """The y-axis title of the multi-shot scatter: the label, then how the pixels were collapsed.
 
     ``collapse`` is the text of the aggregate (``multishot.AGGREGATES``), or ``None`` for a scalar that
-    is already one number per shot. A name without a label shows as it always did, ``name (collapse)``.
+    is already one number per shot.
     """
     text = label(name)
     return f"{text} ({collapse})" if collapse else text
@@ -128,18 +97,17 @@ TITLE_WIDTH = 44
 
 _KEPT_WHOLE = re.compile(r"\[[^\]]*\]|\([^)]*\)")
 
-#: The space that keeps a unit or an aggregate on one line: ``textwrap`` breaks only at ASCII whitespace, so
-#: a no-break space is never a place to break. Written as a code point, since the character is invisible.
+#: ``textwrap`` breaks only at ASCII whitespace, so a no-break space keeps a unit or an aggregate on one
+#: line. Written as a code point, since the character is invisible.
 _NBSP = chr(0xA0)
 
 
 def wrapped(text, width=TITLE_WIDTH):
     """``text`` broken into lines of at most ``width`` characters, joined with ``<br>`` as Plotly takes them.
 
-    A title is one line to Plotly, and a rotated one that is longer than the plot is high is cut off at
-    both ends: the longest of these, with its aggregate, runs to 107 characters. The unit in square
-    brackets and the aggregate in parentheses are never broken in two, since ``[no`` on one line and
-    ``unit]`` on the next reads as nothing. A word longer than ``width`` is left whole.
+    A title is one line to Plotly, and a rotated one longer than the plot is high is cut off at both ends.
+    The unit in square brackets and the aggregate in parentheses are never broken in two, since ``[no`` on
+    one line and ``unit]`` on the next reads as nothing. A word longer than ``width`` is left whole.
     """
     glued = _KEPT_WHOLE.sub(lambda m: m.group().replace(" ", _NBSP), text)
     lines = textwrap.wrap(
