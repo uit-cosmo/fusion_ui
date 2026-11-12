@@ -89,14 +89,10 @@ def step_pixel(order, dead, pixel, direction):
 
 
 def _customdata(point):
-    for read in (
-        lambda: point["customdata"],
-        lambda: point["customData"],
-        lambda: point.customdata,
-    ):
+    for key in ("customdata", "customData"):
         try:
-            value = read()
-        except (TypeError, KeyError, IndexError, AttributeError):
+            value = point[key]
+        except (TypeError, KeyError, IndexError):
             continue
         if value is not None:
             return value
