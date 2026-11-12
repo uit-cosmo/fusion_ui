@@ -34,9 +34,6 @@ To check a deployment at any time:
 bash deploy/verify.sh <host>
 ```
 
-**Before running `install.sh` again on a server where another service holds
-port 80, as apache does on the group server, read "Port 80" under step 7.**
-
 The rest of this file is what the script does, step by step, for when it goes
 wrong. `$APP_DIR` is the checkout the service runs from (the checkout
 `install.sh` is run from, unless `--app-dir`), `$SRC_DIR` is where the
@@ -309,17 +306,12 @@ This has happened: an unattended upgrade started apache again, the next nginx
 restart failed, and the site was down for six days. The deployed site config has
 no redirect block and serves 443 only.
 
-**The script removes the block only when port 80 is taken and nginx is not
-running.** Run on a server where nginx is already up, it writes the block back
-into `/etc/nginx/sites-available/fusion-ui`. So after every run of `install.sh`
-on a server where another service holds port 80:
+**The script leaves the block out whenever something other than nginx holds
+port 80**, on a first install and on every re-run. To check after a run:
 
 ```bash
 grep -n 'listen 80' /etc/nginx/sites-available/fusion-ui    # expect no output
 ```
-
-If it prints a line, delete the `server { listen 80; … }` block from that file,
-then `sudo nginx -t && sudo systemctl reload nginx`.
 
 To take port 80 back for the redirect, stop the other service and run the
 installer again.

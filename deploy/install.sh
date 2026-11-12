@@ -384,11 +384,14 @@ else
   echo "  Certificate: CN=$SERVER_NAME, SAN=$cert_san"
 fi
 # nginx binds every listen directive at startup, so one taken port stops the
-# whole service -- including the 443 vhost that is the actual deployment.
+# whole service -- including the 443 vhost that is the actual deployment. The
+# redirect goes in only when port 80 is free or nginx itself holds it: judged
+# by who holds the port, not by whether nginx is running, so that a re-run on
+# a live server does not write the block back for the next restart to trip on.
+holder=$(ss -tlnp '( sport = :80 )' 2>/dev/null |
+         sed -n 's/.*users:(("\([^"]*\)".*/\1/p' | head -1)
 if ss -tln '( sport = :80 )' 2>/dev/null | grep -q LISTEN &&
-   ! systemctl is-active --quiet nginx; then
-  holder=$(ss -tlnp '( sport = :80 )' 2>/dev/null |
-           sed -n 's/.*users:(("\([^"]*\)".*/\1/p' | head -1)
+   [[ "$holder" != nginx ]]; then
   echo "  Port 80 is held by ${holder:-another process}; serving 443 only."
   echo "  http://$SERVER_NAME will keep going wherever it goes today."
   redirect_fix='/# BEGIN http-redirect/,/# END http-redirect/d'
