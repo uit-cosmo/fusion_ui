@@ -1,105 +1,193 @@
 # Shot Explorer
 
-A browser UI over the group's fusion diagnostic data. Pick a shot and a plot,
-get the plot; pick a scalar and an x-axis, get it across every shot.
+A browser UI over the group's fusion diagnostic data (Alcator C-Mod GPI imaging,
+Langmuir probes and Thomson scattering). Pick a shot and a plot, get the plot;
+pick a scalar and an x-axis, get it across every shot.
 
 It runs as a hosted service on the group server, next to the data, and drives
-the analysis code in [`imaging_methods`](https://github.com/Sosnowsky/imaging-methods)
-and `velocity_estimation`. It imports nothing from
-[`fusion_scripts`](https://github.com/Sosnowsky/fusion_scripts) (a test enforces it), which
-still writes the preprocessed files the app reads.
+the analysis code in [`imaging_methods`](https://github.com/uit-cosmo/imaging-methods)
+and `velocity_estimation`. How it is built is in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); how it is installed on the server
+is in [`deploy/README.md`](deploy/README.md).
 
-## Views
+## Pages
 
-- **Start page** — every run day (the first seven digits of the shot number),
-  how many of its shots are curated and how many are here, and what the day
-  was run for: the miniproposal it belongs to and a short summary of the
-  session leader's plan.
-- **Shot browser** — filterable table of every shot on disk, joined to the
-  discharge metadata (f_GW, I_p, n̄_e, confinement mode).
-- **Single shot** — a shot, a diagnostic, a plot type and its parameters, in.
-  A figure out: raw frames and time series, velocity fields, conditional
-  averages, movies.
-- **Multi shot** — one scalar (velocity, duration time, event rate, …) plotted
-  against shot number, Greenwald fraction, or line-averaged density across a
-  selection of shots.
-- **Statistics** — a basket of traces (pixels off any imaging shot, channels
-  off any probe shot, mixed freely) drawn together under one statistic — time
-  trace, PDF, PSD, ACF, or CCF against a reference trace — over any time
-  window, labelled with magnetic coordinates. Live and uncached; the cached
-  Duration time (PSD fit) on the single-shot page stays the scalar-producing
-  spectrum.
-- **Fields** — the velocity field of every method for one shot, and the
-  conditional average behind each pixel's number. One panel per method (the 2DCA
-  by its maximum and by its centroid, the 2DCC, and the three- and two-point
-  time delay estimates, off the record and off the conditional average), on one
-  scale, as arrows or as v_R and v_Z maps. Click a pixel for the average at
-  chosen lags, the tracks and the numbers. The page reads what batch jobs stored
-  and never computes: it names what is missing, with the `fusion-ui precompute`
-  command that fills it.
-- **Documentation** — what every quantity means, how it is computed and how the
-  quantities depend on one another: the path from the raw file to the record,
-  the products and their settings, every scalar name with its unit and its
-  sources, the Fields page's cuts, and a diagram of the dependencies. The prose
-  is [`fusion_ui/data/documentation.md`](fusion_ui/data/documentation.md); the
-  tables, the diagram and the numbers it quotes are read from the code.
+- **Start page**: every run day (the first seven digits of a shot number), how
+  many of its shots are curated and on disk, and what the day was run for.
+- **Shot browser**: a filterable table of every shot on disk, joined to the
+  discharge metadata (f_GW, I_p, n̄_e, confinement mode). It sets the shot, or
+  the selection of shots, the other pages open on.
+- **Single shot**: a shot, a diagnostic, a plot and its parameters in, a figure
+  out. A cached plot is computed when **Compute** is pressed and kept; under the
+  figure are the code versions it was made with and a **Recompute** button.
+  Plots with a reference pixel can run on a rectangle of pixels (Pixels: Many).
+- **Multi shot**: one stored scalar against shot number, f_GW, n̄_e or I_p,
+  coloured by confinement mode. A scalar is picked by name and by source (the
+  plot and parameter set that wrote it), and per-pixel values become one number
+  per shot by a mean, median, maximum or a fixed pixel. Clicking a point opens
+  that shot on the plot that made it.
+- **Statistics**: a basket of traces (pixels of any imaging shot, channels of any
+  probe shot) drawn together under one statistic (time trace, PDF, PSD, ACF, or
+  CCF against a reference trace) over any time window. Nothing is stored.
+- **Fields**: the velocity field of every method for one shot, on one scale, and
+  for a clicked pixel the conditional average at chosen lags, the tracks and the
+  numbers. It reads what batch jobs stored and never computes: what is missing
+  it names, with the command that fills it.
+- **Documentation**: what every quantity means and how it is computed
+  ([`fusion_ui/data/documentation.md`](fusion_ui/data/documentation.md)), and
+  how to read the results from Python.
 
-## Status
+## Plots
 
-Phases 00-04 are in: the config module, the SQLite schema, the `rescan` catalog
-job, the shot browser, the single-shot view, and the plot registry that view is
-built on — parameter forms generated from a dataclass, a content-addressed
-result cache, and the scalar store. Phase 03 ported the twelve analyses; phase
-04 added the multi-shot scatter (one scalar against shot number, f_GW, density
-or I_p, coloured by confinement mode, click a point to open that shot) and
-`fusion-ui precompute` for overnight cache fills. Phase 05 (hardening) is
-ongoing: multi-pixel mode, the Statistics page and `prune` are in, but the
-process pool for page computes has not landed, so nothing slow may start from a
-page. Phase 06 (decorrelation fields) is done, except that J12b, the Thomson
-scattering profiles on the single-shot page, is merged and not yet deployed. It
-added the Fields and Documentation pages, three products computed in batch (the
-2DCA at every pixel, every method's velocity field, and the blob parameters),
-`precompute` for several plots on several workers, and dead-pixel masks
-estimated at preprocessing. See [`docs/PLAN.md`](docs/PLAN.md) for the
-architecture, the database schema, and the phase order.
+| Key | Shows | Files | Kind | Scalars |
+|---|---|---|---|---|
+| `raw_frames` | Frames, a pixel's trace, mp4 export | APD, phantom | live | |
+| `probe_trace` | One quantity at one probe position | ASP, FSP | live | |
+| `thomson_profiles` | n_e, T_e, p_e against ρ_pol or R_mid, with the MLP's profiles on request | Thomson scattering | live | |
+| `mlp_profiles` | The six Mirror Langmuir Probe quantities against ρ, per plunge | ASP | live | |
+| `dead_pixels` | The dead-pixel mask, with every pixel's PDF and spectrum | APD, raw only | cached | `dead`, `psd_ratio`, `number_dead` |
+| `taud_psd` | Duration time from a fit to one pixel's spectrum | APD, phantom | cached | `taud_psd`, `lambda_psd` |
+| `velocity_tde` | Velocity at one pixel by time delay estimation on the record | APD, phantom | cached | `vx_tde`, `vy_tde` |
+| `pixel_averages` | The conditional average (2DCA) at every live pixel | APD, preprocessed only | cached, batch only | |
+| `method_fields` | Seven methods' velocity fields, read off `pixel_averages` | APD, preprocessed only | cached | each method's v_R, v_Z and what they rest on |
+| `blob_parameters` | Size, area and duration at every pixel, read off `pixel_averages` | APD, preprocessed only | cached | `area`, `lr`, `lz`, `taud_psd`, `lambda_psd` |
 
-## Adding a run day
+A live plot draws the file directly and stores nothing. A cached plot stores its
+result and its scalars, which the Multi shot page reads. Each module in
+`fusion_ui/plots/` says in its docstring what it computes and draws.
 
-The purposes shown on the start page are hand-written in
-[`fusion_ui/data/run_days.md`](fusion_ui/data/run_days.md) — there is no
-scraper, and the app never goes to the network. To describe a new day, open its
-C-Mod run page,
+## Setup
 
-    https://www-internal.psfc.mit.edu/research/alcator/program/cmod_runs.php?run=1160616
-
-find the miniproposal whose shot range covers the shots you have, and add a
-section:
-
-```markdown
-## 1160616
-
-**MP800 — Scrape-off layer fluctuation statistic in ohmic L- and EDA H-modes**
-
-An ohmic L-mode density scan to high Greenwald fraction, with the ASP dwelling
-just inside the limiter radius and helium puffed for GPI only while the MLP
-was scanning.
+```bash
+python -m venv .venv
+# The group's packages, editable, each from its own checkout:
+.venv/bin/pip install -e ../imaging-methods -e ../experimental_database \
+  -e ../velocity-estimation -e ../fpp-analysis-tools
+.venv/bin/pip install -e ".[dev]"
+cp .env.example .env            # then edit the paths for this machine
+.venv/bin/fusion-ui init-db
+.venv/bin/fusion-ui rescan      # index the data tree
+.venv/bin/streamlit run fusion_ui/app.py
 ```
 
-The miniproposal number and title are quoted verbatim; the paragraph is a
-summary. A day with no section is still listed, just without a purpose.
+`.env.example` explains each variable. The app imports nothing from
+`fusion_scripts`, which writes the preprocessed files it reads.
 
-## Adding a plot
+## Commands
 
-One file in `fusion_ui/plots/`, one line in its `__init__.py`. No page changes,
-no new storage, and it appears in the single-shot view immediately.
+| Command | Does |
+|---|---|
+| `fusion-ui init-db` | Create or migrate the app's SQLite database |
+| `fusion-ui rescan` | Index the data tree into the `shots` table |
+| `fusion-ui precompute PLOT [PLOT ...]` | Compute cached plots over the indexed shots, to fill the cache |
+| `fusion-ui prune --plot KEY` | Count one plot's stored results; with `--yes`, delete them |
+| `fusion-ui backfill-dt` | Measure each phantom file's frame interval into `shots.dt` |
+| `fusion-ui status` | The resolved paths, the index and the stored results, by plot |
+
+`fusion-ui --database PATH <command>` uses another SQLite file than
+`$FUSION_UI_DB`. New shots appear in the browser only after a rescan: the server
+runs it on cron, and the Shot browser has a button for it. `precompute` flags
+(`fusion-ui precompute --help` has the full text):
+
+| Flag | |
+|---|---|
+| `--shot N`, `--run-day D` | Only these shots, or the shots of these run days (seven digits). Repeatable, and they add up |
+| `--workers N` | N processes over the shots, largest file first (default 1, in this process) |
+| `--nice N` | Niceness of the computes (default 10 with several workers) |
+| `--params-json PATH` | Other parameters than the defaults: one plot's complete set, when only that plot is named, or only the fields to change, such as `{"averages": {"window": 30}}`, applied to every plot named |
+| `--pixel X Y` | The reference pixel, for a per-pixel plot |
+| `--force` | Recompute even where a result is stored |
+| `--retry-failed` | Recompute the runs recorded as failed, which are otherwise skipped |
+| `--stale` | Recompute in place only the results whose input file or upstream changed since. Not with `--force` or `--retry-failed` |
+
+Several plots named together run in dependency order within each shot, so a
+shot's conditional averages are computed once. `prune --plot KEY --scalar NAME`
+(repeatable) deletes only the scalars of those names under that plot, and
+leaves its runs and blobs. The key need not be a registered plot. Without
+`--yes` nothing is deleted and the exit status is 1.
+
+## When to recompute
+
+A result is computed once per shot and parameter set, and kept. The first fill
+of a run day, on the server (8 cores, shared with the service, so at most 7
+workers):
+
+```bash
+fusion-ui precompute method_fields blob_parameters --run-day 1160616 --workers 7
+```
+
+Both read `pixel_averages`, which this computes on the way. It takes 35 to 70
+minutes a shot on one core, so it is **batch only**: no page computes it.
+`method_fields` and `blob_parameters` take minutes, and can also be computed from
+the Single shot page once the shot's averages are stored.
+
+| What changed | Run | Cost |
+|---|---|---|
+| A shot was preprocessed | `fusion-ui rescan`, then `fusion-ui precompute method_fields blob_parameters --shot N` | up to about an hour a shot |
+| Tracking, TDE or blob code (`imaging_methods.decorrelation`, `velocity_estimation`) | `fusion-ui precompute method_fields blob_parameters --force --workers 7`; the stored averages are reused | minutes a shot |
+| The 2DCA itself (`imaging_methods.find_events_and_2dca`) | `fusion-ui precompute pixel_averages --force --workers 7`, then `fusion-ui precompute method_fields blob_parameters --stale --workers 7` | as a first fill |
+| A setting | Not a recompute: other parameters give new results beside the old ones, through `--params-json` or the Single shot form | |
+| One shot needs a shorter 2DCA window | `fusion-ui precompute method_fields blob_parameters --shot N --params-json short.json`, with `{"averages": {"window": 30}}` in the file | as a first fill, for that shot |
+| A preprocessed file was rewritten | `fusion-ui rescan`, then `fusion-ui precompute pixel_averages method_fields blob_parameters --stale` | as a first fill |
+| One result looks wrong | **Recompute** on the Single shot page, or `fusion-ui precompute PLOT --force --shot N` | |
+
+`--stale` compares the file modification time each result recorded with the one
+the index holds, so `rescan` comes first where a file changed. A shorter window
+keeps more events, since events closer than one window apart are dropped, and it
+narrows the lags the Fields page can show.
+
+## After upgrading
+
+Eight plots have been removed, seven of which stored results (`stored_mask` was
+live), and `blob_parameters` writes five scalars where it wrote twelve. A
+database filled before that still holds the old rows. They do no harm: they
+only show as extra sources and names on the Multi shot page. To clear them
+(`two_dca` last, since the others were built on it):
+
+```bash
+for key in velocity_contour fwhm_sizes gaussian_sizes velocity_2dca_tde \
+           trajectories two_sided_exp two_dca; do
+    fusion-ui prune --plot "$key" --yes
+done
+fusion-ui prune --plot blob_parameters --yes --scalar level \
+    --scalar lx_c --scalar ly_c --scalar theta_c \
+    --scalar lx_f --scalar ly_f --scalar theta_f
+```
+
+Leave out `--yes` to see the counts first. A key with nothing stored says so and
+exits 1. `fusion-ui status` lists every plot key that has runs; one that is not
+in the table above (`density_scan_import`, from a retired one-off import, is
+another) is cleared the same way. Nothing needs a recompute.
+
+## Reading results from Python
+
+`fusion_ui.api` reads the stored products by shot and pixel. It only reads:
+nothing is computed, and the database is opened read-only. Run the script with
+the app's own Python (the checkout's `.venv/bin/python`), so that it finds the
+app's database and cache.
 
 ```python
-from dataclasses import dataclass
-import plotly.graph_objects as go
-import xarray as xr
-from fusion_ui.core import registry
+from fusion_ui import api
 
+api.shots()                                    # shots with blob parameters stored
+ds = api.blob_parameters(1160616009)           # xarray, every pixel on (y, x)
+ds = api.velocity_fields(1160616009, pixels=[(6, 6)])   # pixels are (x, y)
+df = api.table()                               # pandas, one row per shot and live pixel
+```
 
+A shot that is not stored raises `api.NotStored`, whose `command` is the
+`fusion-ui precompute` line that fills it. The rest is in
+[`fusion_ui/data/python_api.md`](fusion_ui/data/python_api.md), which the
+Documentation page shows; `examples/garcia_velocity_2026_figs8_9.py` is the
+example to start from.
+
+## Extending
+
+**A plot** is one file in `fusion_ui/plots/` and its import in that package's
+`__init__.py`. No page changes; the form, the cache key, the stored result and
+the scalars follow from the registration.
+
+```python
 @dataclass
 class MyParams:
     """
@@ -107,22 +195,13 @@ class MyParams:
     """
     threshold: float = 2.5
 
-
-def compute(ds, params):          # -> xr.Dataset. Cached; omit for a live view.
-    return xr.Dataset({"y": ("t", ...)})
-
-
-def render(result, params, target):   # -> go.Figure, or draw and return None
-    return go.Figure(go.Scatter(y=result["y"].values))
-
-
-def scalars(result):              # -> {name: value} or {(x, y, name): value}
-    return {"my_number": float(result["y"].mean())}
-
+def compute(ds, params): ...              # -> xr.Dataset. Leave out for a live plot.
+def render(result, params, target): ...   # -> go.Figure, or draw and return None
+def scalars(result): ...                  # -> {name: value} or {(x, y, name): value}
 
 SPEC = registry.register(
     registry.PlotSpec(
-        key="my_plot",            # permanent: it is part of the cache key
+        key="my_plot",                    # permanent: it is part of the cache key
         label="My plot",
         diagnostics=("apd",),
         params=MyParams,
@@ -133,241 +212,34 @@ SPEC = registry.register(
 )
 ```
 
-The parameter form, the cache key, the netCDF blob, the run ledger and the
-scalar rows all follow from that. The rules the contract depends on are in
-[`CLAUDE.md`](CLAUDE.md).
+Start from the module nearest to what you need: `spectra.py` for something
+computed off the frames at one pixel, `method_fields.py` for something read off
+the stored conditional averages of a whole shot, `raw.py` for a live view, and
+`thomson_profiles.py` for a view that also draws another diagnostic of the shot.
+The rules a plot must keep are in [`CLAUDE.md`](CLAUDE.md). A scalar a plot
+writes needs an entry in `fusion_ui/data/documentation.md`; a test says so.
 
-A plot built on another plot's result declares it, and gets it handed over
-already computed:
+**A figure on the Fields page** is one builder in `fusion_ui/views/` and one
+entry in `SHOT_VIEWS` or `PIXEL_VIEWS` in its `__init__.py`.
 
-```python
-SPEC = registry.register(
-    registry.PlotSpec(
-        ...,
-        compute=compute,                # (ds, params, upstream) -> xr.Dataset
-        requires="two_dca",
-        upstream_params=lambda p: two_dca.TwoDcaSpecParams(two_dca=p.two_dca),
-    )
-)
-```
+**A statistic** is one file in `fusion_ui/stats/` and its import in that
+package's `__init__.py`, registered as a `statistics.StatSpec` with
+`compute(trace, params)` and `render(items, params)`. `stats/pdf.py` is a short
+one to copy, `stats/ccf.py` one that takes a reference trace.
 
-That is how every quantity derived from the conditional average — velocities,
-sizes, areas — shares one 2DCA run instead of each paying ~21 s for its own.
-`fusion_ui/plots/velocity_contour.py` is the worked example.
-
-A spec may also draw several pixels on one axis in many-pixel mode — a cached
-one from its stored results, a live one straight off the open dataset:
-
-```python
-def overlay(items, params, target):   # [((x, y), result), …] -> go.Figure
-    ...
-
-SPEC = registry.register(
-    registry.PlotSpec(
-        ...,
-        overlay=overlay,
-    )
-)
-```
-
-Cached specs without one still work there through the scalar fallback, which
-plots one per-pixel scalar across the selection — so for a cached spec an
-`overlay` is an upgrade, never a prerequisite, while for a live spec it is
-what makes it eligible at all. `fusion_ui/plots/spectra.py` (cached) and the
-trace overlay in `fusion_ui/plots/raw.py` (live) are the worked examples.
-
-A live spec may also draw other diagnostics of the same shot beside its own
-file. It names them, and the single-shot page opens each one's raw file —
-lazily, so that only its attributes are read until the view reads more — cut
-to the same window, and hands them over, `None` where the shot has none:
-
-```python
-def render(ds, params, target, companions):   # companions: {"asp": dataset or None}
-    ...
-
-SPEC = registry.register(
-    registry.PlotSpec(
-        ...,
-        render=render,
-        companions=("asp",),
-    )
-)
-```
-
-The Thomson scattering profiles in `fusion_ui/plots/thomson_profiles.py` are
-the worked example: they offer the MLP's profiles where the probe plunges in
-the window, and read the probe's data only while that overlay is on.
-
-## Adding a statistic
-
-One file in `fusion_ui/stats/`, one line in its `__init__.py`. No page changes,
-no new storage, and it appears on the Statistics page immediately.
-
-```python
-from dataclasses import dataclass
-import plotly.graph_objects as go
-import xarray as xr
-from fusion_ui.core import statistics
-
-
-@dataclass
-class MyStatParams:
-    """
-    bins: Number of bins.
-    """
-    bins: int = 64
-
-
-def compute(trace, params):        # -> xr.Dataset. Live; never cached.
-    return xr.Dataset({"y": ("v", ...)})
-
-
-def render(items, params):         # [(Trace, xr.Dataset), ...] -> go.Figure
-    figure = go.Figure()
-    for trace, result in items:
-        figure.add_trace(go.Scatter(y=result["y"].values, name=trace.label))
-    return figure
-
-
-SPEC = statistics.register(
-    statistics.StatSpec(
-        key="my_stat",              # permanent: it keys the session state
-        label="My statistic",
-        params=MyStatParams,
-        compute=compute,            # (trace, reference, params) when pairwise
-        render=render,
-        pairwise=False,             # True when it needs a reference trace
-    )
-)
-```
-
-Only `int`/`float`/`str`/`bool` parameter leaves — `params_ui` supports nothing
-else. A pairwise statistic gets every trace interpolated onto its reference's
-time base before `compute` is called. `fusion_ui/stats/ccf.py` is the worked
-example.
-
-## Development
-
-```bash
-python -m venv .venv
-# imaging_methods, experimental_database, fusion_scripts, velocity_estimation
-# and fppanalysis are not on PyPI — install each editable from its checkout
-# first, then the pinned versions below are already satisfied. The app no
-# longer imports fusion_scripts (it stays in the line below until it is taken
-# out of the dependencies; it still writes the preprocessed files).
-.venv/bin/pip install -e ../imaging-methods -e ../experimental_database \
-  -e ../fusion_scripts -e ../velocity-estimation -e ../fpp-analysis-tools
-.venv/bin/pip install -e ".[dev]"
-cp .env.example .env          # then edit for your machine
-.venv/bin/fusion-ui init-db
-.venv/bin/fusion-ui rescan    # index the data tree
-.venv/bin/streamlit run fusion_ui/app.py
-```
-
-## Reading results from Python
-
-`fusion_ui.api` reads the stored blob parameters and velocity fields for
-scripts, by shot and pixel. It only reads: nothing is computed, and the
-database is opened read-only. On the server, run a script with the app's
-Python, so that it finds the app's database and cache:
-
-```bash
-/media/fusion/fusion-files/jlo044/fusion_ui/.venv/bin/python my_script.py
-```
-
-```python
-from fusion_ui import api
-
-api.shots()                                      # shots with blob parameters stored
-ds = api.blob_parameters(1140827019)             # xarray, every pixel on (y, x)
-ds = api.blob_parameters(1140827019, pixels=[(4, 5), (5, 5)])  # (x, y) pairs, on "pixel"
-df = api.table()                                 # pandas, one row per stored shot and live pixel
-ds = api.velocity_fields(1140827019, pixels=[(4, 5)])          # every method's v_R, v_Z, tracks
-ds = api.velocity_tde(1160616009)                # the PPCF 2026 paper's TDE, gathered from its per-pixel runs
-```
-
-`examples/garcia_velocity_2026_figs8_9.py` redraws Figs 8 and 9 of Garcia, Losada
-et al., PPCF 68 (2026) 055034 this way, and is the example to start from.
-
-Each variable of `blob_parameters` carries its `long_name` and `units`; `R` and
-`Z` are in metres, and `dead` marks the pixels the mask removed. The default
-`settings` are the products' defaults, which is what `precompute` stores; pass
-the fields to change (`settings={"averages": {"window": 30}}`) to read another
-stored set. A shot that is not stored raises `api.NotStored`, whose `command`
-is the `fusion-ui precompute` line that fills it.
-
-## Commands
-
-```bash
-fusion-ui init-db          # create or migrate the app's SQLite database
-fusion-ui rescan           # index the data tree into `shots` (cron this)
-fusion-ui precompute PLOT [PLOT …]  # run plots' compute over the shots that have a file they accept, to warm the cache
-    --shot N               #   only this shot (repeatable; adds to --run-day)
-    --run-day D            #   only the shots of this run day, its first 7 digits (repeatable; adds to --shot)
-    --workers N            #   N processes over the shots, largest file first (default 1, in this process)
-    --stale                #   recompute in place only the results whose input file or upstream changed
-    --params-json PATH     #   other parameters than the defaults: one plot's complete set, or only the fields to change
-    --force                #   recompute even when a result is cached
-    --nice N               #   niceness of the computes (default 10 with --workers above 1)
-fusion-ui prune --plot KEY # count, then (with --yes) delete one plot's stored results
-                           # (with --scalar NAME, repeatable: only those names' scalars)
-fusion-ui backfill-dt      # measure phantom frame intervals into `shots.dt`
-fusion-ui status           # resolved paths, index and result counts
-```
-
-New shots appear in the browser only after a rescan; the server runs it on cron
-and the browser page has a button for it.
-
-Several plots named in one `precompute` run in dependency order within each shot,
-so a shot's bank of averages is computed once. `--stale` does not combine with
-`--force` or `--retry-failed`. `--machine`, `--pixel X Y` and `--retry-failed`
-are the other flags: `fusion-ui precompute --help` lists them all.
-
-## Recomputing
-
-A result is computed once per shot and parameter set, and kept. The first fill of
-the decorrelation products of a run day, on the server (8 cores, shared with the
-service, so at most 7 workers):
-
-```bash
-fusion-ui precompute method_fields blob_parameters --run-day 1160616 --workers 7
-```
-
-Both products read the bank of conditional averages, `pixel_averages`, which this
-computes on the way. The bank is **batch only**: no page computes it, because it
-can take most of an hour a shot. The single-shot and Fields pages show it from
-the cache, or name the `fusion-ui precompute` command that fills it. What to run
-when something changes:
-
-| What changed | Run | Cost |
-|---|---|---|
-| A shot was preprocessed | `fusion-ui rescan`, then `fusion-ui precompute method_fields blob_parameters --shot N` | up to about an hour a shot, the bank first |
-| Tracking, TDE or blob code (`pipeline.py`, `velocity_estimation`) | `fusion-ui precompute method_fields blob_parameters --force --workers 7`; the stored banks are reused | minutes a shot |
-| The 2DCA itself (`imaging_methods.find_events_and_2dca`) | `fusion-ui precompute pixel_averages --force --workers 7`, then `fusion-ui precompute method_fields blob_parameters --stale --workers 7` | as a first fill |
-| A setting | Not a recompute: other parameters give new results beside the old ones, through `--params-json` or, for `method_fields` and `blob_parameters`, the single-shot form | — |
-| A shot with faster dynamics needs a shorter 2DCA window | A parameter set with a smaller `averages.window`, for that shot only: `fusion-ui precompute method_fields blob_parameters --shot N --params-json short.json`, with `{"averages": {"window": 30}}` in the file | as a first fill, for that shot |
-| A preprocessed file was rewritten (a corrected mask, say) | `fusion-ui rescan`, then `fusion-ui precompute pixel_averages method_fields blob_parameters --stale` | as a first fill |
-| One result looks wrong | Recompute it on the single-shot page (`method_fields` and `blob_parameters`), or `fusion-ui precompute PLOT --force --shot N` | — |
-
-A shorter window keeps more events, since single counting drops events closer
-than one window apart, and it narrows the lags a view can show. `--stale`
-compares the file modification time each result recorded with the one the index
-holds, so `rescan` comes first where a file changed.
-
-`method_fields` and `blob_parameters` can also be computed from the single-shot
-page, once their bank is cached, so a tracking setting can be tried on one shot
-without the command line.
+**A run day** is a section in
+[`fusion_ui/data/run_days.md`](fusion_ui/data/run_days.md), written by hand from
+the day's C-Mod run page: a `## 1160616` heading, a bold line
+`**MP800 - <title>**` quoting the miniproposal whose shot range covers the
+shots, then a short summary. The sections already there show the form. A day
+with no section is still listed, without a purpose.
 
 ## Tests
 
 ```bash
-.venv/bin/pytest
+.venv/bin/pytest                  # everything
+.venv/bin/pytest -m "not slow"    # without the end-to-end analyses
 ```
 
-The suite uses a temporary tree of empty files and never touches the real data.
-
-## Deployment
-
-Streamlit on loopback behind nginx (TLS + shared-password basic auth), run by
-systemd. Unit and site config live in [`deploy/`](deploy/); the full recipe,
-including the websocket-proxy pitfall, is in `docs/PLAN.md`.
+The suite builds a temporary tree of small files and never touches the real
+data.

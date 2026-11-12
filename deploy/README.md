@@ -1,81 +1,159 @@
 # Deploying Shot Explorer
 
-**The short version:**
+Streamlit listens on loopback, run by systemd. nginx in front terminates TLS and
+checks one shared password, so the app never sees it. Every command here needs
+sudo and is run by the maintainer on the group server.
 
 ```bash
 git clone https://github.com/uit-cosmo/fusion_ui.git ~/fusion_ui
-sudo bash ~/fusion_ui/deploy/install.sh --branch phase-00-skeleton
+sudo bash ~/fusion_ui/deploy/install.sh
 ```
 
-`install.sh` is every step below, in order and idempotent — re-run it after a
-`git pull` and it updates in place. It stops three times for you: to edit `.env`,
-to set the shared password, and to confirm the firewall rule, for which it
-offers the subnet the server is itself on.
+`install.sh` is every step below, in order, and each step is idempotent: run it
+again to update a deployment in place. It stops three times for you: to edit
+`.env` (step 3), to set the shared password (step 7) and to confirm the firewall
+rule (step 8).
 
-`--help` lists every setting: `--branch`, `--repo-url`, `--app-dir`, `--src-dir`,
+`--help` lists the settings: `--branch` (default `main`; the script checks that
+branch out in the app's checkout), `--repo-url`, `--app-dir`, `--src-dir`,
 `--state-dir`, `--user`, `--server-name`, `--subnet`, `--htpasswd-user`. Each
-also reads the matching environment variable, but prefer the flags — whether
+also reads the matching environment variable, but prefer the flags: whether
 `sudo VAR=value bash …` passes a variable through depends on the sudoers config.
 
-The current deployment is **<https://fp1-hpz4fusion.int.uit.no/>** — that name,
-not the machine's own `fusion-HP-Z4-G4-Workstation`, which resolves nowhere. Port
-80 is closed, so the `https://` has to be typed. The certificate is self-signed,
-so the first visit needs one click through the browser's warning.
+The current deployment is **<https://fp1-hpz4fusion.int.uit.no/>**: that name,
+not the machine's own `fusion-HP-Z4-G4-Workstation`, which resolves nowhere.
+Port 80 is closed there, so the `https://` has to be typed. The certificate is
+self-signed, so the first visit needs one click through the browser's warning.
 
-To check a deployment at any time, from the server or a laptop:
+If inbound 443 is ever blocked, anyone with SSH gets the same app through
+`ssh -N -L 8501:localhost:8501 user@server`, and nothing else changes.
+
+To check a deployment at any time:
 
 ```bash
 bash deploy/verify.sh <host>
 ```
 
-The rest of this file is what the script does, for when it goes wrong.
+**Before running `install.sh` again on a server where another service holds
+port 80, as apache does on the group server, read "Port 80" under step 7.**
 
----
+The rest of this file is what the script does, step by step, for when it goes
+wrong. `$APP_DIR` is the checkout the service runs from (the checkout
+`install.sh` is run from, unless `--app-dir`), `$SRC_DIR` is where the
+dependency checkouts live (the checkout's parent, unless `--src-dir`), and
+`$STATE_DIR` holds the SQLite file and the result cache (`/hdd1/fusion_ui`,
+unless `--state-dir`).
 
-Every command here needs sudo and is run by the maintainer on the group server.
-The app itself never sees the password: nginx terminates TLS and basic auth, and
-Streamlit only listens on loopback.
-
-Inbound 443 has been verified reachable from the campus network, so this ends in
-a URL. If that ever changes, anyone with SSH gets the identical app through
-`ssh -N -L 8501:localhost:8501 user@server` and nothing else about the setup
-changes.
-
-## 1. Service account and checkout
-
-`$APP_DIR` is the checkout the service runs from (`install.sh` deploys its own
-checkout by default; `--app-dir` overrides) and `$SRC_DIR` is where the
-dependency checkouts live (the checkout's parent directory by default;
-`--src-dir` overrides).
+## 1. Packages and service account
 
 ```bash
-APP_DIR=~/fusion_ui; SRC_DIR=~
+sudo apt-get install -y --no-install-recommends \
+  git python3-venv nginx apache2-utils openssl curl
 sudo useradd --system --create-home --home-dir /var/lib/fusionui fusionui
-# Your own clone is fine -- it stays yours. The service user only shares it
-# (g+rwX, not just g+w: group-write alone leaves drwx------ directories
-# untraversable, and pip dies listing them):
-git clone https://github.com/uit-cosmo/fusion_ui "$APP_DIR"
-sudo chgrp -R fusionui "$APP_DIR" && sudo chmod -R g+rwX "$APP_DIR"
-sudo find "$APP_DIR" -type d -exec chmod g+s {} +
-sudo usermod -aG fusionui <you>   # log out and back in
 ```
 
-### Private dependencies the server cannot clone
+## 2. Checkouts
 
-Of the six repositories involved, four are public and clone with no credentials
-at all — `fusion_ui` itself, `imaging-methods`, `velocity-estimation` and
-`fpp-analysis-tools`. Only **`experimental_database`** and **`fusion_scripts`**
-are private, so those are the only two that need a deploy key or a hand copy.
+The script pulls or clones five dependencies into `$SRC_DIR`, then the app into
+`$APP_DIR`:
 
-If a *public* one prompts for a username, the problem is not access.
+| Checkout | From | |
+|---|---|---|
+| `imaging-methods` | `uit-cosmo/imaging-methods` | public |
+| `velocity-estimation` | `uit-cosmo/velocity-estimation` | public |
+| `fpp-analysis-tools` | `uit-cosmo/fpp-analysis-tools` | public |
+| `experimental_database` | `uit-cosmo/experimental_database` | **private** |
+| `fusion_scripts` | `Sosnowsky/fusion_scripts` | **private** |
 
-The cause seen on this server is a git bug, not a permission: **git 2.43 built
-against a GnuTLS curl gets a spurious `401 Basic realm="GitHub"` on the
-protocol-v2 `POST /git-upload-pack`**, because it re-uses the multiplexed
-HTTP/2 connection left over from the ref advertisement. The first request
-returns 200 and the second returns 401, so an anonymous clone of a public
-repository turns into a credential prompt. `install.sh` pins `http.version` to
-HTTP/1.1 to avoid it. To confirm you are looking at this and not something else:
+The app no longer imports `fusion_scripts`, but it is still in the script's
+`DEPENDENCIES` list, so the script still needs it, by a key or as a copy.
+
+For each one:
+
+- A git checkout already there is updated with `git pull --ff-only`. If that
+  fails (no credentials, a detached HEAD, local edits), the checkout is used as
+  it stands.
+- A directory already there that is not a git checkout is used as it stands and
+  never overwritten.
+- Otherwise it is cloned. A clone that fails stops the install.
+
+Each tree is then shared with the service user through the group, not handed
+over, so a checkout you own stays yours:
+
+```bash
+sudo chgrp -R fusionui "$APP_DIR" && sudo chmod -R g+rwX "$APP_DIR"
+sudo find "$APP_DIR" -type d -exec chmod g+s {} +
+```
+
+It is `g+rwX`, not `g+w`: group-write alone leaves `drwx------` directories
+untraversable, and pip dies listing them. The service user writes there because
+an editable install writes `.egg-info` into the source tree and `git pull`
+writes `.git`.
+
+`$SRC_DIR` itself gets `chgrp fusionui` and `chmod g+xs,g-w`: the service must
+traverse it and never write it. It is usually your home directory, and sshd
+ignores `~/.ssh/authorized_keys` in a group-writable home.
+
+The checkouts are installed editable, so a `git pull` in one of them changes the
+next `fusion-ui` command at once, and the service at its next restart. Checkouts
+the script cloned belong to the service user; the `usermod` of step 3 lets you
+pull in them.
+
+### A private repository the server cannot clone
+
+Either give the service user a deploy key (below), or copy the checkout in
+before running the installer:
+
+```bash
+rsync -a --exclude .venv --exclude .git ~/Git/experimental_database <host>:/tmp/
+ssh <host> "sudo mkdir -p $SRC_DIR && sudo mv /tmp/experimental_database $SRC_DIR/"
+```
+
+A copy is installed as it is and is never updated by the script. With a deploy
+key the script updates the dependency like the others; delete a copy made
+earlier, so that the next run clones it.
+
+### Deploy keys
+
+`install.sh` never prompts for credentials (`GIT_TERMINAL_PROMPT=0`), and GitHub
+does not accept account passwords for git. **One deploy key gives access to
+exactly one repository**, and GitHub refuses the same key on a second one, so
+run this once per private repository:
+
+```bash
+sudo bash deploy/add-deploy-key.sh https://github.com/uit-cosmo/experimental_database.git
+sudo bash deploy/add-deploy-key.sh https://github.com/Sosnowsky/fusion_scripts.git
+```
+
+For `<owner>/<repo>` it generates `/var/lib/fusionui/.ssh/id_<repo>` for the
+service user (who does the cloning; no passphrase, since nothing interactive
+can unlock it), adds an ssh alias `Host github-<repo>` that uses that key with
+`IdentitiesOnly yes`, and sets a git `insteadOf` rule that sends the
+repository's https URL through the alias. So the URLs in `install.sh` stay the
+public https ones. Then it prints the public key and the page to paste it at
+(the repository's **Settings → Deploy keys**), waits, and checks access.
+
+- **Leave "Allow write access" unchecked.**
+- Compare the github.com host-key fingerprints it prints with the ones GitHub
+  publishes at
+  <https://docs.github.com/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints>.
+- If you set a key up by hand, use the same alias form. Without
+  `IdentitiesOnly yes` ssh offers every key it has, and GitHub answers for
+  whichever repository the first accepted key belongs to, which is how a setup
+  ends up cloning the wrong repository. A rewrite to a bare
+  `git@github.com:<owner>/<repo>.git` uses the default identity, works only
+  while there is one key, and shadows the alias rule (the script removes it).
+- Past three or four private repositories, use a machine user or a fine-grained
+  token with read access to all of them.
+
+### A public repository asks for a username
+
+Then the problem is not access. The cause seen on this server is a git bug:
+**git 2.43 built against a GnuTLS curl gets a spurious `401 Basic
+realm="GitHub"` on the protocol-v2 `POST /git-upload-pack`**, because it reuses
+the HTTP/2 connection left from the ref advertisement. An anonymous clone of a
+public repository turns into a credential prompt. `install.sh` pins
+`http.version` to HTTP/1.1 for its own git calls to avoid it. To confirm:
 
 ```bash
 sudo -u fusionui -H env GIT_TERMINAL_PROMPT=0 \
@@ -85,187 +163,59 @@ sudo -u fusionui -H env GIT_TERMINAL_PROMPT=0 \
   ls-remote https://github.com/uit-cosmo/velocity-estimation.git       # works
 ```
 
-If the second one fails too, then it really is configuration — look for an
-`insteadOf` line that catches more than its own repository:
+If the second fails too, it is configuration. Look for an `insteadOf` line that
+catches more than its own repository:
 
 ```bash
 sudo -u fusionui -H git config --list --show-origin | grep -iE 'url\.|insteadof|credential'
 ```
 
-Note that `sudo` does not forward the environment: `GIT_TERMINAL_PROMPT=0 sudo -u
-fusionui git …` silently loses the variable, which is why every git call in
-these scripts goes through `sudo -u … env VAR=… git`.
+`sudo` does not forward the environment: `GIT_TERMINAL_PROMPT=0 sudo -u fusionui
+git …` loses the variable without a word. Every git call in these scripts
+therefore goes through `sudo -u … env VAR=… git`.
 
-`experimental_database` is private and the server has no credentials for it.
-Copy it in before running the installer — a directory already present in
-`$SRC_DIR` is used as it stands and never overwritten:
+## 3. Configuration
 
-```bash
-rsync -a --exclude .venv --exclude .git ~/Git/experimental_database <host>:/tmp/
-ssh <host> "sudo mkdir -p $SRC_DIR && sudo mv /tmp/experimental_database $SRC_DIR/"
-```
-
-The installer group-shares it with the service user (editable installs write
-`.egg-info` into the source tree) and skips the clone. The same applies to any
-dependency whose `git pull` fails: the checkout on disk is what gets installed.
-
-The durable fix is a **read-only deploy key**, below. Set that up once and the
-installer updates this dependency like every other one.
-
-### Deploy keys for private repositories
-
-The two private repositories need a key, because the service user has no
-GitHub credentials and `install.sh` never prompts for any
-(`GIT_TERMINAL_PROMPT=0`). `fusion_ui` itself is public and needs none. GitHub has not accepted account passwords for git
-since 2021, so a prompt would be a dead end regardless.
-
-**One deploy key grants access to exactly one repository**, and GitHub refuses
-to reuse a key across repositories. So repeat this per private repo, with a
-different `-f` filename each time. If that becomes more than two or three, use a
-machine user or a fine-grained token with read access to all of them instead.
-
-`deploy/add-deploy-key.sh` does all of the below for one repository:
+Two accounts write the state directory: the service, and whoever runs
+`fusion-ui precompute` or `rescan` by hand. Make it group-writable before
+anything is created in it:
 
 ```bash
-sudo bash deploy/add-deploy-key.sh https://github.com/uit-cosmo/experimental_database.git
+sudo mkdir -p "$STATE_DIR/cache"
+sudo chown -R fusionui:fusionui "$STATE_DIR"
+sudo chmod -R g+w "$STATE_DIR"
+sudo find "$STATE_DIR" -type d -exec chmod g+s {} +   # new entries inherit the group
+sudo usermod -aG fusionui <you>                       # log out and back in
 ```
 
-It generates the key, wires up the ssh alias and the `insteadOf` rule, prints
-the public key with the URL to paste it at, and verifies access afterwards.
-Run it once per private repository. The rest of this section is what it does.
+The app creates its own directories and blobs group-writable
+(`fusion_ui/core/shared.py`), but it cannot choose the group: the `chown` and
+the setgid bit are the operator's half. Without them a directory made by one
+account is unwritable by the other, which costs the second one a whole analysis
+before it finds out. The script runs these on every run, which also repairs a
+tree created before the app did its half.
 
-The key belongs to the user that does the cloning — the service user, not you.
+If `$APP_DIR/.env` does not exist, the script copies `.env.example`, sets
+`FUSION_UI_DB=$STATE_DIR/shot_explorer.sqlite` and
+`FUSION_UI_CACHE=$STATE_DIR/cache`, and opens it in `$EDITOR` (nano by default)
+for you to set `FUSION_DISCHARGE_DB` and `FUSION_DATA_FOLDER`. An existing `.env`
+is left alone. The database and the cache are the only places the service
+writes.
 
-```bash
-# 1. A key for this server, no passphrase (nothing interactive can unlock it)
-sudo -u fusionui -H ssh-keygen -t ed25519 -N "" -C "fusion-ui@$(hostname -f)" \
-  -f /var/lib/fusionui/.ssh/id_ed25519
-sudo -u fusionui -H cat /var/lib/fusionui/.ssh/id_ed25519.pub
-```
-
-2. On GitHub: the repository → **Settings → Deploy keys → Add deploy key**.
-   Paste the public key, title it after the server, and **leave "Allow write
-   access" unchecked**. A deploy key grants access to exactly one repository, and
-   GitHub refuses to reuse the same key on a second one — if another dependency
-   turns out to be private too, generate a second key for it.
-
-```bash
-# 3. Trust github.com, so a clone from cron never waits on a prompt
-sudo -u fusionui -H sh -c 'ssh-keyscan github.com >> ~/.ssh/known_hosts'
-```
-
-Compare what that recorded against the fingerprints GitHub publishes at
-<https://docs.github.com/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints>
-before relying on it:
-
-```bash
-sudo -u fusionui -H ssh-keygen -lf /var/lib/fusionui/.ssh/known_hosts
-```
-
-```bash
-# 4. Send just this one repository over SSH, leaving the committed https URL alone
-sudo -u fusionui -H git config --global \
-  url."git@github.com:uit-cosmo/experimental_database.git".insteadOf \
-  "https://github.com/uit-cosmo/experimental_database.git"
-
-# 5. Check it
-sudo -u fusionui -H git ls-remote https://github.com/uit-cosmo/experimental_database.git >/dev/null \
-  && echo "deploy key works"
-```
-
-Step 4 is why `install.sh` needs no edit: the machine-specific credential lives
-in the service user's git config, and the URL in the script stays the public
-https one. If `$SRC_DIR/experimental_database` was copied in by hand earlier,
-delete it so the next run clones properly — or just point its remote at the
-SSH URL and leave it.
-
-For the **second** private repo, `fusion_scripts`, generate a second key and add
-its own `insteadOf` line, plus a `Host` alias so ssh picks the right key:
-
-```bash
-sudo -u fusionui -H ssh-keygen -t ed25519 -N "" -f /var/lib/fusionui/.ssh/id_fusion_scripts
-sudo -u fusionui -H tee -a /var/lib/fusionui/.ssh/config >/dev/null <<'EOF'
-Host github-fusion_scripts
-    HostName github.com
-    User git
-    IdentityFile ~/.ssh/id_fusion_scripts
-    IdentitiesOnly yes
-EOF
-sudo -u fusionui -H git config --global \
-  url."github-fusion_scripts:Sosnowsky/fusion_scripts.git".insteadOf \
-  "https://github.com/Sosnowsky/fusion_scripts.git"
-```
-
-Rewriting to a bare `git@github.com:…` instead of a `Host` alias, as step 4
-above does for the first repo, works only while there is exactly one key — it
-uses the default identity. Prefer the alias form for both.
-
-Without `IdentitiesOnly yes` ssh offers every key it has and GitHub answers with
-whichever repository the *first accepted* key belongs to — which is how a deploy
-key setup ends up cloning the wrong repository and looking haunted.
-
-### Port 80 is already taken
-
-If another service (apache, on this server) owns port 80, `install.sh` drops the
-http→https redirect block and serves 443 only. nginx binds every `listen`
-directive at startup, so leaving the block in would take down the 443 vhost too
-— the whole deployment — for the sake of a convenience redirect. `https://<host>`
-works either way; `http://<host>` keeps going wherever it goes today.
-
-To take port 80 back, stop the other service and re-run the installer.
-
-The check runs at install time only. Apache here is enabled, and an unattended
-apache upgrade starts it again: on 2026-10-15 one did, it took port 80, and when
-the next nginx upgrade restarted nginx on 10-28 the site went down for six days
-(`bind() to 0.0.0.0:80 failed (98: Address already in use)` in
-`journalctl -u nginx`). The fix was removing the redirect block from
-`/etc/nginx/sites-available/fusion-ui`, as the installer would have; the
-deployed site now serves 443 only.
-
-## 2. Environment
+## 4. Python environment
 
 ```bash
 sudo -u fusionui python3 -m venv "$APP_DIR/.venv"
-# imaging_methods, experimental_database, fusion_scripts, velocity_estimation and
-# fppanalysis are not on PyPI — install each editable from its checkout first.
+sudo -u fusionui "$APP_DIR/.venv/bin/pip" install --upgrade pip
+# The checkouts first: the app names them as dependencies, and not all are on PyPI.
 sudo -u fusionui "$APP_DIR/.venv/bin/pip" install \
   -e "$SRC_DIR/imaging-methods" -e "$SRC_DIR/experimental_database" \
   -e "$SRC_DIR/fusion_scripts" -e "$SRC_DIR/velocity-estimation" \
   -e "$SRC_DIR/fpp-analysis-tools"
 sudo -u fusionui "$APP_DIR/.venv/bin/pip" install -e "$APP_DIR"
-
-sudo -u fusionui cp "$APP_DIR/.env.example" "$APP_DIR/.env"
-sudo -u fusionui $EDITOR "$APP_DIR/.env"      # paths for this server
 ```
 
-The two writable locations are `FUSION_UI_DB` and `FUSION_UI_CACHE`; everything
-else is read-only to the service.
-
-```bash
-sudo mkdir -p /hdd1/fusion_ui/cache
-sudo chown -R fusionui:fusionui /hdd1/fusion_ui
-```
-
-## 3. Database and first index
-
-The state directory has two writers — the service, and whoever runs `fusion-ui
-precompute` by hand — so make it group-writable before anything creates
-anything in it:
-
-```bash
-sudo chown -R fusionui:fusionui /hdd1/fusion_ui
-sudo chmod -R g+w /hdd1/fusion_ui
-sudo find /hdd1/fusion_ui -type d -exec chmod g+s {} +   # new dirs inherit the group
-sudo usermod -aG fusionui <you>                          # log out and back in
-```
-
-The app creates its own directories and blobs group-writable
-(`fusion_ui/core/shared.py`), because `os.makedirs` masks its `mode` with the
-umask and would otherwise leave them owner-write only — which costs the second
-writer a whole analysis before it discovers it cannot save the result. But the
-app cannot choose *which* group, so the `chown` and the setgid bit above are
-the one-time operator half of it. **Run them on any deployment set up before
-this**, to repair directories already created under the old behaviour.
+## 5. Database and first index
 
 ```bash
 sudo -u fusionui "$APP_DIR/.venv/bin/fusion-ui" init-db
@@ -275,67 +225,112 @@ sudo -u fusionui "$APP_DIR/.venv/bin/fusion-ui" status
 
 `status` is the check that the paths in `.env` resolve and the index is filled.
 
-Keep the index fresh — new shots appear in the browser only after a rescan:
+New shots appear in the browser only after a rescan, so the script adds this
+line to the service user's crontab, once, and creates the log file for it:
 
-```bash
-sudo -u fusionui crontab -e
-# every 15 minutes
-*/15 * * * * "$APP_DIR/.venv/bin/fusion-ui" rescan >> /var/log/fusion-ui-rescan.log 2>&1
+```
+*/15 * * * * $APP_DIR/.venv/bin/fusion-ui rescan >> /var/log/fusion-ui-rescan.log 2>&1
 ```
 
-## 4. systemd
+## 6. systemd
+
+The unit file is a template: the script fills in `@APP_DIR@`, the user and
+group, and `ReadWritePaths`. Copying it unchanged does not work.
 
 ```bash
-sudo cp "$APP_DIR/deploy/fusion-ui.service" /etc/systemd/system/
+sudo sed -e "s|@APP_DIR@|$APP_DIR|g" \
+    -e "s|^ReadWritePaths=.*|ReadWritePaths=$STATE_DIR|" \
+    "$APP_DIR/deploy/fusion-ui.service" | sudo tee /etc/systemd/system/fusion-ui.service >/dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable --now fusion-ui
 sudo systemctl status fusion-ui
 curl -sI http://127.0.0.1:8501/ | head -1        # expect 200
 ```
 
-`ReadWritePaths` in the unit is set to `/hdd1/fusion_ui` — change it if `.env`
-puts the database or cache somewhere else, or the service will fail to write.
+`ReadWritePaths` is `$STATE_DIR`. If `.env` puts the database or the cache
+somewhere else, change it, or the service fails to write.
 
-## 5. nginx, TLS and the shared password
+## 7. nginx, TLS and the shared password
 
 ```bash
-sudo apt install nginx apache2-utils
 sudo htpasswd -c /etc/nginx/.htpasswd fusion    # one shared account
 sudo mkdir -p /etc/nginx/ssl
-name=$(getent hosts "$(hostname -I | awk '{print $1}')" | awk '{print $2}')
+ip=$(hostname -I | awk '{print $1}')
+name=$(getent hosts "$ip" | awk '{print $2}')
 sudo openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
   -keyout /etc/nginx/ssl/fusion-ui.key -out /etc/nginx/ssl/fusion-ui.crt \
-  -subj "/CN=$name" \
-  -addext "subjectAltName=DNS:$name,IP:$(hostname -I | awk '{print $1}')"
+  -subj "/CN=$name" -addext "subjectAltName=DNS:$name,IP:$ip"
 ```
 
-Two things about that name, both of which cost an afternoon once. It must be the
-name **DNS** knows, not `hostname -f`: this server calls itself
-`fusion-HP-Z4-G4-Workstation` and answers campus-wide as
-`fp1-hpz4fusion.int.uit.no`, and a certificate for the first is a warning plus a
-URL nobody can open. The reverse lookup above is where `install.sh` gets it, and
-`--server-name` overrides. And the name has to be in `subjectAltName`, not only
-in the subject — browsers have ignored CN since 2017, so a subject-only
-certificate is rejected however right the subject is. `install.sh` reissues the
-certificate whenever the existing one does not cover `--server-name`, so fixing
-the name and re-running is enough.
+The script creates the password file only if there is none; to change the
+password, run `sudo htpasswd /etc/nginx/.htpasswd fusion`.
+
+Two things about the name in the certificate:
+
+- It must be the name **DNS** knows, not `hostname -f`. This server calls itself
+  `fusion-HP-Z4-G4-Workstation` and answers campus-wide as
+  `fp1-hpz4fusion.int.uit.no`; a certificate for the first is a warning plus a
+  URL nobody can open. The script takes the reverse lookup of the server's
+  address, when it resolves forward to the same address, and `hostname -f`
+  otherwise. `--server-name` overrides.
+- It must be in `subjectAltName`, not only in the subject: browsers ignore CN.
+
+The script reissues the certificate whenever the existing one does not cover the
+server name, so correcting `--server-name` and running it again is enough.
 
 ```bash
-sudo cp "$APP_DIR/deploy/nginx.conf" /etc/nginx/sites-available/fusion-ui
-sudo ln -sf /etc/nginx/sites-available/fusion-ui /etc/nginx/sites-enabled/
+sudo sed -e "s|server_name _;|server_name $name;|" "$APP_DIR/deploy/nginx.conf" |
+  sudo tee /etc/nginx/sites-available/fusion-ui >/dev/null
+sudo ln -sf /etc/nginx/sites-available/fusion-ui /etc/nginx/sites-enabled/fusion-ui
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo mkdir -p /etc/systemd/system/nginx.service.d
 sudo cp "$APP_DIR/deploy/nginx-restart.conf" \
   /etc/systemd/system/nginx.service.d/fusion-ui-restart.conf
 sudo systemctl daemon-reload
-sudo nginx -t && sudo systemctl reload nginx
+sudo nginx -t && sudo systemctl enable --now nginx && sudo systemctl reload nginx
 ```
 
-Ubuntu's nginx unit never restarts a failed start, and an unattended upgrade
-restarts nginx. The drop-in makes it retry every 30 s for as long as it fails,
-so a conflict that clears up (see below) brings the site back by itself.
+Besides the server name, the script makes two more changes to `nginx.conf` on
+the way: on nginx 1.25.1 or later it replaces `listen 443 ssl http2;` by
+`listen 443 ssl;` and `http2 on;`, and it may remove the http redirect (next
+section).
 
-## 6. Firewall
+The drop-in is there because Ubuntu's nginx unit never restarts a failed start,
+and an unattended upgrade restarts nginx. With it nginx retries every 30 s for
+as long as it fails, so a conflict that clears up brings the site back by
+itself.
+
+### Port 80
+
+`nginx.conf` has a block that redirects http to https, between the lines
+`# BEGIN http-redirect` and `# END http-redirect`. nginx binds every `listen`
+at startup, so if another service holds port 80 (apache, on this server), that
+block stops nginx from starting at all, and takes the 443 site down with it:
+
+```
+bind() to 0.0.0.0:80 failed (98: Address already in use)      # journalctl -u nginx
+```
+
+This has happened: an unattended upgrade started apache again, the next nginx
+restart failed, and the site was down for six days. The deployed site config has
+no redirect block and serves 443 only.
+
+**The script removes the block only when port 80 is taken and nginx is not
+running.** Run on a server where nginx is already up, it writes the block back
+into `/etc/nginx/sites-available/fusion-ui`. So after every run of `install.sh`
+on a server where another service holds port 80:
+
+```bash
+grep -n 'listen 80' /etc/nginx/sites-available/fusion-ui    # expect no output
+```
+
+If it prints a line, delete the `server { listen 80; … }` block from that file,
+then `sudo nginx -t && sudo systemctl reload nginx`.
+
+To take port 80 back for the redirect, stop the other service and run the
+installer again.
+
+## 8. Firewall
 
 ```bash
 ip -4 route show default                 # which interface faces the network
@@ -344,50 +339,59 @@ sudo ufw allow from <subnet> to any port 443 proto tcp
 sudo ufw status
 ```
 
-The server's own subnet is the right answer in almost every case — the laptops
-are on the same network. `install.sh` works it out and offers it, but never
-applies it without you saying so: the interface prefix can be wider than you
-meant, and a firewall rule is about who gets in.
+The server's own subnet is the right answer in almost every case, since the
+laptops are on the same network. The script works it out and offers it, but
+never applies it without you saying so: the interface prefix can be wider than
+you meant. If a rule for 443 exists and no `--subnet` is given, it leaves the
+firewall alone. If ufw is inactive, the rule filters nothing; `sudo ufw allow
+OpenSSH && sudo ufw enable` turns it on without locking you out of ssh.
 
-The failure seen while verifying reachability was the *host* firewall rejecting
-with ICMP host-unreachable — an immediate "No route to host", not a timeout.
-A timeout instead means the campus firewall; those are different tickets.
+An immediate "No route to host" from a laptop is the *host* firewall rejecting
+the connection. A timeout is the campus firewall. Those are different tickets.
 
-## 7. Verify — including the websocket
+## 9. Verify
 
 ```bash
-bash deploy/verify.sh <host>
+bash deploy/verify.sh <host> [user]
 ```
 
-That runs the four checks below. The last one is the one that matters: a plain
-`curl` proving the HTML arrives is **not** enough, because if the proxy eats the
-`Upgrade` header the page loads and then hangs forever with no error message.
+It asks for the shared password and runs four checks. From a laptop the first
+one fails, since it asks the laptop's own port 8501; the other three tell.
+
+| Check | Expect |
+|---|---|
+| Streamlit on loopback, `http://127.0.0.1:8501/` | 200 |
+| `https://<host>/` with the password | 200 |
+| `https://<host>/` without it | 401 |
+| The websocket handshake on `https://<host>/_stcore/stream` | 101 |
+
+The last is the one that matters. Streamlit talks over a websocket, and a proxy
+that drops the `Upgrade` header serves a page that loads and then hangs forever
+with no error. A 200 on the page proves nothing. By hand:
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8501/   # 200 — streamlit is up
-curl -sk -o /dev/null -w '%{http_code}' https://<host>/         # 401 — password enforced
-curl -sk -o /dev/null -w '%{http_code}' -u fusion:<password> https://<host>/   # 200
-
-curl -k -u fusion:<password> -i -N \
+curl -k -u fusion:<password> -i -N --http1.1 \
   -H "Connection: Upgrade" -H "Upgrade: websocket" \
   -H "Sec-WebSocket-Version: 13" \
   -H "Sec-WebSocket-Key: $(openssl rand -base64 16)" \
   https://<host>/_stcore/stream
 ```
 
-Expect `HTTP/1.1 101 Switching Protocols`. A `200` means the upgrade was
-swallowed — the app will look broken in the browser for everyone.
+Expect `HTTP/1.1 101 Switching Protocols`. A `200` means nginx swallowed the
+upgrade: check the `proxy_set_header Upgrade` and `Connection` lines of the
+site config. Keep `--http1.1`: HTTP/2 cannot carry an `Upgrade`, so without it
+curl reports a 200 that means nothing.
 
 Then, from a laptop on the campus network, open `https://<host>/`, log in, and
-confirm the shot browser lists shots.
+confirm that the shot browser lists shots.
 
 ## Routine operations
 
 ```bash
 sudo systemctl restart fusion-ui                  # after a git pull
 sudo journalctl -u fusion-ui -f                   # logs
-sudo -u fusionui ~/fusion_ui/.venv/bin/fusion-ui status
+sudo -u fusionui "$APP_DIR/.venv/bin/fusion-ui" status
 ```
 
-The whole of the app's state is the SQLite file and the cache directory named in
-`.env`. Back up the SQLite file; the cache can always be recomputed.
+All of the app's state is the SQLite file and the cache directory named in
+`.env`. Back up the SQLite file; the cache can be recomputed.
