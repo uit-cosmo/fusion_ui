@@ -1,4 +1,4 @@
-"""The three real products on J3's synthetic record, computed once for the whole test session.
+"""The three real products on the synthetic record, computed once for the whole test session.
 
 ``tests/product_fixtures`` makes the record (3 x 3 pixels, centimetres, with its dead-pixel mask stored) and
 the settings. This runs the real specs on it through the store, the way a batch job does: the bank with

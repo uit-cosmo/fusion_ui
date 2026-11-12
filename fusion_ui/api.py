@@ -1,4 +1,4 @@
-"""Read the stored decorrelation products from Python: blob parameters and velocity fields, by shot and pixel.
+"""Read the stored products from Python: blob parameters and velocities, by shot and pixel.
 
 For scripts that plot and analyse what ``fusion-ui precompute`` stored, outside the app::
 
@@ -27,9 +27,9 @@ its own fields but the reference pixel, which each pixel sets.
 blob's ``(y, x)`` grid. ``dead`` marks the pixels the dead-pixel mask removed, which hold no result;
 a NaN at a live pixel is a fit that was tried and failed.
 
-The datasets are the stored blobs, unchanged but for the selection and, on the blob parameters, a
-``long_name`` and ``units`` on each variable. The blob's attributes say what made it:
-``fusion_ui_params_json``, ``fusion_ui_code_version`` and ``fusion_ui_created_at``.
+The datasets are the stored blobs, unchanged but for the selection and, on the blob parameters the app
+shows (``fusion_ui.views.numbers.BLOB_PARAMETERS``), a ``long_name`` and ``units``. The blob's attributes
+say what made it: ``fusion_ui_params_json``, ``fusion_ui_code_version`` and ``fusion_ui_created_at``.
 """
 
 import dataclasses
@@ -116,10 +116,10 @@ def _hash(product, settings):
     return params, params_ui.hash_params(_PLOT[product], params)[0]
 
 
-def _at_pixel(params, x, y):
-    """``velocity_tde``'s params with the reference pixel ``(x, y)``, and their hash."""
+def _tde_hash(params, x, y):
+    """The hash of ``velocity_tde``'s ``params`` at the reference pixel ``(x, y)``."""
     here = dataclasses.replace(params, refx=int(x), refy=int(y))
-    return here, params_ui.hash_params("velocity_tde", here)[0]
+    return params_ui.hash_params("velocity_tde", here)[0]
 
 
 def _tde_runs(conn, params, machine, shot=None):
@@ -141,7 +141,7 @@ def _tde_runs(conn, params, machine, shot=None):
     for row in conn.execute(query, args):
         values = json.loads(row["params_json"])["params"]["values"]
         x, y = values["refx"], values["refy"]
-        if _at_pixel(params, x, y)[1] == row["params_hash"]:
+        if _tde_hash(params, x, y) == row["params_hash"]:
             found.append((row, x, y))
     return found
 
@@ -265,11 +265,13 @@ def _one(product, shot, pixels, settings, machine):
 
 
 def blob_parameters(shot, pixels=None, settings=None, machine=None):
-    """The thirteen blob parameters of ``shot``: on ``(y, x)``, or on ``pixel`` for the ``(x, y)`` given.
+    """The blob parameters of ``shot``: on ``(y, x)``, or on ``pixel`` for the ``(x, y)`` given.
 
-    ``nevents``, ``level``, ``area``, the contour ellipse (``lx_c``, ``ly_c``, ``theta_c``), the FWHM sizes
-    (``lr``, ``lz``), the Gaussian fit (``lx_f``, ``ly_f``, ``theta_f``) and the PSD fit (``taud``,
-    ``lam``), each with its ``long_name`` and ``units``; ``R`` and ``Z`` in metres; ``dead``.
+    The six the app shows, each with its ``long_name`` and ``units``: ``nevents``, ``area``, the FWHM
+    sizes (``lr``, ``lz``) and the PSD fit (``taud``, ``lam``). The library's other variables are there
+    too, as stored, in SI units and without those attributes: ``level``, the contour ellipse (``lx_c``,
+    ``ly_c``, ``theta_c``) and the Gaussian fit (``lx_f``, ``ly_f``, ``theta_f``). ``R`` and ``Z`` in
+    metres; ``dead``.
     """
     return _one("blob_parameters", shot, pixels, settings, machine)
 
@@ -286,7 +288,7 @@ def velocity_fields(shot, pixels=None, settings=None, machine=None):
 def velocity_tde(shot, pixels=None, settings=None, machine=None):
     """The paper's velocity of ``shot``: three-point TDE with cross-conditional averages off each pixel's record.
 
-    ``velocity_tde`` is stored one reference pixel a run, at density_scan's settings by default; this gathers
+    ``velocity_tde`` is stored one reference pixel a run, at the paper's settings by default; this gathers
     every stored pixel onto ``(y, x)`` (or ``pixel`` for the ``(x, y)`` given): ``vx`` and ``vy`` [m/s],
     ``confidence``, ``events``, ``stored`` (whether a run is stored there), ``dead``; ``R`` and ``Z`` in metres.
     A pixel with no run is NaN. Raises :class:`NotStored` only when the shot has no pixel at all.
@@ -298,10 +300,9 @@ def table(product="blob_parameters", shot_numbers=None, settings=None, machine=N
     """One row per stored shot and pixel, one column per variable on the pixel grid.
 
     Columns ``shot``, ``x``, ``y``, ``R``, ``Z``, ``dead`` and the variables on ``(y, x)``; per-lag
-    variables (the velocity fields' tracks) are left out, and so, for ``velocity_tde``, are pixels with no run.
-    ``shot_numbers`` limits it to those shots, every one
-    of which must be stored; by default it is every shot :func:`shots` lists. Dead pixels are left out
-    unless ``dead`` is true.
+    variables (the velocity fields' tracks) are left out, and so, for ``velocity_tde``, are pixels with
+    no run. ``shot_numbers`` limits it to those shots, every one of which must be stored; by default it
+    is every shot :func:`shots` lists. Dead pixels are left out unless ``dead`` is true.
     """
     params, digest = _hash(product, settings)
     machine = machine or config.MACHINE

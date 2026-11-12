@@ -1,23 +1,16 @@
-"""The conditional average at every live pixel of a shot, as the reference: the product the others read.
+"""The conditional average (2DCA) at every live pixel of a shot, as the reference: one bank per shot.
 
-The 2DCA is over 95% of the cost of every decorrelation quantity and depends on four settings only
-(``Averages``). Computed once per (shot, settings) and stored, it turns a change of tracking, TDE or blob
-settings from a two-hour recompute into minutes: ``method_fields`` and ``blob_parameters`` declare
-``requires="pixel_averages"`` and read it back. It is the argument ``two_dca`` makes for one pixel, made
-for all of them: one blob per shot rather than a ``two_dca`` run per pixel, which ``requires`` cannot
-express and which would list 68 sources per shot on the multi-shot page.
+The 2DCA is nearly all the cost of every decorrelation quantity and depends only on ``Averages``. Stored
+once per (shot, settings), it lets ``method_fields`` and ``blob_parameters`` be recomputed in minutes:
+both declare ``requires="pixel_averages"`` and read it back.
 
-**Batch only.** One reference costs about 30 s on one core, because ``imaging_methods.find_events_and_2dca``
-recomputes the reference's cross-correlation with every pixel over the whole record each time: 35 to 70
-minutes a shot. Inside the process that serves the whole group that must never start from a page, so the
-store computes it only for ``fusion-ui precompute``; a page looks it up, or shows the command that fills
-it. Nothing here prints or reports progress: a compute stays pure.
+**Batch only.** One reference costs about 30 s on one core, 35 to 70 minutes a shot, so only
+``fusion-ui precompute`` computes it; a page looks it up, or shows the command that fills it.
 
-**Preprocessed files only.** The 2DCA's threshold is in standard deviations of the *normalised* record, and
-the dead-pixel mask is the one preprocessing stored: the raw file has neither. Without this, ``precompute
---run-day`` would also try every raw file of the day.
+**Preprocessed files only.** The threshold is in standard deviations of the normalised record, and the
+dead-pixel mask is the one preprocessing stored.
 
-The blob, as ``imaging_methods.decorrelation.stack`` makes it (R and Z in metres)::
+The blob is ``imaging_methods.decorrelation.stack``'s Dataset, unchanged (R and Z in metres)::
 
     dims    ref_y, ref_x, y, x, time (the lags, in seconds)
     cond_av, cond_repr, cross_corr   (ref_y, ref_x, y, x, time)  float64, NaN at skipped references
@@ -26,9 +19,7 @@ The blob, as ``imaging_methods.decorrelation.stack`` makes it (R and Z in metres
     dead                             (y, x)                      bool, the mask used
     attrs   averages (the settings, stamped), dead_mask_source
 
-No scalars: nothing in it is one number per pixel. ``compute`` returns the API's Dataset unchanged (no
-renaming, no casting, nothing dropped), since the paper's code reads these blobs by name and a derived
-product computed straight after the 2DCA has to be bit-identical to one computed from the stored blob.
+It writes no scalars: nothing in it is one number per pixel.
 """
 
 import copy
@@ -54,9 +45,9 @@ class PixelAveragesParams:
 
 
 def lifted_from(params):
-    """``PixelAveragesParams`` out of any params that carry ``averages``: what ``method_fields`` and
-    ``blob_parameters`` hand the store as their upstream's. Read out of the downstream's own, never built
-    from defaults, so that changing the 2DCA threshold gives the bank and everything on it a new key.
+    """``PixelAveragesParams`` out of any params that carry ``averages``: the ``upstream_params`` of
+    ``method_fields`` and ``blob_parameters``. Read out of the downstream's own, never built from
+    defaults, so that changing the 2DCA threshold gives the bank and everything on it a new key.
     """
     return PixelAveragesParams(averages=copy.deepcopy(params.averages))
 
@@ -64,10 +55,9 @@ def lifted_from(params):
 def compute(ds, params):
     """The 2DCA at every live reference of the record, stacked into one bank.
 
-    ``ds`` is the preprocessed record sliced to the discharge window. The reference pixels are every one
-    the record's mask does not mark dead (``dead_mask``: the mask stored in the file, or the hand-made
-    one for a 1160616 shot, or it raises); a live reference with no events keeps an empty average and
-    ``nevents`` 0.
+    ``ds`` is the preprocessed record cut to the discharge window. The references are the pixels the
+    record's mask does not mark dead (``dead_mask``: the mask stored in the file, or the hand-made one
+    of its run day, or it raises). A live reference with no events keeps an empty average.
     """
     record_m = record(ds)
     dead = pipeline.dead_mask(record_m, hand_made=hand_made())
@@ -79,11 +69,7 @@ def compute(ds, params):
 
 
 def best_pixel(bank):
-    """``(x, y)`` of the reference whose average rests on the most events; ``None`` if no reference has one.
-
-    What the single-shot view draws, since a pure render has no way to be told which pixel the person
-    wants: the one with the best statistics is the one worth looking at first. The Fields page opens any.
-    """
+    """``(x, y)`` of the reference whose average rests on the most events; ``None`` if no reference has one."""
     events = np.asarray(bank["nevents"].values)
     if not events.size or events.max() <= 0:
         return None
@@ -94,10 +80,8 @@ def best_pixel(bank):
 def render(result, params, target):
     """The average and the cross-correlation at a few lags, at the reference with the most events.
 
-    Pure: it returns the lag strip of ``fusion_ui.views`` (one colour scale across the lags of a row, the
-    reference marked, the contour at the level the average implies) and never touches Streamlit. The pixel
-    cannot be picked here, and a slider needs state this has nowhere to keep, so it shows the pixel with the
-    best statistics at the strip's default lags; the Fields page has the picker and the lag controls.
+    The lag strip of ``fusion_ui.views`` at its default lags. A pure render cannot be told which pixel
+    the person wants, so it shows the one with the best statistics; the Fields page opens any.
     """
     pixel = best_pixel(result)
     if pixel is None:
