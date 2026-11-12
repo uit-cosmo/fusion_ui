@@ -1,13 +1,11 @@
 """The app's own SQLite database: schema, migrations, connections.
 
-Everything Shot Explorer generates lives in this one file -- parameter sets,
-run provenance, scalars, saved presets and the shot index. One file to back up,
-one file to delete for a clean slate. The ``experimental_database`` discharge
-descriptor is never written here; it stays hand-curated and read-only.
+Everything the app generates lives in this one file: parameter sets, runs,
+scalars, presets and the shot index.
 
-Schema changes go in :data:`MIGRATIONS`, never by editing :data:`SCHEMA` in
-place: the list index is the schema version it produces, and ``PRAGMA
-user_version`` records where a given database file has got to.
+A schema change appends a function to :data:`MIGRATIONS` and never edits an
+existing one: the list index is the schema version it produces, and ``PRAGMA
+user_version`` records which version a database file is at.
 """
 
 import os
@@ -16,10 +14,6 @@ from pathlib import Path
 
 from fusion_ui import config
 from fusion_ui.core import shared
-
-# ---------------------------------------------------------------------------
-# Schema (version 1)
-# ---------------------------------------------------------------------------
 
 SCHEMA = """
 -- what a params_hash actually means. Written once per distinct parameter set.
@@ -91,20 +85,12 @@ def _migrate_to_1(conn):
     conn.executescript(SCHEMA)
 
 
-# ---------------------------------------------------------------------------
-# Schema (version 2)
-# ---------------------------------------------------------------------------
-
-# `runs` originally keyed on (machine, shot, diagnostic, plot, params_hash),
-# which does not say whether the result came from the raw file or the
-# preprocessed one. `shots` has always distinguished them -- they are different
-# data and give different answers -- so without this column the second variant
-# silently returned the first one's cached result under its own label.
+# v2: `runs.preprocessed`, in the unique key. The raw and the preprocessed file
+# are different data, so their results must not share a row.
 #
 # SQLite cannot add a column to a UNIQUE constraint, so the table is rebuilt.
-# `scalars` is parked in a constraint-free copy first: it carries ON DELETE
-# CASCADE, and dropping `runs` while it still referenced it would take the
-# scalars with it.
+# `scalars` is parked in a copy without constraints first: it carries ON DELETE
+# CASCADE, and dropping `runs` would take the scalars with it.
 _MIGRATE_2 = """
 CREATE TABLE scalars_backup AS SELECT * FROM scalars;
 DROP TABLE scalars;
@@ -156,16 +142,9 @@ def _migrate_to_2(conn):
     conn.executescript(_MIGRATE_2)
 
 
-# ---------------------------------------------------------------------------
-# Schema (version 3)
-# ---------------------------------------------------------------------------
-
-# `dt` is the file's frame interval in seconds, measured off its time axis by
-# `fusion-ui backfill-dt`. Only phantom rows carry one: the APD samples at a
-# fixed rate while the fast camera's frame rate varies shot to shot, which is
-# what the browser's phantom-dt column reports. Plain ALTER TABLE: no
-# constraint or existing row is touched, and rescan's upsert names its columns
-# explicitly, so rescans neither fill nor clear it.
+# v3: `shots.dt`, the file's frame interval in seconds, measured off its time
+# axis by `fusion-ui backfill-dt`. Only phantom rows carry one: the camera's
+# frame rate varies from shot to shot. A rescan neither fills nor clears it.
 _MIGRATE_3 = """
 ALTER TABLE shots ADD COLUMN dt REAL;
 """
@@ -175,31 +154,15 @@ def _migrate_to_3(conn):
     conn.executescript(_MIGRATE_3)
 
 
-# ---------------------------------------------------------------------------
-# Schema (version 4)
-# ---------------------------------------------------------------------------
-
-
-# What a stored result was computed *from*, so that a result whose input has
-# since changed can be told apart from a current one (`store.stale_runs`).
+# v4: what a stored result was computed from, for `store.stale_runs`.
+# `runs.input_mtime` is the input file's mtime as `shots.mtime` had it when the
+# run was written (the same string, so the two compare directly), and
+# `runs.upstream_run_id` is the run a chained result was computed on. Deleting
+# that run sets the link NULL. Older rows keep NULL in both.
 #
-# `input_mtime` is the input file's mtime as `shots.mtime` recorded it when the
-# run was written -- the same string, so the two compare directly. A rescan that
-# sees the file rewritten changes `shots.mtime`, and the run is stale.
-#
-# `upstream_run_id` is the run a chained result was computed on. Deleting that
-# run (Recompute, `--force`) nulls the link; recomputing it in place leaves the
-# link and makes the upstream row newer than this one. Either way it is stale.
-#
-# Rows written before v4 keep NULL in both and count as *unknown*, never as
-# stale: nothing says what they were computed from, and calling them stale
-# would recompute every legacy result at once.
-#
-# Plain ALTER TABLE, so no existing row or constraint is touched. It runs in one
-# explicit transaction with `init_db`'s version bump (Python's sqlite3 would
-# otherwise run each DDL statement on its own), and each step checks first, so
-# even a half-applied migration is finished by the next `init-db` rather than
-# failing on a duplicate column.
+# It runs in one explicit transaction with `init_db`'s version bump (sqlite3
+# would otherwise run each DDL statement on its own), and each step checks
+# first, so a half-applied migration is finished by the next `init-db`.
 def _migrate_to_4(conn):
     if not conn.in_transaction:
         conn.execute("BEGIN")
@@ -211,17 +174,16 @@ def _migrate_to_4(conn):
             "ALTER TABLE runs ADD COLUMN upstream_run_id INTEGER"
             " REFERENCES runs(id) ON DELETE SET NULL"
         )
-    # Deleting a run looks up the rows that point at it; without an index
-    # every delete scans the whole ledger.
+    # Deleting a run looks up the rows that point at it.
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_runs_upstream ON runs (upstream_run_id)"
     )
 
 
-# Index = the schema version the migration produces. Append, never rewrite:
-# a database file already at version N only runs MIGRATIONS[N:].
+# The index is the schema version the migration produces. A database file at
+# version N runs MIGRATIONS[N + 1:].
 MIGRATIONS = [
-    None,  # version 0 is "empty file"
+    None,  # version 0 is an empty file
     _migrate_to_1,
     _migrate_to_2,
     _migrate_to_3,
@@ -239,8 +201,8 @@ SCHEMA_VERSION = len(MIGRATIONS) - 1
 def connect(path=None):
     """Open the app database, creating its parent directory if needed.
 
-    WAL so the ``rescan`` cron job and the Streamlit process can work at the
-    same time without blocking each other on reads.
+    In WAL mode, so that ``rescan`` or ``precompute`` and the Streamlit process
+    do not block each other's reads.
     """
     if path is None:
         path = config.UI_DB_PATH
@@ -263,8 +225,7 @@ def open_readonly(path=None):
     """Open the app database for reading only: no directory, no migration, no write.
 
     For readers outside the app (``fusion_ui.api``), who may not own the file.
-    Refuses a database whose schema is not the one this code writes, rather
-    than migrate it: that is ``fusion-ui init-db``'s to do.
+    A database at another schema version is refused, not migrated.
     """
     if path is None:
         path = config.UI_DB_PATH
@@ -306,7 +267,7 @@ def init_db(conn):
 
 
 def open_db(path=None):
-    """``connect`` plus ``init_db`` -- what every entry point actually wants."""
+    """``connect`` plus ``init_db``: what every entry point wants."""
     conn = connect(path)
     init_db(conn)
     return conn

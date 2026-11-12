@@ -1,59 +1,27 @@
-"""The result store: the run ledger, the netCDF blobs, and the scalar writer.
+"""The result store: the run ledger, the netCDF blobs and the scalar rows.
 
-Everything a cached :class:`~fusion_ui.core.registry.PlotSpec` produces lands
-here. One ``runs`` row per (what was computed, on what) is the provenance
-record; the derived dataset goes to netCDF under ``CACHE_DIR``; whatever
-``spec.scalars()`` returns goes to the ``scalars`` table, which is what the
+Every result of a cached :class:`~fusion_ui.core.registry.PlotSpec` lands here:
+one ``runs`` row per (plot, parameters, target), the dataset as netCDF under
+``CACHE_DIR``, and what ``spec.scalars()`` returns in ``scalars``, which the
 multi-shot view reads.
 
-Three decisions worth knowing before changing anything here.
-
-**The cache never evicts.** With tens of terabytes free, an unevicted cache is
-strictly better, and eviction would solve a problem we do not have. ``runs`` is
-the ledger; deliberate cleanup is an operator decision, not a background
-process that silently throws away a four-minute computation.
-
-**``code_version`` is recorded but never hashed.** Putting the git hash in the
-cache key would invalidate every result on every commit. Store it, show it
-under the figure, and let the person looking at the plot decide whether the
-version matters for what they are doing.
-
-**A failure is a row, not an exception.** A compute that raises writes a
-``status='failed'`` row carrying the message. Subsequent loads return that row
-so the page can show the error and offer Recompute, rather than re-raising the
-same traceback on every rerun.
-
-**A spec with ``requires`` is resolved depth first**, and only when the
-downstream result is actually missing -- a cache hit on the derived quantity
-must not pay for its upstream. Each link in the chain keeps its own ledger row,
-so the 2DCA average that four different plots are built on is computed and
-stored exactly once.
-
-**A batch-only spec is computed by batch jobs alone.** :func:`result` and
-:func:`compute_and_store` raise :class:`BatchOnlyError` rather than compute one
-unless the caller passes ``batch=True``, which only ``fusion-ui precompute``
-does -- including when the batch-only spec is an upstream reached through a
-chain. A page reads such results with :func:`lookup`, and asks
-:func:`missing_batch_upstreams` before computing anything built on one.
-
-**A result records what it was computed from** (schema v4): the input file's
-mtime as the index recorded it, and the upstream run it was built on. Neither
-is in the cache key. :func:`stale_runs` compares them with the index and the
-ledger as they are now.
-
-**Deleting a whole plot is deliberate, and counted first.** :func:`plan_prune`
-counts every run of one plot key, its scalars, its blobs and the parameter sets
-nothing else will reference; :func:`prune` deletes them -- blobs first, then the
-ledger in one transaction -- for a plot that is no longer registered as well as
-for one that is. ``fusion-ui prune --plot KEY`` is the front end.
-
-**So is deleting some of a plot's scalars.** :func:`plan_prune_scalars` counts,
-per name, the rows of those names under one plot key; :func:`prune_scalars`
-deletes exactly those rows in one transaction. The runs, their blobs, their
-other scalars and the same names under any other plot key stay.
-``fusion-ui prune --plot KEY --scalar NAME`` is the front end.
+- The cache never evicts. Cleanup is deliberate: :func:`delete_run`,
+  :func:`prune` and :func:`prune_scalars`.
+- ``code_version`` is recorded but is not in the cache key, or every commit
+  would invalidate every result.
+- A compute that raises is stored as a ``failed`` row with its message, and
+  later calls return that row instead of raising again.
+- A spec with ``requires`` is resolved depth first and only on a miss. Each
+  link keeps its own row and blob.
+- A batch-only spec is computed only with ``batch=True``, which ``fusion-ui
+  precompute`` passes. Otherwise a miss raises :class:`BatchOnlyError`, and a
+  page reads such results with :func:`lookup`.
+- A run records its input file's mtime and the upstream run it was built on.
+  Neither is in the cache key. :func:`stale_runs` compares them with the index
+  and the ledger as they are now.
 """
 
+import contextlib
 import math
 import os
 import sqlite3
@@ -68,48 +36,35 @@ import pandas as pd
 import xarray as xr
 
 from fusion_ui import config
-from fusion_ui.core import params_ui, shared, versions
+from fusion_ui.core import params_ui, registry, shared, versions
 
-#: Sentinel for a scalar that belongs to the shot rather than to one pixel.
-#: Not NULL: SQLite permits NULLs in a non-INTEGER primary key, which would
-#: silently break the uniqueness the table depends on.
+#: The x and y of a scalar that belongs to the shot, not to one pixel. Not NULL:
+#: SQLite allows NULLs in a non-INTEGER primary key, which would break the
+#: uniqueness the table depends on.
 SHOT_LEVEL = -1
 
 
 def _now():
-    # ISO 8601 in UTC, as catalog writes shots.mtime, but to the microsecond:
-    # stale_runs orders a run against its upstream by created_at, and an
-    # upstream recomputed within the same second as its downstream was
-    # written would otherwise not read as newer.
+    # To the microsecond: stale_runs orders a run against its upstream by
+    # created_at, and the two can be written within the same second.
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 @lru_cache(maxsize=None)
 def _code_version():
-    """Each repository's commit as one string, or ``None``.
-
-    Read once per process: the code a process runs is the code it imported,
-    and a long batch must not run git again for every target. Defensive,
-    because a missing checkout must not stop a result being stored. See
-    :mod:`fusion_ui.core.versions`.
-    """
+    """Each repository's commit as one string, or ``None``. Read once per process."""
+    # A missing checkout must not stop a result being stored.
     try:
         return versions.as_text(versions.code_version())
-    except Exception:  # noqa: BLE001 - provenance is nice to have, not required
+    except Exception:  # noqa: BLE001
         return None
-
-
-# ---------------------------------------------------------------------------
-# Where a blob lives
-# ---------------------------------------------------------------------------
 
 
 def blob_path(plot, params_hash, target, suffix=".nc"):
     """``CACHE_DIR/runs/<plot>/<params_hash>/<target key><suffix>``.
 
-    The hash is in the path, not just in the database, so two parameter sets
-    for the same shot cannot overwrite each other on disk -- and so a stray
-    directory can be read back to the run that made it.
+    The hash is in the path, so two parameter sets for one shot cannot
+    overwrite each other on disk.
     """
     return os.path.join(
         config.CACHE_DIR, "runs", plot, params_hash, f"{target.key}{suffix}"
@@ -117,7 +72,7 @@ def blob_path(plot, params_hash, target, suffix=".nc"):
 
 
 # ---------------------------------------------------------------------------
-# param_sets
+# param_sets and runs
 # ---------------------------------------------------------------------------
 
 
@@ -140,11 +95,6 @@ def params_json(conn, params_hash):
     return row["params_json"] if row else None
 
 
-# ---------------------------------------------------------------------------
-# runs
-# ---------------------------------------------------------------------------
-
-
 def find_run(conn, target, plot, params_hash):
     return conn.execute(
         "SELECT * FROM runs WHERE machine = ? AND shot = ? AND diagnostic = ?"
@@ -161,11 +111,10 @@ def find_run(conn, target, plot, params_hash):
 
 
 def input_mtime(conn, target):
-    """The input file's mtime as the index (``shots.mtime``) records it, or ``None``.
+    """The input file's mtime as the index (``shots.mtime``) has it, or ``None``.
 
-    What a run stores in ``runs.input_mtime``: the same string, so that
-    :func:`stale_runs` can tell a rescan that saw the file rewritten by
-    comparing the two directly. ``None`` for a target that is not indexed.
+    A run stores the same string in ``runs.input_mtime``, so the two compare
+    directly. ``None`` for a target that is not indexed.
     """
     row = conn.execute(
         "SELECT mtime FROM shots WHERE machine = ? AND shot = ? AND diagnostic = ?"
@@ -178,19 +127,14 @@ def input_mtime(conn, target):
 def record_run(conn, target, plot, params_hash, **columns):
     """Write the run row and return it, replacing any earlier attempt.
 
-    An earlier attempt is genuinely superseded -- a failure that now succeeds,
-    or a recompute under a newer ``code_version`` -- so the row is updated in
-    place (keeping its ``id``) and its scalars are cleared rather than
-    accumulating. ``input_mtime`` and ``upstream_run_id`` are written on every
-    call, as ``NULL`` unless given, so an update in place never keeps the
-    previous attempt's provenance.
+    An earlier attempt is updated in place, keeping its ``id``, and its scalars
+    are cleared. ``input_mtime`` and ``upstream_run_id`` are written as ``NULL``
+    unless given, so the row never keeps the previous attempt's.
     """
     fields = {
         "machine": target.machine,
         "shot": target.shot,
         "diagnostic": target.diagnostic,
-        # Part of the run's identity, not of its parameters: the raw and the
-        # preprocessed file are different data and give different answers.
         "preprocessed": int(target.preprocessed),
         "plot": plot,
         "params_hash": params_hash,
@@ -216,24 +160,16 @@ def record_run(conn, target, plot, params_hash, **columns):
 
 
 def delete_run(conn, run):
-    """Drop a run, its scalars (by cascade) and its blob. The Recompute path.
+    """Drop a run, its scalars and its blob.
 
-    The ledger rows are always removed, even if the blob cannot be unlinked
-    (permissions, concurrent delete): a leftover blob under a hash path is
-    overwritten on the next compute, but a leftover row would short-circuit
-    ``result()`` back to the stale result forever.
-
-    Runs built on this one keep their results but lose their link to it
-    (``upstream_run_id`` is set NULL by the foreign key), which is what
-    :func:`stale_runs` reports them by.
+    The rows go even if the blob cannot be removed: a leftover blob is
+    overwritten by the next compute, but a leftover row would keep returning
+    the old result. Runs built on this one lose their ``upstream_run_id`` (the
+    foreign key sets it NULL), which is how :func:`stale_runs` finds them.
     """
-    path = run["blob_path"]
-    if path:
-        try:
-            if os.path.exists(path):
-                os.remove(path)
-        except OSError:
-            pass
+    if run["blob_path"]:
+        with contextlib.suppress(OSError):
+            os.remove(run["blob_path"])
     with conn:
         conn.execute("DELETE FROM scalars WHERE run_id = ?", (run["id"],))
         conn.execute("DELETE FROM runs WHERE id = ?", (run["id"],))
@@ -244,29 +180,23 @@ def delete_run(conn, run):
 # ---------------------------------------------------------------------------
 
 
-def _scalar_rows(run_id, mapping):
+def write_scalars(conn, run_id, mapping):
+    """Write ``mapping`` as this run's scalars and return how many rows.
+
+    A key is a ``str`` for a shot-level scalar or an ``(x, y, name)`` tuple for
+    one that belongs to a pixel. A NaN, or a value that is not a number, is
+    stored as NULL: SQLite has no NaN.
+    """
+    rows = []
     for key, value in mapping.items():
-        if isinstance(key, str):
-            x, y, name = SHOT_LEVEL, SHOT_LEVEL, key
-        else:
-            x, y, name = key
-            x, y = int(x), int(y)
+        x, y, name = (SHOT_LEVEL, SHOT_LEVEL, key) if isinstance(key, str) else key
         try:
             number = float(value)
         except (TypeError, ValueError):
             number = float("nan")
-        # SQLite has no NaN; binding one stores NULL anyway. Being explicit
-        # keeps "the fit did not converge" readable in the table.
-        yield run_id, x, y, str(name), None if math.isnan(number) else number
-
-
-def write_scalars(conn, run_id, mapping):
-    """Replace this run's scalars with ``mapping``.
-
-    Keys are a ``str`` for a shot-level scalar or an ``(x, y, name)`` tuple for
-    one that belongs to a pixel.
-    """
-    rows = list(_scalar_rows(run_id, mapping))
+        rows.append(
+            (run_id, int(x), int(y), str(name), None if math.isnan(number) else number)
+        )
     with conn:
         conn.executemany(
             "INSERT OR REPLACE INTO scalars (run_id, x, y, name, value)"
@@ -275,6 +205,19 @@ def write_scalars(conn, run_id, mapping):
         )
     return len(rows)
 
+
+_SCALAR_COLUMNS = [
+    "machine",
+    "shot",
+    "diagnostic",
+    "preprocessed",
+    "plot",
+    "params_hash",
+    "x",
+    "y",
+    "name",
+    "value",
+]
 
 _SCALAR_QUERY = """
 SELECT r.machine, r.shot, r.diagnostic, r.preprocessed, r.plot, r.params_hash,
@@ -285,7 +228,7 @@ SELECT r.machine, r.shot, r.diagnostic, r.preprocessed, r.plot, r.params_hash,
 
 
 def scalar_frame(conn, names=None, machine=None, plot=None, params_hash=None):
-    """Long-form scalars as a DataFrame -- what the multi-shot view reads."""
+    """The scalars of every ``ok`` run in long form, which the multi-shot view reads."""
     query, args = _SCALAR_QUERY, []
     for column, value in (
         ("r.machine", machine),
@@ -299,19 +242,7 @@ def scalar_frame(conn, names=None, machine=None, plot=None, params_hash=None):
         query += f" AND s.name IN ({', '.join('?' * len(names))})"
         args.extend(names)
     return pd.DataFrame(
-        [dict(row) for row in conn.execute(query, args)],
-        columns=[
-            "machine",
-            "shot",
-            "diagnostic",
-            "preprocessed",
-            "plot",
-            "params_hash",
-            "x",
-            "y",
-            "name",
-            "value",
-        ],
+        [dict(row) for row in conn.execute(query, args)], columns=_SCALAR_COLUMNS
     )
 
 
@@ -321,12 +252,10 @@ def scalar_frame(conn, names=None, machine=None, plot=None, params_hash=None):
 
 
 def load_result(conn, run):
-    """The stored dataset for ``run``, or ``None`` if the blob is gone.
+    """The stored dataset for ``run``, loaded into memory, or ``None``.
 
-    Loaded into memory and the file closed: these are derived results, small
-    next to the ~500 MB inputs, and holding a handle open would keep a deleted
-    cache file alive. A corrupt/unreadable blob also returns ``None`` so the
-    caller falls through and recomputes rather than crashing the page.
+    ``None`` when the blob is gone or cannot be read, so that the caller
+    recomputes instead of crashing the page.
     """
     path = run["blob_path"]
     if not path or not os.path.exists(path):
@@ -334,7 +263,7 @@ def load_result(conn, run):
     try:
         with xr.open_dataset(path) as stored:
             return stored.load()
-    except Exception:  # noqa: BLE001 - corrupt cache must recompute, not crash
+    except Exception:  # noqa: BLE001 - a corrupt blob must recompute, not crash
         return None
 
 
@@ -342,9 +271,8 @@ def _write_blob(result, path, plot, params_hash, text, code_version, created_at)
     directory = os.path.dirname(path)
     shared.makedirs(directory)
     result = result.copy()
-    # netCDF attributes cannot hold nested structures, so the parameters go in
-    # as their canonical JSON string -- which makes the blob self-describing if
-    # it is ever found without the database beside it.
+    # The parameters go in as their canonical JSON string (netCDF attributes
+    # cannot nest), so a blob found without the database describes itself.
     result.attrs.update(
         {
             "fusion_ui_plot": plot,
@@ -354,44 +282,35 @@ def _write_blob(result, path, plot, params_hash, text, code_version, created_at)
             "fusion_ui_created_at": created_at,
         }
     )
-    # Write aside and rename into place: the blob directory is shared by two
-    # accounts, and a blob left there by the other writer is not writable by
-    # this one, so saving straight to `path` fails on the overwrite. Renaming
-    # needs write permission on the directory only -- which the group-writable
-    # setup provides -- whatever mode the previous blob carries.
+    # Written aside and renamed into place. Two accounts write this directory
+    # (see fusion_ui.core.shared), and a blob the other one left is not writable
+    # by this one. A rename needs write permission on the directory only.
     fd, tmp_path = tempfile.mkstemp(
         dir=directory, prefix=f"{os.path.basename(path)}.tmp."
     )
     os.close(fd)
     try:
         result.to_netcdf(tmp_path)
-        # The service account and whoever runs `fusion-ui precompute` both write
-        # here; see fusion_ui.core.shared.
         shared.share_file(tmp_path)
         os.replace(tmp_path, path)
-        shared.share_file(path)
     except BaseException:
-        try:
+        with contextlib.suppress(OSError):
             os.remove(tmp_path)
-        except OSError:
-            pass
         raise
     return path
 
 
 # ---------------------------------------------------------------------------
-# The entry point
+# Computing
 # ---------------------------------------------------------------------------
 
 
 class BatchOnlyError(RuntimeError):
     """A batch-only spec is missing, and the caller is not a batch job.
 
-    Raised by :func:`compute_and_store` before it records a run, whether the
-    batch-only spec was asked for directly or is an upstream reached through a
-    chain, so ``runs`` gains no row for either: the analysis did not fail, it
-    was not run. ``spec`` and ``params`` name the batch-only link. A page
-    catches this and shows the command that fills the cache instead.
+    ``spec`` and ``params`` name the batch-only link, which may be an upstream
+    of the spec that was asked for. Raised before any run is recorded: the
+    analysis did not fail, it was not run.
     """
 
     def __init__(self, spec, target, params):
@@ -405,50 +324,43 @@ class BatchOnlyError(RuntimeError):
         )
 
 
-def _fail(
-    conn, target, spec, params_hash, message, seconds, code_version, **provenance
-):
-    return None, record_run(
-        conn,
-        target,
-        spec.key,
-        params_hash,
-        blob_path=None,
-        status="failed",
-        error=message,
-        seconds=seconds,
-        code_version=code_version,
-        **provenance,
-    )
-
-
 def compute_and_store(conn, spec, target, params, ds, batch=False):
     """Run ``spec.compute``, store what it produced, return ``(result, run)``.
 
-    On failure the exception is recorded and ``(None, run)`` comes back with
-    ``run["status"] == "failed"``.
+    A failure is recorded and comes back as ``(None, run)`` with
+    ``run["status"] == "failed"``. A batch-only ``spec``, or a batch-only
+    upstream that has to be computed, raises :class:`BatchOnlyError` unless
+    ``batch`` is true.
 
-    ``batch=True`` says the caller is a batch job (``fusion-ui precompute``),
-    the only thing allowed to compute a batch-only spec: otherwise a batch-only
-    ``spec``, or a batch-only upstream that has to be computed, raises
-    :class:`BatchOnlyError` before any run is recorded.
-
-    The row records what the result was computed from: ``input_mtime``, the
-    input file's mtime as the index has it now, and ``upstream_run_id``, the
-    run its upstream result came from -- also on a failure, so that retrying a
-    failed upstream marks the downstream failure stale too.
+    The row records ``input_mtime`` and ``upstream_run_id`` on a failure too,
+    so that retrying a failed upstream marks the downstream failure stale.
     """
-    from fusion_ui.core import registry
-
     if spec.batch_only and not batch:
         raise BatchOnlyError(spec, target, params)
 
     params_hash, text = record_params(conn, spec.key, params)
-    code_version = _code_version()
-    provenance = {"input_mtime": input_mtime(conn, target), "upstream_run_id": None}
+    columns = {
+        "code_version": _code_version(),
+        "input_mtime": input_mtime(conn, target),
+        "upstream_run_id": None,
+    }
 
-    # An upstream is resolved before the clock starts, so ``seconds`` measures
-    # this analysis and not the one it was waiting on -- each has its own row.
+    def failed(message, seconds=None):
+        run = record_run(
+            conn,
+            target,
+            spec.key,
+            params_hash,
+            blob_path=None,
+            status="failed",
+            error=message,
+            seconds=seconds,
+            **columns,
+        )
+        return None, run
+
+    # The upstream is resolved before the clock starts: ``seconds`` is this
+    # analysis alone.
     arguments = (ds, params)
     if spec.requires is not None:
         upstream, upstream_run = result(
@@ -460,49 +372,33 @@ def compute_and_store(conn, spec, target, params, ds, batch=False):
             batch=batch,
         )
         if upstream_run is not None:
-            provenance["upstream_run_id"] = upstream_run["id"]
+            columns["upstream_run_id"] = upstream_run["id"]
         if upstream is None:
             reason = (
                 upstream_run["error"]
                 if upstream_run is not None
                 else "it produced nothing"
             )
-            return _fail(
-                conn,
-                target,
-                spec,
-                params_hash,
-                f"upstream {spec.requires!r} did not produce a result: {reason}",
-                None,
-                code_version,
-                **provenance,
+            return failed(
+                f"upstream {spec.requires!r} did not produce a result: {reason}"
             )
         arguments = (ds, params, upstream)
 
+    path = blob_path(spec.key, params_hash, target)
     started = time.perf_counter()
     try:
         result_ds = spec.compute(*arguments)
-    except Exception as error:  # noqa: BLE001 - reported through the ledger
-        return _fail(
-            conn,
-            target,
-            spec,
-            params_hash,
-            f"{type(error).__name__}: {error}",
-            time.perf_counter() - started,
-            code_version,
-            **provenance,
-        )
-
-    created_at = _now()
+    except Exception as error:  # noqa: BLE001 - a failure is a row, not a crash
+        return failed(f"{type(error).__name__}: {error}", time.perf_counter() - started)
     try:
-        path = _write_blob(
+        created_at = _now()
+        _write_blob(
             result_ds,
-            blob_path(spec.key, params_hash, target),
+            path,
             spec.key,
             params_hash,
             text,
-            code_version,
+            columns["code_version"],
             created_at,
         )
         run = record_run(
@@ -514,45 +410,27 @@ def compute_and_store(conn, spec, target, params, ds, batch=False):
             status="ok",
             error=None,
             seconds=time.perf_counter() - started,
-            code_version=code_version,
             created_at=created_at,
-            **provenance,
+            **columns,
         )
         if spec.scalars is not None:
             write_scalars(conn, run["id"], spec.scalars(result_ds))
     except Exception as error:  # noqa: BLE001 - a failure is a row, not a crash
-        # Blob write, ledger write, or scalars() raised after a successful
-        # compute (disk full, PermissionError, bad attrs, non-numeric mapping).
-        # Record it so the page shows the error with Recompute instead of a
-        # traceback, and remove a half-written blob if there is one.
-        try:
-            partial = blob_path(spec.key, params_hash, target)
-            if os.path.exists(partial):
-                os.remove(partial)
-        except OSError:
-            pass
-        return _fail(
-            conn,
-            target,
-            spec,
-            params_hash,
-            f"{type(error).__name__}: {error}",
-            time.perf_counter() - started,
-            code_version,
-            **provenance,
-        )
+        # The blob write, the ledger write or scalars() raised after a compute
+        # that succeeded. A blob already in place has no `ok` row to name it.
+        with contextlib.suppress(OSError):
+            os.remove(path)
+        return failed(f"{type(error).__name__}: {error}", time.perf_counter() - started)
     return result_ds, run
 
 
 def result(conn, spec, target, params, ds, batch=False):
-    """``(result, run)`` for one spec on one target -- the single entry point.
+    """``(result, run)`` for one spec on one target.
 
-    A live spec (``compute is None``) gets its time-sliced input straight back
-    and has no run row. A cached spec is looked up first, computed only if the
-    ledger has nothing usable, and a recorded failure is returned as-is for the
-    page to surface. A batch-only spec, or one whose chain reaches a missing
-    batch-only link, is computed only with ``batch=True``; otherwise a miss
-    raises :class:`BatchOnlyError` (see :func:`compute_and_store`).
+    A live spec (``compute is None``) gets ``ds`` straight back, with no run.
+    A cached spec is looked up first and computed only on a miss. A recorded
+    failure is returned as it is, ``(None, run)``. See
+    :func:`compute_and_store` for ``batch``.
     """
     if spec.compute is None:
         return ds, None
@@ -565,8 +443,7 @@ def result(conn, spec, target, params, ds, batch=False):
         stored = load_result(conn, run)
         if stored is not None:
             return stored, run
-        # The row survived but the blob did not -- someone cleared the cache
-        # directory. Fall through and recompute rather than reporting nothing.
+        # The row is there but the blob is not: recompute.
     return compute_and_store(conn, spec, target, params, ds, batch=batch)
 
 
@@ -578,13 +455,12 @@ def result(conn, spec, target, params, ds, batch=False):
 def lookup(conn, spec, target, params):
     """``(result, run)`` from the ledger alone, for a page that must not compute.
 
-    Never computes, never resolves an upstream, and writes nothing -- not even
-    the ``param_sets`` row :func:`result` records.
+    Never computes, never resolves an upstream and writes nothing, not even the
+    ``param_sets`` row.
 
     - ``(None, None)``: nothing is stored for these parameters on this target.
-    - ``(None, run)``: a recorded failure (``run["status"] == "failed"``), or
-      an ``ok`` row whose blob is gone or unreadable, which a compute would
-      replace.
+    - ``(None, run)``: a recorded failure, or an ``ok`` row whose blob is gone
+      or unreadable.
     - ``(result, run)``: the stored result, loaded into memory.
 
     A live spec stores nothing, so asking for one is a ``ValueError``.
@@ -598,53 +474,37 @@ def lookup(conn, spec, target, params):
     return load_result(conn, run), run
 
 
-def _blob_on_disk(run):
-    return (
-        run is not None
-        and run["status"] == "ok"
-        and bool(run["blob_path"])
-        and os.path.exists(run["blob_path"])
-    )
-
-
 def missing_batch_upstreams(conn, spec, target, params):
     """The batch-only links in ``spec``'s chain that a compute here would need.
 
-    ``[(link, link_params, run), …]``, from ``spec`` itself down its
-    ``requires`` chain, with each link's parameters lifted out of the one above
-    it as the store lifts them. ``run`` is the link's ledger row: ``None`` when
-    nothing is stored, a ``failed`` row, or an ``ok`` row whose blob has gone.
+    ``[(link, link_params, run), ...]`` from ``spec`` itself down its
+    ``requires`` chain. ``run`` is the link's ledger row: ``None``, a
+    ``failed`` row, or an ``ok`` row whose blob has gone.
 
-    The walk follows :func:`result`: a link whose result is cached ends it,
-    because nothing beneath a cache hit is resolved, and so does a recorded
-    failure, which is handed back as it is. Every batch-only link before that
-    point is listed. ``[]`` therefore means :func:`result` can resolve ``spec``
-    without starting a batch-only compute, which is when a page may compute a
-    derived spec inline. A failed batch-only link is listed too: only the
-    command line can retry it.
+    The walk follows :func:`result`: it ends at a link whose result is cached,
+    since nothing beneath a cache hit is resolved, and at a recorded failure.
+    Every batch-only link up to there is listed, a failed one included (only
+    the command line can retry it). ``[]`` means :func:`result` can resolve
+    ``spec`` without starting a batch-only compute.
 
-    Reads the ledger and checks that blobs exist, but opens none: a page asks
-    this on every rerun. A blob that exists but cannot be read is caught later,
-    by :class:`BatchOnlyError`.
+    Opens no blob, since a page asks this on every rerun. One that exists but
+    cannot be read is caught later, by :class:`BatchOnlyError`.
     """
-    from fusion_ui.core import registry
-
     links = registry.chain(spec)
     if not any(link.batch_only for link in links):
         return []
     missing = []
-    current = params
     for index, link in enumerate(links):
         if index:
-            current = links[index - 1].upstream_params(current)
-        params_hash, _ = params_ui.hash_params(link.key, current)
+            params = links[index - 1].upstream_params(params)
+        params_hash, _ = params_ui.hash_params(link.key, params)
         run = find_run(conn, target, link.key, params_hash)
-        failed = run is not None and run["status"] == "failed"
-        if not failed and _blob_on_disk(run):
+        status = None if run is None else run["status"]
+        if status == "ok" and os.path.exists(run["blob_path"] or ""):
             break
         if link.batch_only:
-            missing.append((link, current, run))
-        if failed:
+            missing.append((link, params, run))
+        if status == "failed":
             break
     return missing
 
@@ -653,11 +513,10 @@ def missing_batch_upstreams(conn, spec, target, params):
 # Staleness
 # ---------------------------------------------------------------------------
 
-#: The input file's mtime in the index differs from the one the run recorded:
-#: a rescan saw the file rewritten (re-preprocessed, a corrected mask).
+#: The input file's mtime in the index is not the one the run recorded.
 STALE_INPUT = "input changed"
-#: The run's upstream row was deleted (Recompute, ``--force``, a retried
-#: failure); whatever replaced it is not what this result was built on.
+#: The run's upstream row was deleted. What replaced it is not what this
+#: result was built on.
 STALE_UPSTREAM_DELETED = "upstream deleted"
 #: The upstream row was written after this one: recomputed in place.
 STALE_UPSTREAM_RECOMPUTED = "upstream recomputed"
@@ -685,8 +544,6 @@ def _instant(text):
 
 def _chained(plot):
     """Whether runs of ``plot`` are always written with an upstream link."""
-    from fusion_ui.core import registry
-
     spec = registry.REGISTRY.get(plot)
     if spec is None or spec.requires is None:
         return False
@@ -694,30 +551,18 @@ def _chained(plot):
     return upstream is not None and upstream.cached
 
 
-def _judged(run):
-    """Whether staleness can be told for ``run`` at all.
-
-    Only when it recorded its input (``input_mtime``) and that input is still
-    in the index. A run written before schema v4, or for a target the index did
-    not hold, says nothing of what it was computed from; a run whose input has
-    left the index could not be recomputed.
-    """
-    return run["input_mtime"] is not None and run["index_mtime"] is not None
-
-
 def _own_staleness(run, rows):
-    """Why a judged ``run`` itself is stale, or ``None`` (see :func:`_judged`)."""
+    """Why ``run`` itself is stale, or ``None``."""
     if run["index_mtime"] != run["input_mtime"]:
         return STALE_INPUT
     upstream_id = run["upstream_run_id"]
     if upstream_id is None:
-        # The store links every chained run when it writes it, so a missing
-        # link on a v4 row means the upstream row was deleted since.
+        # Every chained run is written with its link, so none means the
+        # upstream row was deleted since.
         return STALE_UPSTREAM_DELETED if _chained(run["plot"]) else None
     upstream = rows.get(upstream_id)
     if upstream is None:
-        # A dangling link: the upstream was deleted by a connection that had
-        # foreign keys off, so SET NULL never fired.
+        # A dangling link: deleted on a connection with foreign keys off.
         return STALE_UPSTREAM_DELETED
     mine, theirs = _instant(run["created_at"]), _instant(upstream["created_at"])
     if mine is not None and theirs is not None and theirs > mine:
@@ -726,36 +571,23 @@ def _own_staleness(run, rows):
 
 
 def stale_runs(conn, plot=None):
-    """Every run whose stored result a recompute might no longer reproduce.
+    """Every run whose stored result a recompute might not reproduce.
 
-    ``[dict(run, stale=reason), …]`` in ``id`` order, of any status: a failure
-    on an input that has since changed may now succeed. ``plot`` restricts the
-    list to one plot's runs; the rules still follow their chains through every
-    other plot. ``reason`` is one of
+    ``[dict(run, stale=reason), ...]`` in ``id`` order, of any status (a
+    failure on an input that has changed may now succeed). ``plot`` keeps one
+    plot's runs. ``reason`` is :data:`STALE_INPUT`,
+    :data:`STALE_UPSTREAM_DELETED`, :data:`STALE_UPSTREAM_RECOMPUTED`, or
+    :data:`STALE_UPSTREAM_STALE` when only the run it was built on is stale,
+    however far down the chain.
 
-    - :data:`STALE_INPUT`: ``runs.input_mtime`` differs from ``shots.mtime``;
-    - :data:`STALE_UPSTREAM_DELETED`: the upstream link is NULL (or dangling)
-      on a run of a chained spec;
-    - :data:`STALE_UPSTREAM_RECOMPUTED`: the upstream row's ``created_at`` is
-      later than this row's;
-    - :data:`STALE_UPSTREAM_STALE`: none of those, but the upstream run is
-      stale itself, by any rule -- so a stale 2DCA average marks every result
-      built on it, however far down the chain.
+    Only a run that recorded its ``input_mtime``, and whose input is still in
+    the index, is judged. Any other is never listed and passes no staleness
+    on: without ``input_mtime`` nothing says what it was computed from, and
+    without the input it could not be recomputed.
 
-    Only a run whose input is recorded and indexed is judged. Every other run
-    is never listed, by any rule: one with no ``input_mtime`` -- written before
-    schema v4, or for a target the index did not hold -- is unknown, so legacy
-    results are not recomputed wholesale; one whose input file has left the
-    index could not be recomputed. Neither is stale itself, so neither passes
-    staleness on: a judged run built on one is judged by its own link alone
-    (deleted, or recomputed in place). A run and its upstream share a target,
-    and so a shots row, so a link never joins a judged run to one whose input
-    has left the index; it can join one to an unknown upstream, such as a run
-    written before v4.
-
-    Whether a plot is chained is read from the registry, so import
-    :mod:`fusion_ui.plots` first, as every entry point does; a plot that is
-    not registered is judged by the other rules.
+    Whether a plot is chained is read from the registry, so
+    :mod:`fusion_ui.plots` must be imported first. A plot that is not
+    registered is judged by the other rules.
     """
     rows = {row["id"]: dict(row) for row in conn.execute(_STALE_QUERY)}
     reasons = {}
@@ -765,7 +597,7 @@ def stale_runs(conn, plot=None):
             return reasons[run_id]
         run = rows[run_id]
         found = None
-        if _judged(run):
+        if run["input_mtime"] is not None and run["index_mtime"] is not None:
             found = _own_staleness(run, rows)
             upstream_id = run["upstream_run_id"]
             if found is None and upstream_id in rows and upstream_id not in visiting:
@@ -786,16 +618,14 @@ def stale_runs(conn, plot=None):
 
 
 # ---------------------------------------------------------------------------
-# Pruning
+# Pruning a whole plot
 # ---------------------------------------------------------------------------
 
 
 class PruneError(RuntimeError):
     """:func:`prune` or :func:`prune_scalars` refused to start, or could not write.
 
-    The message says which, and what state that leaves behind. A
-    ``RuntimeError``, so ``fusion-ui`` prints it and exits 1, like every other
-    refusal.
+    The message says which, and what state that leaves behind.
     """
 
 
@@ -803,13 +633,23 @@ def _inside(path, root):
     """Whether ``path`` is an entry of the tree ``root``, which is already resolved.
 
     The directories on the way are resolved, so neither ``..`` nor a symlinked
-    directory can lead out of the tree. The last component is not: removing a
-    link removes the link and never what it points at.
+    directory leads out of the tree. The last component is not: removing a
+    link removes the link, never what it points at.
     """
     entry = os.path.join(
         os.path.realpath(os.path.dirname(path)), os.path.basename(path)
     )
     return os.path.commonpath([root, entry]) == root
+
+
+def _runs_per_plot(conn):
+    """``{plot: its runs}`` for every plot in the ledger, for a mistyped key's hint."""
+    return {
+        row[0]: row[1]
+        for row in conn.execute(
+            "SELECT plot, COUNT(*) FROM runs GROUP BY plot ORDER BY plot"
+        )
+    }
 
 
 @dataclass
@@ -820,12 +660,12 @@ class PrunePlan:
     runs: list  # the plot's ``runs`` rows, in id order
     scalars: dict  # run id -> its ``scalars`` rows, for the runs that have any
     present: list  # blob paths that are on disk
-    missing: list  # blob paths the ledger lists that are not on disk any more
+    missing: list  # blob paths the ledger lists that are not on disk
     outside: list  # (run id, blob path) lying outside ``CACHE_DIR``: refused
     locked: list  # present blob paths in a directory this user cannot write
     params: list  # hashes of the ``param_sets`` rows nothing will reference
     dependents: list  # (run id, plot, upstream run id) of other plots' runs on these
-    plots: dict  # every plot in the ledger -> its runs, for a mistyped key's hint
+    plots: dict  # every plot in the ledger -> its runs
 
     @property
     def empty(self):
@@ -904,8 +744,7 @@ class PruneReport:
     gone: int = 0  # blob files that were already missing
     params: int = 0  # ``param_sets`` rows deleted
     stale: int = 0  # runs of other plots that lost their upstream
-    #: (run id, blob path, why) for each run left in the ledger because its blob
-    #: could not be removed
+    #: (run id, blob path, why) for each run kept because its blob could not be removed
     kept: list = field(default_factory=list)
 
     def lines(self):
@@ -942,19 +781,13 @@ class PruneReport:
 def plan_prune(conn, plot):
     """Count what pruning ``plot`` would delete, and delete nothing.
 
-    ``plot`` is a plain string matched against ``runs.plot``. It need not be
-    registered -- that is the point: a removed spec leaves its results behind.
+    ``plot`` is matched against ``runs.plot`` and need not be registered: a
+    removed spec leaves its results behind. Needs ``CACHE_DIR``, to tell the
+    cache's blobs from any that are not.
 
-    Needs ``CACHE_DIR`` (``RuntimeError`` when it is not configured), to tell
-    the blobs that are the cache's to remove from any that are not. A blob that
-    is listed but missing is counted and not a problem; one that lies outside
-    the cache makes the plan :attr:`~PrunePlan.refusal`; one in a directory this
-    user cannot write is counted as ``locked``, and :func:`prune` will keep its
-    run.
-
-    ``params`` is every ``param_sets`` row of the plot that no other plot's run
-    and no preset references: the ones these runs leave unreferenced, and any
-    already unreferenced (a request that raised before its run was recorded).
+    ``params`` is every ``param_sets`` row of the plot that no other plot's
+    run and no preset references, whether these runs leave it unreferenced or
+    it already was.
     """
     root = os.path.realpath(config.CACHE_DIR)
     runs = conn.execute(
@@ -979,9 +812,8 @@ def plan_prune(conn, plot):
             present.append(path)
         else:
             missing.append(path)
-    # Only a forecast: prune does not look, it tries. Removing a file needs write
-    # and search permission on its directory, and one the other writer made may
-    # grant this user neither -- better said here than found out half way through.
+    # A forecast only: removing a file needs write and search permission on its
+    # directory, and one the other writer made may grant this user neither.
     locked = [
         path
         for path in present
@@ -1006,12 +838,6 @@ def plan_prune(conn, plot):
             (plot, plot),
         )
     ]
-    plots = {
-        row[0]: row[1]
-        for row in conn.execute(
-            "SELECT plot, COUNT(*) FROM runs GROUP BY plot ORDER BY plot"
-        )
-    }
     return PrunePlan(
         plot=plot,
         runs=runs,
@@ -1022,42 +848,30 @@ def plan_prune(conn, plot):
         locked=locked,
         params=params,
         dependents=dependents,
-        plots=plots,
+        plots=_runs_per_plot(conn),
     )
 
 
 def prune(conn, plan):
     """Delete what ``plan`` counted, and return a :class:`PruneReport`.
 
-    **Blobs first, then the ledger, in one transaction.** Each run's blob is
-    removed before anything is written, and the rows of every run whose blob is
-    gone are then deleted together, with the parameter sets nothing references
-    any more. The other way round, a blob that cannot be removed -- a
-    ``PermissionError`` in a directory the other writer made is the usual one --
-    would stay on disk with no row to name it, where nothing finds it again: the
-    cache never evicts, and a second prune has no run left to take its path from.
-    This way that run simply keeps its row, the report lists it, and the same
-    command, run again once the permissions are fixed, takes up where this one
-    stopped. A row whose blob is gone is a state the store already handles
-    (:func:`result` recomputes it, :func:`lookup` reports it), so an interruption
-    between the two steps costs a second run and nothing else.
+    Blobs first, then the ledger in one transaction. A run whose blob cannot
+    be removed (a directory the other writer made) keeps its row and is listed
+    in the report, so the same command can finish the job later. The other way
+    round, that blob would stay on disk with no row to name it. A row whose
+    blob is gone is a state the store already handles.
 
-    A blob that is already missing is counted, not an error. Only files under
-    ``CACHE_DIR`` are removed -- never a directory -- and a plan with a blob
-    outside it is refused whole, before anything is touched.
+    Only files under ``CACHE_DIR`` are removed, and a plan with a blob outside
+    it is refused whole. Scalars go by ``ON DELETE CASCADE`` and the runs built
+    on a deleted one lose their link by ``ON DELETE SET NULL``, so a connection
+    with foreign keys off is refused too.
 
-    Scalars go by ``ON DELETE CASCADE``, and the runs of other plots that were
-    built on a deleted one lose their ``upstream_run_id`` by ``ON DELETE SET
-    NULL``, which is what :func:`stale_runs` reports them stale by. Both need
-    ``foreign_keys`` on, as :func:`fusion_ui.core.db.connect` sets it; a
-    connection without it is refused, since it would leave orphans without a word.
-
-    Run it while nothing is computing the plot. A run written after the plan was
-    made is not in it and is left alone, but one recomputed in place meanwhile
-    is deleted by its id and leaves its fresh blob unlisted.
+    Run it while nothing is computing the plot: a run recomputed in place
+    since the plan was made is deleted by its id and leaves its new blob
+    unlisted.
 
     Raises :class:`PruneError` when the plan is refused, or when the ledger
-    cannot be written; in that case it is unchanged, and the message says how
+    cannot be written; the ledger is then unchanged, and the message says how
     many blobs were removed already.
     """
     if plan.refusal:
@@ -1123,7 +937,7 @@ class ScalarPrunePlan:
     kept: int  # the plot's scalar rows of other names: they stay
     elsewhere: dict  # plot -> rows of these names under another plot: untouched
     held: list  # the names the plot's scalars have, for a mistyped name's hint
-    plots: dict  # every plot in the ledger -> its runs, for a mistyped key's hint
+    plots: dict  # every plot in the ledger -> its runs
 
     @property
     def counts(self):
@@ -1132,12 +946,11 @@ class ScalarPrunePlan:
 
     @property
     def total(self):
-        """Every row that would go, over all the names."""
         return sum(self.counts.values())
 
     @property
     def empty(self):
-        """The ledger holds no run of the plot at all: the key is mistyped, not a name."""
+        """The ledger holds no run of the plot at all: the key is mistyped."""
         return self.runs == 0
 
     def lines(self):
@@ -1191,7 +1004,6 @@ class ScalarPruneReport:
         return sum(self.deleted.values())
 
     def lines(self):
-        """What was done, a line."""
         names = ", ".join(f"{name} {n}" for name, n in self.deleted.items())
         return [f"{'deleted':<14}{self.scalars} scalar rows ({names})"]
 
@@ -1199,21 +1011,11 @@ class ScalarPruneReport:
 def plan_prune_scalars(conn, plot, names):
     """Count the scalar rows of ``names`` under ``plot`` that would go, and delete nothing.
 
-    ``plot`` is a plain string matched against ``runs.plot``. It need not be
-    registered: the seed's key, ``density_scan_import``, is no spec's. ``names``
-    are exact scalar names, a repeated one counted once, and need not be known to
-    the registry or the Documentation page either. No ``CACHE_DIR`` is needed: no
-    blob is looked at.
-
-    Counted are the rows of every position, a pixel's and a shot-level one, in
-    every run of the plot. A name with no row is counted as 0, which is not an
-    error: the plan keeps the names the plot does have (``held``) to say so with.
-    ``runs`` is 0 when the ledger has no run of the plot at all. That is a
-    mistyped key, which the caller reports (:attr:`~ScalarPrunePlan.empty`).
-
-    What stays is counted too, so that whoever says ``--yes`` can see it:
-    every run of the plot with its blob, its scalars of other names, and the
-    same names under every other plot key (``elsewhere``).
+    ``plot`` is matched against ``runs.plot`` and need not be registered.
+    ``names`` are exact scalar names, a repeated one counted once. A name with
+    no row is counted as 0, which is not an error. What stays is counted too:
+    the plot's runs, its scalars of other names, and the same names under
+    every other plot (``elsewhere``).
     """
     names = tuple(dict.fromkeys(str(name) for name in names))
     if not names:
@@ -1252,12 +1054,6 @@ def plan_prune_scalars(conn, plot, names):
             (plot,),
         )
     ]
-    plots = {
-        row[0]: row[1]
-        for row in conn.execute(
-            "SELECT plot, COUNT(*) FROM runs GROUP BY plot ORDER BY plot"
-        )
-    }
     return ScalarPrunePlan(
         plot=plot,
         names=names,
@@ -1266,27 +1062,18 @@ def plan_prune_scalars(conn, plot, names):
         kept=scalars[0] - gone,
         elsewhere=elsewhere,
         held=held,
-        plots=plots,
+        plots=_runs_per_plot(conn),
     )
 
 
 def prune_scalars(conn, plan):
     """Delete what ``plan`` counted, and return a :class:`ScalarPruneReport`.
 
-    The rows go in **one transaction**: all of them, or, if the ledger cannot be
-    written, none, and :class:`PruneError` says it is unchanged. Only the runs
-    and names the plan counted are touched: a run written after it was made is
-    not in it and keeps its rows. The runs themselves, their blobs and their
-    parameter sets are never touched, and nor is a scalar of another name or the
-    same name under another plot key.
-
-    The rows hang off nothing, so unlike :func:`prune` this does not need the
-    cascade. A connection with ``foreign_keys`` off is refused all the same, as
-    there: one that did not come from :func:`fusion_ui.core.db.open_db` is not
-    one the store's rules were written for, and a deletion is the wrong place
-    to find out what else it lacks.
-
-    Run it while nothing is writing the plot, as for :func:`prune`.
+    The rows go in one transaction: all of them, or none, with a
+    :class:`PruneError`. Only the runs and names the plan counted are touched.
+    The runs, their blobs, their other scalars and the same names under other
+    plots stay. A connection with foreign keys off is refused, as in
+    :func:`prune`. Run it while nothing is writing the plot.
     """
     if not conn.execute("PRAGMA foreign_keys").fetchone()[0]:
         raise PruneError(

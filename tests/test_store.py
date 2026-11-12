@@ -1,17 +1,19 @@
-"""The result store, driven by a synthetic spec.
+"""The result store, driven by synthetic specs.
 
 No real analysis is involved: the point is the ledger, the blob and the scalar
 rows, and a fake compute makes "was this recomputed?" directly observable.
 """
 
 import dataclasses
+import glob
 import os
+import stat
 
 import numpy as np
 import pytest
 import xarray as xr
 
-from fusion_ui.core import registry, store
+from fusion_ui.core import catalog, registry, shared, store
 
 
 @dataclasses.dataclass
@@ -181,14 +183,8 @@ def test_a_missing_blob_is_recomputed_rather_than_reported_as_nothing(
 
 
 def test_writing_a_blob_replaces_one_this_user_cannot_write(conn, cache, target):
-    """A blob left behind by the other writer carries no write bit for this
-    user, so saving straight onto it would raise ``PermissionError`` -- the
+    """A blob the other writer left carries no write bit for this user. The
     store writes aside and renames, which needs directory write only."""
-    import glob
-    import stat
-
-    from fusion_ui.core import shared
-
     path = store.blob_path("synthetic", "abc123", target)
     store._write_blob(
         xr.Dataset({"y": 1.0}), path, "synthetic", "abc123", "{}", None, "now"
@@ -277,11 +273,8 @@ def test_scalar_frame_is_empty_but_shaped_when_nothing_is_stored(conn, cache):
 
 
 # ---------------------------------------------------------------------------
-# Chained specs
-#
-# The property that matters is that a cache hit on the derived quantity does
-# not pay for its upstream: 2DCA is half a minute on a real shot, and four of
-# phase 03's plots are built on the same average.
+# Chained specs. A cache hit on the derived result must not pay for its
+# upstream.
 # ---------------------------------------------------------------------------
 
 
@@ -452,7 +445,7 @@ def test_lookup_refuses_a_live_spec(conn, cache, spec, target):
 
 @pytest.fixture
 def bank(spec, calls, registered):
-    """A batch-only spec, standing in for the 2DCA at every pixel."""
+    """A batch-only spec."""
 
     def compute(ds, params):
         calls.append(f"bank {params.gain}")
@@ -593,7 +586,7 @@ def test_a_failed_or_vanished_bank_is_listed_with_its_run(
 
 
 # ---------------------------------------------------------------------------
-# What a run was computed from (schema v4), and staleness
+# What a run was computed from, and staleness
 # ---------------------------------------------------------------------------
 
 
@@ -610,8 +603,6 @@ def indexed(conn, tmp_path):
 
 def rewrite(conn, path, seconds):
     """The file changed on disk, and a rescan saw it."""
-    from fusion_ui.core import catalog
-
     os.utime(path, (seconds, seconds))
     catalog.rescan(conn, str(path.parent.parent), "cmod", None)
 
@@ -707,10 +698,10 @@ class TopParams:
     offset: float = 1.0
 
 
-def test_staleness_follows_the_chain_all_the_way_up(
-    conn, cache, indexed, chain, spec, target, registered
-):
-    top = registered(
+@pytest.fixture
+def top(chain, registered):
+    """A third link, built on ``derived``."""
+    return registered(
         registry.PlotSpec(
             key="top",
             label="Top",
@@ -722,6 +713,11 @@ def test_staleness_follows_the_chain_all_the_way_up(
             upstream_params=lambda params: params.derived,
         )
     )
+
+
+def test_staleness_follows_the_chain_all_the_way_up(
+    conn, cache, indexed, top, spec, target
+):
     store.result(conn, top, target, TopParams(), ds=None)
     assert stale(conn) == {}
 
@@ -755,8 +751,8 @@ def test_a_failed_downstream_is_stale_once_its_upstream_is_retried(
 def test_runs_without_provenance_are_unknown_never_stale(
     conn, cache, indexed, chain, target
 ):
-    """What every row written before schema v4 looks like: legacy results
-    must not all be recomputed at once."""
+    """Rows written before the store recorded provenance must not all be
+    recomputed at once."""
     store.result(conn, chain, target, DerivedParams(), ds=None)
     with conn:
         conn.execute("UPDATE runs SET input_mtime = NULL, upstream_run_id = NULL")
@@ -779,8 +775,6 @@ def test_a_run_whose_input_left_the_index_is_never_listed(
     conn, cache, indexed, chain, target, tmp_path
 ):
     """Nothing could recompute it, so `precompute --stale` must not aim at it."""
-    from fusion_ui.core import catalog
-
     store.result(conn, chain, target, DerivedParams(), ds=None)
     store.delete_run(conn, runs_by_plot(conn)["synthetic"])
     assert stale(conn) == {"derived": store.STALE_UPSTREAM_DELETED}
@@ -801,22 +795,10 @@ def test_a_run_whose_input_left_the_index_is_never_listed(
 
 
 def test_an_unknown_run_is_not_listed_through_its_upstream_either(
-    conn, cache, indexed, chain, spec, target, registered
+    conn, cache, indexed, top, spec, target
 ):
-    """A run with no input_mtime but a link -- written before its target was
-    indexed -- stays unknown even when the run beneath it goes stale."""
-    top = registered(
-        registry.PlotSpec(
-            key="top",
-            label="Top",
-            diagnostics=("apd",),
-            params=TopParams,
-            render=lambda result, params, target: None,
-            compute=lambda ds, params, upstream: upstream + params.offset,
-            requires="derived",
-            upstream_params=lambda params: params.derived,
-        )
-    )
+    """A run with no input_mtime but a link, written before its target was
+    indexed, stays unknown even when the run beneath it goes stale."""
     store.result(conn, top, target, TopParams(), ds=None)
     with conn:
         conn.execute("UPDATE runs SET input_mtime = NULL WHERE plot = 'top'")

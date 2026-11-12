@@ -1,3 +1,4 @@
+import shutil
 import sqlite3
 
 import pytest
@@ -41,11 +42,11 @@ def test_refuses_a_newer_schema(conn):
 def _make_run(conn):
     with conn:
         conn.execute(
-            "INSERT INTO param_sets VALUES ('abc', 'velocity_2dca', '{}', '2026-01-01')"
+            "INSERT INTO param_sets VALUES ('abc', 'taud_psd', '{}', '2026-01-01')"
         )
         cursor = conn.execute(
             "INSERT INTO runs (machine, shot, diagnostic, plot, params_hash,"
-            " status, created_at) VALUES ('cmod', 1, 'apd', 'velocity_2dca',"
+            " status, created_at) VALUES ('cmod', 1, 'apd', 'taud_psd',"
             " 'abc', 'ok', '2026-01-01')"
         )
     return cursor.lastrowid
@@ -86,7 +87,7 @@ def test_runs_unique_per_params(conn):
         with conn:
             conn.execute(
                 "INSERT INTO runs (machine, shot, diagnostic, plot, params_hash,"
-                " status, created_at) VALUES ('cmod', 1, 'apd', 'velocity_2dca',"
+                " status, created_at) VALUES ('cmod', 1, 'apd', 'taud_psd',"
                 " 'abc', 'ok', '2026-01-02')"
             )
 
@@ -102,14 +103,14 @@ def test_run_requires_a_known_params_hash(conn):
 
 
 def test_runs_distinguish_the_raw_file_from_the_preprocessed_one(conn):
-    """Added in schema v2. Without it the preprocessed variant of a shot
-    returned the raw one's cached result under its own label."""
+    """Otherwise the preprocessed file of a shot would return the raw one's
+    cached result under its own label."""
     _make_run(conn)
     with conn:
         conn.execute(
             "INSERT INTO runs (machine, shot, diagnostic, preprocessed, plot,"
             " params_hash, status, created_at) VALUES ('cmod', 1, 'apd', 1,"
-            " 'velocity_2dca', 'abc', 'ok', '2026-01-01')"
+            " 'taud_psd', 'abc', 'ok', '2026-01-01')"
         )
     assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 2
 
@@ -123,12 +124,12 @@ def test_a_v1_database_migrates_forward_without_losing_rows(tmp_path):
         db.MIGRATIONS[1](conn)
         conn.execute("PRAGMA user_version = 1")
         conn.execute(
-            "INSERT INTO param_sets VALUES ('abc', 'velocity_2dca', '{}', '2026-01-01')"
+            "INSERT INTO param_sets VALUES ('abc', 'taud_psd', '{}', '2026-01-01')"
         )
         conn.execute(
             "INSERT INTO runs (id, machine, shot, diagnostic, plot, params_hash,"
             " status, created_at) VALUES (7, 'cmod', 1160616027, 'apd',"
-            " 'velocity_2dca', 'abc', 'ok', '2026-01-01')"
+            " 'taud_psd', 'abc', 'ok', '2026-01-01')"
         )
         conn.execute("INSERT INTO scalars VALUES (7, 3, 4, 'vx_c', 566.6)")
     conn.close()
@@ -174,9 +175,8 @@ def test_a_v2_database_gains_the_dt_column_without_losing_shots(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Schema v4: what a run was computed from. It runs against the server's live
-# file, so the test starts from a v3 file holding real-looking runs -- a 2DCA
-# average, a result chained on it, their scalars -- and migrates a copy.
+# Schema v4: what a run was computed from. The migration starts from a v3 file
+# that holds runs: an upstream result, one chained on it, and a scalar.
 # ---------------------------------------------------------------------------
 
 
@@ -188,7 +188,7 @@ def _v3_file(path):
         conn.execute("PRAGMA user_version = 3")
         conn.executemany(
             "INSERT INTO param_sets VALUES (?, ?, '{}', '2026-09-08T11:52:12+00:00')",
-            [("h_avg", "two_dca"), ("h_vel", "velocity_contour")],
+            [("h_avg", "pixel_averages"), ("h_vel", "method_fields")],
         )
         conn.executemany(
             "INSERT INTO runs (id, machine, shot, diagnostic, preprocessed, plot,"
@@ -196,10 +196,16 @@ def _v3_file(path):
             " created_at) VALUES (?, 'cmod', 1160616027, 'apd', 1, ?, ?, ?,"
             " 'ok', NULL, 21.0, 'fusion_ui=dc292ea imaging_methods=unknown', ?)",
             [
-                (7, "two_dca", "h_avg", "/cache/a.nc", "2026-09-08T11:52:12+00:00"),
+                (
+                    7,
+                    "pixel_averages",
+                    "h_avg",
+                    "/cache/a.nc",
+                    "2026-09-08T11:52:12+00:00",
+                ),
                 (
                     8,
-                    "velocity_contour",
+                    "method_fields",
                     "h_vel",
                     "/cache/v.nc",
                     "2026-09-08T11:52:40+00:00",
@@ -222,8 +228,6 @@ def _columns(conn, table):
 
 
 def test_a_v3_file_migrates_to_v4_keeping_every_run(tmp_path):
-    import shutil
-
     original = _v3_file(tmp_path / "live.sqlite")
     copy = tmp_path / "copy.sqlite"
     shutil.copy(original, copy)
@@ -233,10 +237,10 @@ def test_a_v3_file_migrates_to_v4_keeping_every_run(tmp_path):
     assert {"input_mtime", "upstream_run_id"} <= set(_columns(conn, "runs"))
     runs = {row["id"]: row for row in conn.execute("SELECT * FROM runs")}
     assert sorted(runs) == [7, 8]
-    assert runs[8]["plot"] == "velocity_contour"
+    assert runs[8]["plot"] == "method_fields"
     assert runs[8]["created_at"] == "2026-09-08T11:52:40+00:00"
     assert runs[8]["code_version"] == "fusion_ui=dc292ea imaging_methods=unknown"
-    # Pre-v4 rows say nothing about what they were computed from.
+    # Rows from before v4 say nothing about what they were computed from.
     assert all(r["input_mtime"] is None for r in runs.values())
     assert all(r["upstream_run_id"] is None for r in runs.values())
     assert conn.execute("SELECT value FROM scalars").fetchone()[0] == 471.0

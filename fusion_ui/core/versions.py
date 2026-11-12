@@ -1,41 +1,20 @@
 """Which code produced a result: one commit per repository, read best effort.
 
-``runs.code_version`` records it and every figure shows it, because a result
-computed by last month's code is the trap that makes people distrust the tool.
-It is never part of a cache key (see :mod:`fusion_ui.core.store`).
+``runs.code_version`` records it and the Fields page compares it with the
+checkout's. It is never part of a cache key.
 
-Four repositories decide what a result is: this app, ``imaging_methods`` (the
-2DCA and the decorrelation API), ``velocity_estimation`` (the TDE) and
-``experimental_database`` (the hand-made 1160616 dead-pixel mask, which that
-day's products depend on). Each is found from where its code is imported from --
-the editable checkout, or a worktree shadowing it from the current directory --
-never from a hard-coded path.
+Each repository is found from where its code is imported, never from a
+hard-coded path. A version is the commit's first seven hex digits, plus
+``-dirty`` when git reports modified tracked files: what ``git describe
+--always --dirty`` prints for a repository without tags. The commit is read
 
-Rows stored before L14 also name ``fusion_scripts``, whose ``decorrelation`` held
-the pipeline until it moved to ``imaging_methods``: that label stays in them, as
-history, and :func:`parse` reads it. New runs do not carry it.
+1. with ``git rev-parse HEAD``, then ``git status`` for ``-dirty``, or
+2. from ``.git/HEAD`` and the ref it names, without running git. The service
+   runs as its own user, and git refuses a repository that another user owns.
+   Reading the files needs only read access. It cannot see uncommitted
+   changes, so it never adds ``-dirty``.
 
-A version is the commit's first seven hex digits, plus ``-dirty`` when git
-reports modified tracked files. That is what ``git describe --always --dirty``
-prints for a repository without tags, which is the form the stored rows have
-for fusion_ui and imaging_methods. The form is fixed on purpose: the same
-commit must read the same however it was found, because a page compares a
-stored version with the current one. ``git describe --tags`` would not do --
-a repository that carries a tag would read ``<tag>-12-g7b761fd`` through git
-but ``7b761fd`` through the files.
-
-Two ways to find the commit, in that order:
-
-1. ``git rev-parse HEAD``, then ``git status`` for ``-dirty``. Run with
-   optional locks off: ``git describe --dirty``, run by the service, rewrote
-   the index of a checkout that belongs to the maintainer.
-2. ``.git/HEAD`` and the ref it names -- a loose ref file, then
-   ``packed-refs`` -- read without running git. The service runs as its own
-   user while the checkouts belong to the maintainer, and git refuses a
-   repository owned by another user unless ``safe.directory`` lists it.
-   Reading the files needs only read access, which the group-readable
-   checkouts give. It cannot see uncommitted changes, so it never adds
-   ``-dirty``.
+Compare versions through :func:`commit`, which drops ``-dirty``.
 """
 
 import importlib.util
@@ -47,7 +26,8 @@ from pathlib import Path
 #: What a repository's version reads when neither way finds a commit.
 UNKNOWN = "unknown"
 
-#: ``{name used in code_version: a module that repository provides}``.
+#: ``{name used in code_version: a module that repository provides}``. A stored
+#: row may name other repositories; :func:`parse` reads any.
 REPOSITORIES = {
     "fusion_ui": "fusion_ui",
     "imaging_methods": "imaging_methods",
@@ -55,35 +35,7 @@ REPOSITORIES = {
     "experimental_database": "experimental_database",
 }
 
-#: Hex digits kept of a commit: git's own default abbreviation.
-ABBREV = 7
-
-_SHA = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
-
-#: Variables that point git at some other repository than the one in ``cwd``
-#: (``git rev-parse --local-env-vars``). A git hook that runs the test suite
-#: sets some of them; inherited, they would make every checkout report the
-#: hook's repository.
-_REPOSITORY_ENV = frozenset(
-    {
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_COMMON_DIR",
-        "GIT_CONFIG",
-        "GIT_CONFIG_COUNT",
-        "GIT_CONFIG_PARAMETERS",
-        "GIT_DIR",
-        "GIT_GRAFT_FILE",
-        "GIT_IMPLICIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_INTERNAL_SUPER_PREFIX",
-        "GIT_NO_REPLACE_OBJECTS",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_PREFIX",
-        "GIT_REPLACE_REF_BASE",
-        "GIT_SHALLOW_FILE",
-        "GIT_WORK_TREE",
-    }
-)
+_SHA = re.compile(r"[0-9a-f]{40}")
 
 
 def code_version():
@@ -94,12 +46,9 @@ def code_version():
 def checkout(module):
     """The root of the git checkout ``module`` is imported from, or ``None``.
 
-    Located with ``importlib.util.find_spec``, which hands back an imported
-    module's own spec and otherwise finds the module without running it. The
-    walk goes up from the directory holding the package to the first one with
-    a ``.git`` (a directory, or a file in a worktree). A copy installed under
-    ``site-packages`` has no checkout, and gets ``None`` rather than the commit
-    of whichever repository the virtualenv sits in.
+    A copy installed under ``site-packages`` has no checkout of its own, and
+    gets ``None`` instead of the commit of whichever repository the virtualenv
+    sits in.
     """
     try:
         spec = importlib.util.find_spec(module)
@@ -128,17 +77,19 @@ def describe(root):
         return UNKNOWN
     head = _git(root, "rev-parse", "--verify", "--quiet", "HEAD")
     if head is not None and _SHA.fullmatch(head):
-        # Tracked files only, as `git describe --dirty` counts them. A failed
-        # status (None) cannot tell, so it adds nothing.
+        # Tracked files only, as `git describe --dirty` counts them.
         status = _git(root, "status", "--porcelain", "--untracked-files=no")
-        return head[:ABBREV] + ("-dirty" if status else "")
+        return head[:7] + ("-dirty" if status else "")
     head = head_commit(root)
-    return head[:ABBREV] if head else UNKNOWN
+    return head[:7] if head else UNKNOWN
 
 
 def _git(root, *args):
     """``git <args>``'s stripped stdout in ``root``, or ``None`` if it failed."""
-    env = {k: v for k, v in os.environ.items() if k not in _REPOSITORY_ENV}
+    # Without the GIT_* variables: a git hook that runs the test suite sets
+    # GIT_DIR, which would make every checkout report the hook's repository.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    # `git status` must not rewrite the index of a checkout another user owns.
     env["GIT_OPTIONAL_LOCKS"] = "0"
     try:
         out = subprocess.run(
@@ -154,82 +105,38 @@ def _git(root, *args):
     return out.stdout.strip() if out.returncode == 0 else None
 
 
-# ---------------------------------------------------------------------------
-# Reading the commit without git
-# ---------------------------------------------------------------------------
-
-
 def head_commit(root):
     """The full hash of the commit ``HEAD`` names, read from the files in ``.git``.
 
-    Handles a ``.git`` directory and a ``.git`` file (a worktree or submodule:
-    ``gitdir: <path>``, with branches shared through its ``commondir``), a
-    detached ``HEAD``, and a branch stored loose or in ``packed-refs``.
-    Anything else -- a reftable repository, an unborn branch, a file that
-    cannot be read -- is ``None``.
+    Handles a detached ``HEAD``, a branch stored loose or in ``packed-refs``,
+    and a worktree, whose ``.git`` is a file naming its own git directory and
+    whose branches are in the main one. Anything else is ``None``.
     """
-    git_dir = _git_dir(Path(root))
-    if git_dir is None:
-        return None
-    common_dir = _common_dir(git_dir)
-    value = _read(git_dir / "HEAD")
-    for _ in range(5):  # a symbolic ref may name another symbolic ref
-        if value is None:
+    git_dir = Path(root) / ".git"
+    if not git_dir.is_dir():
+        text = _read(git_dir) or ""
+        if not text.startswith("gitdir:"):
             return None
-        if _SHA.fullmatch(value):
-            return value
-        if not value.startswith("ref:"):
-            return None
-        value = _resolve(git_dir, common_dir, value[len("ref:") :].strip())
-    return None
+        git_dir = git_dir.parent / text[len("gitdir:") :].strip()
+    common_dir = git_dir / (_read(git_dir / "commondir") or "")
+
+    value = _read(git_dir / "HEAD") or ""
+    if value.startswith("ref:"):
+        ref = value[len("ref:") :].strip()
+        packed = (_read(common_dir / "packed-refs") or "").splitlines()
+        value = (
+            _read(git_dir / ref)
+            or _read(common_dir / ref)
+            or next((ln.split(" ")[0] for ln in packed if ln.endswith(f" {ref}")), "")
+        )
+    return value if _SHA.fullmatch(value) else None
 
 
 def _read(path):
     try:
-        return Path(path).read_text().strip()
+        return path.read_text().strip()
     except (OSError, ValueError):
         return None
-
-
-def _git_dir(root):
-    dot_git = root / ".git"
-    if dot_git.is_dir():
-        return dot_git
-    text = _read(dot_git)
-    if text and text.startswith("gitdir:"):
-        path = Path(text[len("gitdir:") :].strip())
-        return path if path.is_absolute() else dot_git.parent / path
-    return None
-
-
-def _common_dir(git_dir):
-    """Where a worktree's branches, tags and ``packed-refs`` live."""
-    text = _read(git_dir / "commondir")
-    if not text:
-        return git_dir
-    path = Path(text)
-    return path if path.is_absolute() else git_dir / path
-
-
-def _resolve(git_dir, common_dir, ref):
-    # Per-worktree refs (refs/bisect, refs/worktree) sit in the worktree's own
-    # git dir, branches and tags in the common one; packed refs only there.
-    for base in (git_dir, common_dir):
-        value = _read(base / ref)
-        if value:
-            return value
-    for line in (_read(common_dir / "packed-refs") or "").splitlines():
-        if line.startswith(("#", "^")):
-            continue
-        sha, _, name = line.partition(" ")
-        if name.strip() == ref:
-            return sha.strip()
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Reading a stored version back
-# ---------------------------------------------------------------------------
 
 
 def as_text(versions):
@@ -240,8 +147,8 @@ def as_text(versions):
 def parse(text):
     """``{repository: version}`` out of a stored ``runs.code_version``.
 
-    The inverse of :func:`as_text`. ``None``, ``"imported"`` (the seeded rows)
-    or any other text without ``name=version`` pairs gives ``{}``.
+    The inverse of :func:`as_text`. ``None`` or any text without
+    ``name=version`` pairs gives ``{}``.
     """
     pairs = {}
     for part in (text or "").split():
@@ -252,11 +159,7 @@ def parse(text):
 
 
 def commit(version):
-    """The commit a version names, without ``-dirty``; ``None`` when unknown.
-
-    Compare these, not the versions: the service may read a checkout through
-    its files, which never says ``-dirty``, while the CLI reads it through git.
-    """
+    """The commit a version names, without ``-dirty``; ``None`` when unknown."""
     if not version or version == UNKNOWN:
         return None
-    return version[: -len("-dirty")] if version.endswith("-dirty") else version
+    return version.removesuffix("-dirty")

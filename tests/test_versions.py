@@ -55,7 +55,7 @@ def test_a_loose_branch_is_read_without_git(tmp_path, git_refuses):
 
 
 def test_a_branch_only_in_packed_refs_is_read(tmp_path, git_refuses):
-    """How the server's checkouts keep remote branches, and main after a gc."""
+    """Where a checkout keeps its branches after a gc."""
     root = fake_checkout(
         tmp_path,
         packed={"refs/heads/main": SHA, "refs/remotes/origin/main": OTHER},
@@ -75,8 +75,7 @@ def test_a_detached_head_is_the_commit(tmp_path, git_refuses):
 
 
 def test_a_worktree_reads_its_own_head_and_the_shared_branches(tmp_path, git_refuses):
-    """A ``.git`` file, a private ``HEAD``, branches in the common directory --
-    what an agent's worktree, or a submodule, looks like."""
+    """A ``.git`` file, a private ``HEAD``, branches in the common directory."""
     main = fake_checkout(
         tmp_path / "main",
         loose={"refs/heads/feature": OTHER},
@@ -152,8 +151,6 @@ def repo(tmp_path):
 def test_git_and_the_files_name_the_same_commit(repo):
     head = git(repo, "rev-parse", "HEAD")
     assert versions.describe(repo) == head[:7]
-    # The form `git describe` gave the stored rows, for a repository without
-    # tags.
     assert versions.describe(repo) == git(repo, "describe", "--always", "--dirty")
     assert versions.head_commit(repo) == head
 
@@ -213,11 +210,9 @@ def test_an_unimportable_module_has_no_checkout():
     assert versions.checkout("no_such_module_anywhere") is None
 
 
-def test_code_version_includes_experimental_database_even_when_git_refuses(
+def test_the_store_records_every_repository_even_when_git_refuses(
     tmp_path, monkeypatch, git_refuses
 ):
-    """experimental_database holds the hand-made 1160616 mask that those products
-    depend on: its checkout is the directory above the package it is found by."""
     root = fake_checkout(
         tmp_path / "experimental_database", loose={"refs/heads/main": SHA}
     )
@@ -236,22 +231,12 @@ def test_code_version_includes_experimental_database_even_when_git_refuses(
     finally:
         store._code_version.cache_clear()
     assert recorded["experimental_database"] == SHA[:7]
-    # fusion_scripts is not one of them since L14 (stored rows keep the label, as history).
     assert set(recorded) == {
         "fusion_ui",
         "imaging_methods",
         "velocity_estimation",
         "experimental_database",
     }
-
-
-def test_the_installed_experimental_database_is_found_through_its_package():
-    """On a machine set up as the README says: the editable checkout."""
-    root = versions.checkout("experimental_database")
-    if root is None:
-        pytest.skip("experimental_database is not installed from a checkout here")
-    assert (root / "experimental_database").is_dir()
-    assert versions.code_version()["experimental_database"] != versions.UNKNOWN
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +254,11 @@ def test_a_stored_version_reads_back_per_repository():
         "imaging_methods": "8a9bc07",
     }
     assert versions.parse("imported") == {} == versions.parse(None)
+    # A stored row may name a repository that is not recorded today.
+    assert versions.parse("fusion_scripts=1a2b3c4 fusion_ui=ce62a4d") == {
+        "fusion_scripts": "1a2b3c4",
+        "fusion_ui": "ce62a4d",
+    }
 
 
 def test_commits_compare_without_the_dirty_mark():

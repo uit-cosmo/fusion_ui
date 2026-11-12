@@ -1,23 +1,22 @@
 """Group-writable creation of the state the app owns.
 
-The failure these guard against is not local: the Streamlit service and a
-hand-run ``fusion-ui precompute`` are different accounts writing one cache, and
-a directory created under the default umask locks the second one out *after* it
-has paid for the analysis.
+The Streamlit service and a hand-run ``fusion-ui precompute`` are different
+accounts writing one cache, and a directory created under the default umask
+locks the second one out after it has paid for the analysis.
 """
 
 import os
 import stat
 
 import pytest
+import xarray as xr
 
-from fusion_ui.core import db, shared, store
+from fusion_ui.core import db, registry, shared, store
 
 
 @pytest.fixture
 def strict_umask():
-    """Pin the umask to the value that causes the bug, whatever the developer's
-    shell or the CI runner has set."""
+    """The umask that locks the group out, whatever the shell has set."""
     previous = os.umask(0o022)
     yield
     os.umask(previous)
@@ -28,7 +27,7 @@ def mode(path):
 
 
 def test_makedirs_beats_the_umask(tmp_path, strict_umask):
-    target = tmp_path / "runs" / "velocity_field" / "abc123"
+    target = tmp_path / "runs" / "taud_psd" / "abc123"
     shared.makedirs(target)
 
     assert target.is_dir()
@@ -73,13 +72,7 @@ def test_share_file_survives_a_path_it_cannot_chmod(tmp_path):
 def test_blob_and_its_directories_are_group_writable(
     tmp_path, monkeypatch, strict_umask
 ):
-    """The end-to-end shape of the server failure: `runs/<plot>/<hash>/` created
-    by one writer, a blob written into it by the other."""
-    import xarray as xr
-
-    from fusion_ui import config
-    from fusion_ui.core import registry
-
+    """``runs/<plot>/<hash>/`` and the blob in it, as the store writes them."""
     monkeypatch.setenv("FUSION_UI_CACHE", str(tmp_path / "cache"))
     target = registry.Target(
         machine="cmod",
@@ -91,14 +84,14 @@ def test_blob_and_its_directories_are_group_writable(
         t_end=1.0,
         window_source="metadata",
     )
-    path = store.blob_path("velocity_field", "abc123", target)
+    path = store.blob_path("taud_psd", "abc123", target)
     store._write_blob(
-        xr.Dataset({"v": 1.0}), path, "velocity_field", "abc123", "{}", None, "now"
+        xr.Dataset({"v": 1.0}), path, "taud_psd", "abc123", "{}", None, "now"
     )
 
     assert mode(path) == shared.FILE_MODE
     assert mode(os.path.dirname(path)) == shared.DIR_MODE
-    assert config.CACHE_DIR  # the fixture really did redirect it
+    assert path.startswith(str(tmp_path))
 
 
 def test_database_file_is_group_writable(tmp_path, strict_umask):
