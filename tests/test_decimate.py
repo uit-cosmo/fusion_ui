@@ -1,4 +1,4 @@
-"""Min/max envelope downsampling -- the point is that spikes survive."""
+"""Min/max envelope downsampling, where spikes survive, and reading a Plotly selection."""
 
 import numpy as np
 
@@ -45,7 +45,9 @@ def test_ignores_all_nan_buckets():
     y[:100] = 1.0
     x = np.arange(n)
     _, y_out = decimate.envelope(x, y, max_points=100)
-    assert not np.any(np.isnan(y_out))
+    assert y_out.size and not np.any(np.isnan(y_out))
+    x_out, y_out = decimate.envelope(x, np.full(n, np.nan), max_points=100)
+    assert x_out.size == 0 and y_out.size == 0
 
 
 def test_a_flat_trace_survives():
@@ -53,6 +55,14 @@ def test_a_flat_trace_survives():
     y = np.ones(20_000)
     _, y_out = decimate.envelope(x, y, max_points=100)
     assert np.all(y_out == 1.0)
+
+
+def test_selection_points_reads_the_event_and_is_empty_without_one():
+    event = {"selection": {"points": [{"x": 1.0, "y": 2.0}]}}
+    assert decimate.selection_points(event) == [{"x": 1.0, "y": 2.0}]
+    assert decimate.selection_points(None) == []
+    assert decimate.selection_points(object()) == []
+    assert decimate.selection_points({"selection": {}}) == []
 
 
 def test_selected_x_range_needs_two_distinct_points():
@@ -92,11 +102,8 @@ def test_slice_to_window_restricts_to_the_range():
 
 
 def test_selected_x_range_reads_the_drawn_box():
-    """A box over a *line* trace catches no points -- only the rectangle.
-
-    ``selectPoints`` bails out on a trace with neither markers nor text, so
-    reading the points list alone made box-select-to-zoom a no-op.
-    """
+    """A box over a line trace catches no points: Plotly reports only the
+    rectangle for a trace with neither markers nor text."""
     event = {
         "selection": {
             "points": [],

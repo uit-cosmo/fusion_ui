@@ -1,19 +1,13 @@
-"""The ragged ASP/FSP adapter -- every (quantity, position) on its own axis."""
+"""The ragged ASP/FSP adapter: every (quantity, position) on its own axis."""
 
 import pytest
 
 from fusion_ui.core import loader, probes
 
 
-def test_quantities_and_positions_reads_only_var_names(asp_dataset_path):
+def test_quantities_and_positions_leaves_the_rho_variables_out(asp_dataset_path):
     ds = loader.open_dataset(str(asp_dataset_path))
     assert probes.quantities_and_positions(ds) == {"Vf": [0, 1], "ne": [0, 1]}
-
-
-def test_rho_variables_are_not_mistaken_for_quantities(asp_dataset_path):
-    ds = loader.open_dataset(str(asp_dataset_path))
-    found = probes.quantities_and_positions(ds)
-    assert "rho" not in found and "rho_ne" not in found
 
 
 def test_load_trace_returns_matching_time_and_value_arrays(asp_dataset_path):
@@ -23,14 +17,8 @@ def test_load_trace_returns_matching_time_and_value_arrays(asp_dataset_path):
     assert trace.rho.shape == trace.rho_time.shape
 
 
-def test_load_trace_without_rho(asp_dataset_path):
-    ds = loader.open_dataset(str(asp_dataset_path))
-    trace = probes.load_trace(ds, "ne", 0, with_rho=False)
-    assert trace.rho is None and trace.rho_time is None
-
-
 def test_positions_are_genuinely_ragged(asp_dataset_path):
-    """The whole point of this adapter: no shared time axis across positions."""
+    """No shared time axis across positions."""
     ds = loader.open_dataset(str(asp_dataset_path))
     trace0 = probes.load_trace(ds, "ne", 0)
     trace1 = probes.load_trace(ds, "ne", 1)

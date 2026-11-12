@@ -1,14 +1,13 @@
 """A raw APD record with a gas puff in it, for the tests of the dead-pixel view on the puff window.
 
-Built the way the real ones look: every pixel sits at the digitizer's dark level (about -1.1 V) until the puff, and
-then lights up with red fluctuations on top of it; one pixel is dead (white noise at the dark level, whatever the
-plasma does) and one has no samples. The record is short and fast enough to run through the whole analysis in a
-second or two: 120 ms at 1 MHz, whose Nyquist frequency still leaves the estimator's noise band (300-900 kHz) its
-lower part.
+Every pixel sits at the digitizer's dark level (about -1.1 V) until the puff, and then lights up with red
+fluctuations on top of it; one pixel is dead (white noise at the dark level) and one has no samples. The record is
+120 ms at 1 MHz, short enough for the whole analysis in a second or two, and its Nyquist frequency still leaves the
+estimator's noise band (300-900 kHz) its lower part.
 
 ``SCENARIOS`` are discharge windows that tell the whole record from a cut of it. The gas puff is found against the
-dark level at the *start of the record*, so a window that begins after the record does can give another answer when
-the record is cut to it first, and a window that begins with the record cannot:
+dark level at the start of the record, so a window that begins after the record does can give another answer when
+the record is cut to it first:
 
 ``two puffs``
     The window starts in the dark gap between two puffs. On the whole record the first puff has come and gone: the
@@ -19,9 +18,6 @@ the record is cut to it first, and a window that begins with the record cannot:
     that stretch is half light, and the record "starts with the light on".
 ``from the start``
     The control: a window that starts with the record, in the dark. Cutting it changes nothing.
-
-``discharge_entry`` is the discharge-DB entry that gives a shot such a window, and ``before_the_puff_window`` ages a
-result to what the server cached before the view looked for the puff.
 """
 
 from collections import namedtuple
@@ -62,8 +58,8 @@ def discharge_entry(shot, window):
 
 
 def before_the_puff_window(result):
-    """``result`` as the dead-pixel view stored it before it looked for the puff: no smoothed array mean and none
-    of the window attributes (the 111 results cached on the server until ``precompute dead_pixels --force``)."""
+    """``result`` as an old dead-pixel result was stored, without the search for the puff: no smoothed array mean
+    and none of the window attributes."""
     old = result.drop_vars(["puff_signal", "puff_time"])
     for name in list(old.attrs):
         if name.startswith("puff_") or name.endswith("_window"):
@@ -71,11 +67,11 @@ def before_the_puff_window(result):
     return old
 
 
-def record(scenario, seed=1, first=0.0):
+def record(scenario):
     """The raw record of ``scenario`` as a Dataset: ``frames`` on ``(y, x, time)`` and a ``time`` coordinate."""
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(1)
     n = int(round(scenario.duration / DT))
-    time = first + np.arange(n) * DT
+    time = np.arange(n) * DT
     on = np.zeros(n)
     for start, stop in scenario.puffs:
         on[int(round(start / DT)) : int(round(stop / DT))] = 1.0
