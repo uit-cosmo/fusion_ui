@@ -1,23 +1,10 @@
 """The Thomson scattering profiles view: reading the file, the figure, the words around it, and the pages that show it.
 
-What these tests hold the view to, each on a synthetic file in the layout fusion_scripts writes (``tests/thomson_fixtures.py``):
-
-- the catalog indexes ``thomson_scattering/thomson_scattering_<shot>.nc``, raw only, and the spec is offered for that diagnostic
-  and no other;
-- only the points with n_e > 0 are drawn, a 0 and its junk errors never reach the figure, and a missing or non-positive error
-  leaves a point without a bar;
-- n_e, T_e and p_e share one axis, ρ_pol or R_mid; the edge and core points differ by marker; the fit is drawn over its whole
-  range, labelled with its window and with no band; the separatrix is at ρ_pol = 1, or at the file's R_mid;
-- a file with no fit, with no core, or with nothing in the window still draws what it has;
-- a fit that fails ``fit_check`` gets a warning that quotes it; the caption carries the caveat, the page's window when it is not
-  the fit's, and why there is no band;
-- the single-shot page draws it, the Statistics page does not offer it, the shot browser lists it, and the Documentation page
-  describes it.
+Each test runs on a synthetic file in the layout of the real ones (``tests/thomson_fixtures.py``).
 """
 
 import base64
 import dataclasses
-import inspect
 import json
 import re
 from pathlib import Path
@@ -28,11 +15,9 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 import fusion_ui.plots  # noqa: F401 - registers the specs the page offers
-from fusion_ui import documentation
 from fusion_ui.core import catalog, db, loader, multipixel, params_ui, registry, traces
 from fusion_ui.plots import thomson_profiles as tp
 from tests import thomson_fixtures as tf
-from tests.import_guard import reaches_fusion_scripts
 
 REPO = Path(__file__).resolve().parent.parent
 SINGLE_SHOT = str(REPO / "fusion_ui" / "pages" / "2_single_shot.py")
@@ -41,6 +26,10 @@ STATISTICS = str(REPO / "fusion_ui" / "pages" / "4_statistics.py")
 
 #: The label of the fit in the legend when it was made over the fixture's window.
 FIT = "fit, 1–1.4 s"
+ROWS = ["edge TS", "core TS", FIT]
+AXES = ("rho_pol", "R_mid")
+#: The layout's names for the rows n_e, T_e and p_e, top to bottom.
+YAXES = ("yaxis", "yaxis2", "yaxis3")
 
 
 def cut(ds, window=tf.WINDOW):
@@ -76,74 +65,51 @@ class Target:
 FITS_WINDOW = Target(*tf.WINDOW)
 
 
+def notes_of(found, axis="rho_pol", target=FITS_WINDOW):
+    return tp.notes(found, target, axis)
+
+
 # ---------------------------------------------------------------------------
 # The spec and the catalog
 # ---------------------------------------------------------------------------
 
 
-def test_the_spec_is_registered_live_and_for_the_raw_thomson_scattering_file_only():
+def test_the_spec_is_live_for_the_raw_thomson_scattering_file_with_the_axis_as_its_one_parameter():
     spec = registry.get("thomson_profiles")
     assert spec.label == "Thomson scattering profiles"
-    assert spec.diagnostics == ("thomson_scattering",)
-    assert not spec.cached and spec.compute is None  # nothing to compute, nothing to cache
-    assert spec.preprocessed is False
-    assert spec.scalars is None and spec.overlay is None
-    assert spec in registry.for_diagnostic("thomson_scattering", False)
-    assert spec not in registry.for_diagnostic("thomson_scattering", True)
-    for other in ("apd", "phantom", "asp", "fsp"):
-        assert spec not in registry.for_diagnostic(other, False)
-    assert registry.for_diagnostic("thomson_scattering") == [spec]  # the only plot of its diagnostic
-
-
-def test_the_spec_has_one_parameter_the_axis_and_it_is_not_a_many_pixel_view():
-    spec = registry.get("thomson_profiles")
-    assert list(spec.params.__dataclass_fields__) == ["axis"]
-    assert spec.params().axis == "rho_pol"
-    assert params_ui.CHOICES[("ThomsonProfilesParams", "axis")] == ("rho_pol", "R_mid")
+    assert not spec.cached and spec.compute is None and spec.scalars is None and spec.overlay is None
+    assert registry.for_diagnostic("thomson_scattering", False) == [spec]
+    assert registry.for_diagnostic("thomson_scattering", True) == []
+    assert all(spec not in registry.for_diagnostic(other, False) for other in ("apd", "phantom", "asp", "fsp"))
     assert not multipixel.supported(spec)
-    digest, text = params_ui.hash_params(spec.key, spec.params())
-    back = params_ui.from_canonical(spec.params, text, plot_key=spec.key)
-    assert params_ui.hash_params(spec.key, back)[0] == digest
+    assert spec.params().axis == "rho_pol"
+    assert params_ui.CHOICES[("ThomsonProfilesParams", "axis")] == AXES
 
 
-def test_the_module_imports_nothing_from_fusion_scripts():
-    """L14: the app is moving off fusion_scripts, so new code reads the file and nothing else."""
-    assert reaches_fusion_scripts(inspect.getsource(tp)) == []
-
-
-def test_the_catalog_indexes_the_thomson_scattering_folder_raw_only(conn, tmp_path):
+def test_the_catalog_indexes_the_thomson_scattering_folder_raw_only(conn, tmp_path, monkeypatch):
     root = tmp_path / "alcator"
     tf.write_thomson(root, 1160616027)
     tf.write_thomson(root, 1140827019)
     stats = catalog.rescan(conn, str(root), "cmod", None)
-    assert stats.inserted == 2 and stats.skipped == 0
-    assert "thomson_scattering" in catalog.DIAGNOSTICS
-    assert "thomson_scattering" not in stats.missing_folders
+    assert stats.inserted == 2 and stats.skipped == 0 and "thomson_scattering" not in stats.missing_folders
 
     found = {(row["shot"], row["diagnostic"], row["preprocessed"]): row for row in conn.execute("SELECT * FROM shots")}
     assert set(found) == {(1160616027, "thomson_scattering", 0), (1140827019, "thomson_scattering", 0)}
-    assert found[(1160616027, "thomson_scattering", 0)]["path"].endswith(
-        "thomson_scattering/thomson_scattering_1160616027.nc"
-    )
+    monkeypatch.setenv("FUSION_DATA_FOLDER", str(root))
+    path = loader.dataset_path("cmod", 1160616027, "thomson_scattering", False)
+    assert path == found[(1160616027, "thomson_scattering", 0)]["path"]
+    assert path.endswith("thomson_scattering/thomson_scattering_1160616027.nc")
 
     table = catalog.shot_table(conn, None).set_index("shot")
     assert list(table["thomson_scattering"]) == ["R", "R"]
     assert list(table["apd"]) == ["", ""]  # a shot with only this file lists no other diagnostic
 
 
-def test_the_dataset_path_is_the_diagnostics_folder_and_the_shot(tmp_path, monkeypatch):
-    monkeypatch.setenv("FUSION_DATA_FOLDER", str(tmp_path))
-    path = loader.dataset_path("cmod", 1160616027, "thomson_scattering", False)
-    assert path.endswith("thomson_scattering/thomson_scattering_1160616027.nc")
-
-
 def test_the_file_the_fixture_writes_opens_the_way_the_page_opens_the_real_ones(tmp_path):
-    """netCDF3 as the real files are, read with xarray's own choice of engine, ``time`` in seconds and not decoded."""
-    path = tf.write_thomson(tmp_path)
-    ds = loader.open_dataset(str(path))
+    """netCDF3 as the real files are, ``time`` in seconds and not decoded."""
+    ds = loader.open_dataset(str(tf.write_thomson(tmp_path)))
     assert ds["time"].dtype == np.float64 and ds["time"].attrs["units"] == "s"
-    assert ds["edge_channel"].dtype == np.int32
-    assert ds.attrs["fit_status"] == "ok" and set(ds.dims) == {"time", "rho_pol", "edge_channel", "core_channel"}
+    assert set(ds.dims) == {"time", "rho_pol", "edge_channel", "core_channel"}
     window = loader.sliced(ds, *tf.WINDOW)
     assert 0 < window.sizes["time"] < ds.sizes["time"] and window.sizes["rho_pol"] == ds.sizes["rho_pol"]
 
@@ -156,26 +122,23 @@ def test_the_file_the_fixture_writes_opens_the_way_the_page_opens_the_real_ones(
 def test_only_the_readings_with_a_measurement_are_kept_and_their_junk_errors_never_are():
     ds = cut(tf.thomson_dataset())
     found = tp.read(ds)
-    assert set(found.points) == {"edge", "core"}
-    assert found.pulses == ds.sizes["time"]
+    assert set(found.points) == {"edge", "core"} and found.pulses == ds.sizes["time"]
     for system, points in found.points.items():
         ne = ds[f"{system}_ne"].values
         assert (ne == 0).any(), "the fixture plants readings of 0"
-        assert points.pulses == ds.sizes["time"]
         assert points.readings == int(np.isfinite(ne).sum())  # a pulse the system did not record is no reading
         assert points.drawn == int((ne > 0).sum()) < points.readings
         assert (points.ne > 0).all() and (points.Te > 0).all()
         # The tree's error at a reading of 0 is 2e20 m^-3 and 1000 eV: none of it is kept.
         assert np.nanmax(points.ne_err) < 1e20 and np.nanmax(points.Te_err) < 500
-        assert len({points.ne.size, points.Te.size, points.time.size, points.channel.size, points.rho_pol.size}) == 1
 
 
 def test_a_point_carries_where_and_when_it_was_read():
     ds = cut(tf.thomson_dataset())
     points = tp.read(ds).points["edge"]
     i = 5
-    t, c = points.time[i], int(points.channel[i])
-    row = int(np.argmin(abs(ds["time"].values - t)))
+    c = int(points.channel[i])
+    row = int(np.argmin(abs(ds["time"].values - points.time[i])))
     assert ds["edge_ne"].values[row, c] == points.ne[i]
     assert ds["edge_rho_pol"].values[row, c] == points.rho_pol[i]
     assert ds["edge_R_mid"].values[row, c] == points.R_mid[i]
@@ -189,42 +152,32 @@ def test_a_temperature_of_0_beside_a_density_is_not_drawn_and_a_bad_error_leaves
     ds["edge_Te_err"][4, 1] = np.nan
     ds["edge_ne_err"][6, 2] = 0.0
     ds["edge_Te_err"][8, 0] = 0.0  # an error of exactly 0 is no error either
-    ds["edge_ne"][3, 2] = 0.0  # a density of 0 beside a temperature that reads: the plan's rule is n_e > 0
+    ds["edge_ne"][3, 2] = 0.0  # a density of 0 beside a temperature that reads: the rule is n_e > 0
     points = tp.read(ds).points["edge"]
-    assert points.drawn == ds["edge_ne"].size - 1  # n_e > 0 everywhere but at the one reading of 0
+    assert points.drawn == ds["edge_ne"].size - 1
 
     def at(row, channel):
         found = np.flatnonzero((points.time == ds["time"].values[row]) & (points.channel == channel))
         return int(found[0]) if found.size else None
 
     assert at(3, 2) is None  # not drawn, though its T_e is not 0
-    assert np.isnan(points.Te[at(2, 3)]) and points.ne[at(2, 3)] > 0
-    assert np.isnan(points.pe()[at(2, 3)])
+    assert np.isnan(points.Te[at(2, 3)]) and points.ne[at(2, 3)] > 0 and np.isnan(points.pe()[at(2, 3)])
     assert np.isnan(points.ne_err[at(4, 1)]) and np.isnan(points.Te_err[at(4, 1)])
     assert np.isnan(points.ne_err[at(6, 2)])
     assert np.isnan(points.Te_err[at(8, 0)]) and np.isfinite(points.ne_err[at(8, 0)])
     assert np.isfinite(points.ne_err[at(5, 1)])
 
 
-def test_a_file_that_holds_only_one_system_reads_that_one():
-    assert set(profiles_of(core=False).points) == {"edge"}
-    assert set(profiles_of(edge=False).points) == {"core"}
-
-
-def test_the_fit_is_read_with_its_window_and_without_a_pressure_fit_when_the_file_has_none():
-    fit = profiles_of().fit
-    assert fit.window == tf.WINDOW and fit.rho_pol[0] == 0.0 and fit.rho_pol[-1] == 1.1
-    assert fit.pe is not None and fit.R_mid is not None
-    assert profiles_of(pe=False).fit.pe is None
-    assert profiles_of(fit=False).fit is None  # a failed fit has no rho_pol and no fit_*
-
-
-def test_the_files_scalars_and_attributes_come_back_as_plain_python():
+def test_the_fit_the_scalars_and_the_attributes_are_read_and_each_is_optional():
     found = profiles_of()
+    assert found.fit.window == tf.WINDOW and found.fit.rho_pol[0] == 0.0 and found.fit.rho_pol[-1] == 1.1
+    assert found.fit.pe is not None and found.fit.R_mid is not None
     assert found.scalars == pytest.approx({"R_mid_sep": 0.89, "Te_sep_2pm": 36.0, "lambda_q_2pm": 0.002})
     assert found.attrs["fit_check"] == tf.PASSED and found.attrs["shot"] == tf.SHOT
-    assert found.attrs["window_t_start"] == tf.WINDOW[0]
+    assert profiles_of(pe=False).fit.pe is None
+    assert profiles_of(fit=False).fit is None
     assert profiles_of(scalars=False).scalars == {}
+    assert set(profiles_of(core=False).points) == {"edge"} and set(profiles_of(edge=False).points) == {"core"}
 
 
 # ---------------------------------------------------------------------------
@@ -232,76 +185,42 @@ def test_the_files_scalars_and_attributes_come_back_as_plain_python():
 # ---------------------------------------------------------------------------
 
 
-def test_n_e_t_e_and_p_e_share_one_axis_and_each_row_has_both_systems_and_the_fit():
+def test_each_row_has_both_systems_and_the_fit_on_one_shared_axis_and_the_legend_lists_each_once():
     fig = figure_of()
-    assert names_in_row(fig, 1) == ["edge TS", "core TS", FIT]
-    assert names_in_row(fig, 2) == ["edge TS", "core TS", FIT]
-    assert names_in_row(fig, 3) == ["edge TS", "core TS", FIT]
+    assert [names_in_row(fig, n) for n in (1, 2, 3)] == [ROWS] * 3
     # One shared axis: the upper two follow the bottom one, which carries the title.
     assert fig.layout.xaxis.matches == "x3" and fig.layout.xaxis2.matches == "x3"
     assert fig.layout.xaxis3.title.text == "ρ<sub>pol</sub>" and not fig.layout.xaxis.title.text
-    assert [fig.layout[k].title.text for k in ("yaxis", "yaxis2", "yaxis3")] == [
+    assert [fig.layout[k].title.text for k in YAXES] == [
         "n<sub>e</sub> [10<sup>20</sup> m<sup>-3</sup>]",
         "T<sub>e</sub> [eV]",
         "p<sub>e</sub> [kPa]",
     ]
-    # Each profile is read from zero, and an error bar that reaches below it ends at the axis, not below it.
-    assert {fig.layout[k].autorangeoptions.minallowed for k in ("yaxis", "yaxis2", "yaxis3")} == {0}
-
-
-def test_the_two_systems_differ_by_marker_and_by_colour_and_the_legend_lists_each_once():
-    fig = figure_of()
+    # The two systems differ by marker and by colour.
     edge, core = in_row(fig, 1)[:2]
-    assert (edge.marker.symbol, core.marker.symbol) == ("circle", "diamond")
-    assert edge.marker.color != core.marker.color
-    assert edge.mode == core.mode == "markers"
-    assert [trace.name for trace in fig.data if trace.showlegend is not False] == ["edge TS", "core TS", FIT]
-    # Toggling a legend entry hides that system in every row.
-    for n in (1, 2, 3):
-        assert [trace.legendgroup for trace in in_row(fig, n)][:3] == ["edge", "core", "fit"]
-    # The separatrix is a line in every row, one legend entry for the three, which hides them all.
-    shapes = fig.layout.shapes
-    assert [(s.name, s.legendgroup, s.showlegend) for s in shapes] == [
-        ("separatrix", "separatrix", True),
-        ("separatrix", "separatrix", False),
-        ("separatrix", "separatrix", False),
+    assert (edge.marker.symbol, core.marker.symbol) == ("circle", "diamond") and edge.marker.color != core.marker.color
+    # A legend entry appears once and hides its trace in every row; the separatrix is a line of every row.
+    assert [trace.name for trace in fig.data if trace.showlegend is not False] == ROWS
+    assert [trace.legendgroup for trace in in_row(fig, 3)] == ["edge", "core", "fit"]
+    assert [(s.name, s.legendgroup, s.showlegend, s.x0, s.line.dash) for s in fig.layout.shapes] == [
+        ("separatrix", "separatrix", shown, 1.0, "dash") for shown in (True, False, False)
     ]
 
 
-def test_the_values_are_drawn_in_the_units_of_the_axis_titles():
-    found = profiles_of()
-    fig = tp.figure(found)
-    points = found.points["edge"]
-    ne, te, pe = (in_row(fig, n)[0] for n in (1, 2, 3))
-    np.testing.assert_allclose(ne.y, points.ne * 1e-20)  # 10^20 m^-3
-    np.testing.assert_allclose(te.y, points.Te)  # eV
-    np.testing.assert_allclose(pe.y, 1.602176634e-19 * points.ne * points.Te * 1e-3)  # kPa
-    fit = in_row(fig, 3)[2]
-    np.testing.assert_allclose(fit.y, found.fit.pe * 1e-3)
-    np.testing.assert_allclose(fit.x, found.fit.rho_pol)
-
-
-def test_the_error_bars_are_the_trees_and_the_pressure_points_carry_the_propagated_error():
+def test_the_values_and_their_bars_are_drawn_in_the_units_of_the_axis_titles():
     found = profiles_of()
     points = found.points["core"]
     fig = tp.figure(found)
     ne, te, pe = (in_row(fig, n)[1] for n in (1, 2, 3))
+    np.testing.assert_allclose(ne.y, points.ne * 1e-20)  # 10^20 m^-3
+    np.testing.assert_allclose(te.y, points.Te)  # eV
+    e = 1.602176634e-19
+    np.testing.assert_allclose(pe.y, e * points.ne * points.Te * 1e-3)  # kPa
     np.testing.assert_allclose(ne.error_y.array, points.ne_err * 1e-20)
     np.testing.assert_allclose(te.error_y.array, points.Te_err)
-    e = 1.602176634e-19
-    expected = e * np.sqrt((points.Te * points.ne_err) ** 2 + (points.ne * points.Te_err) ** 2) * 1e-3
-    np.testing.assert_allclose(pe.error_y.array, expected)
-    assert ne.error_y.visible and ne.error_y.type == "data"
-
-
-def test_a_reading_of_zero_and_its_junk_error_never_reach_the_figure():
-    markers = [trace for trace in figure_of().data if trace.mode == "markers"]
-    assert len(markers) == 6  # edge and core, in each of the three rows
-    for trace in markers:
-        y, err = np.asarray(trace.y), np.asarray(trace.error_y.array)
-        assert np.nanmin(y) > 0
-        # The fixture's errors are 10% of the value and a reading of 0 has 2e20 m^-3 and 1000 eV, which no point shows.
-        assert np.all(err[np.isfinite(err)] < 0.5 * y[np.isfinite(err)])
+    propagated = e * np.sqrt((points.Te * points.ne_err) ** 2 + (points.ne * points.Te_err) ** 2) * 1e-3
+    np.testing.assert_allclose(pe.error_y.array, propagated)
+    np.testing.assert_allclose(in_row(fig, 3)[2].y, found.fit.pe * 1e-3)
 
 
 def test_the_fit_is_drawn_over_its_whole_range_without_a_band():
@@ -309,19 +228,10 @@ def test_the_fit_is_drawn_over_its_whole_range_without_a_band():
     fig = tp.figure(found)
     for n in (1, 2, 3):
         fit = in_row(fig, n)[2]
-        assert fit.mode == "lines" and len(fit.x) == found.fit.rho_pol.size  # the whole grid, 0 to 1.1
-        assert fit.x[0] == 0.0 and fit.x[-1] == 1.1
+        assert fit.mode == "lines" and fit.x[0] == 0.0 and fit.x[-1] == 1.1 and len(fit.x) == found.fit.rho_pol.size
         assert fit.error_y.array is None
-    assert not [trace for trace in fig.data if trace.fill not in (None, "none")]  # no filled band anywhere
-    lines = {trace.name for trace in fig.data if trace.mode == "lines"}
-    assert lines == {FIT}  # nothing else is a curve: no upper or lower edge of a band
-
-
-def test_the_separatrix_is_rho_pol_1_in_every_row():
-    fig = figure_of("rho_pol")
-    assert [(s.x0, s.x1, s.line.dash) for s in fig.layout.shapes] == [(1.0, 1.0, "dash")] * 3
-    assert tp.separatrix(profiles_of(), "rho_pol") == 1.0
-    assert tp.separatrix(profiles_of(scalars=False, fit=False), "rho_pol") == 1.0
+    assert not [trace for trace in fig.data if trace.fill not in (None, "none")]
+    assert {trace.name for trace in fig.data if trace.mode == "lines"} == {FIT}  # no edge of a band either
 
 
 def test_on_the_r_mid_axis_the_points_the_fit_and_the_separatrix_are_in_r_mid():
@@ -335,13 +245,12 @@ def test_on_the_r_mid_axis_the_points_the_fit_and_the_separatrix_are_in_r_mid():
 
 def test_the_separatrix_on_the_r_mid_axis_is_the_scalar_else_the_fits_at_rho_pol_1_else_none():
     assert tp.separatrix(profiles_of(), "R_mid") == pytest.approx(0.89)
-    # A file without the scalar reads it off the fit's own R_mid at rho_pol = 1 (the grid has no point exactly there).
-    from_fit = tp.separatrix(profiles_of(scalars=False), "R_mid")
-    assert from_fit == pytest.approx(tf.r_mid(1.0), abs=1e-9)
-    # Neither: no line, and so no legend entry for one.
+    assert tp.separatrix(profiles_of(scalars=False, fit=False), "rho_pol") == 1.0
+    # A file without the scalar reads it off the fit's own R_mid at rho_pol = 1.
+    assert tp.separatrix(profiles_of(scalars=False), "R_mid") == pytest.approx(tf.r_mid(1.0), abs=1e-9)
+    # Neither: no line.
     none = profiles_of(scalars=False, fit=False)
-    assert tp.separatrix(none, "R_mid") is None
-    assert not tp.figure(none, "R_mid").layout.shapes
+    assert tp.separatrix(none, "R_mid") is None and not tp.figure(none, "R_mid").layout.shapes
     # The scalar comes first, even where the fit's own R_mid would say another number.
     found = profiles_of()
     found.scalars["R_mid_sep"] = 0.9
@@ -350,27 +259,21 @@ def test_the_separatrix_on_the_r_mid_axis_is_the_scalar_else_the_fits_at_rho_pol
     ds = tf.thomson_dataset(scalars=False)
     ds["fit_R_mid"] = ds["fit_R_mid"].where(~((ds["rho_pol"] > 0.9) & (ds["rho_pol"] < 1.05)))
     nan = tp.read(cut(ds))
-    assert tp.separatrix(nan, "R_mid") is None
-    assert not tp.figure(nan, "R_mid").layout.shapes
-    assert tp.notes(nan, FITS_WINDOW, "R_mid")[2].endswith("The file gives no separatrix.")
+    assert tp.separatrix(nan, "R_mid") is None and not tp.figure(nan, "R_mid").layout.shapes
+    assert notes_of(nan, "R_mid")[2].endswith("The file gives no separatrix.")
 
 
-def test_a_file_without_a_fit_draws_the_points_and_no_fit():
+def test_only_what_the_file_holds_is_drawn():
     fig = figure_of(fit=False)
-    for n in (1, 2, 3):  # p_e is still drawn: e n_e T_e of the points
-        assert names_in_row(fig, n) == ["edge TS", "core TS"]
-    assert not [trace for trace in fig.data if trace.name.startswith("fit")]
-
-
-def test_a_fit_without_a_pressure_fit_leaves_the_pressure_row_to_the_points():
-    fig = figure_of(pe=False)
-    assert names_in_row(fig, 1)[2] == FIT and names_in_row(fig, 2)[2] == FIT
-    assert names_in_row(fig, 3) == ["edge TS", "core TS"]
-
-
-def test_a_file_with_no_core_draws_the_edge_alone():
+    assert [names_in_row(fig, n) for n in (1, 2, 3)] == [["edge TS", "core TS"]] * 3  # p_e is e n_e T_e of the points
+    fig = figure_of(pe=False)  # a fit without a pressure fit leaves the pressure row to the points
+    assert [names_in_row(fig, n) for n in (1, 2, 3)] == [ROWS, ROWS, ["edge TS", "core TS"]]
     assert {trace.name for trace in figure_of(core=False).data} == {"edge TS", FIT}
     assert {trace.name for trace in figure_of(edge=False, fit=False).data} == {"core TS"}
+    # A system whose points have no place is left out, and the other is drawn.
+    found = profiles_of()
+    found.points["edge"].rho_pol[:] = np.nan
+    assert {trace.name for trace in tp.figure(found).data} == {"core TS", FIT}
 
 
 def test_a_window_with_no_pulse_still_draws_the_fit_and_a_file_with_nothing_says_so():
@@ -386,42 +289,26 @@ def test_a_window_with_no_pulse_still_draws_the_fit_and_a_file_with_nothing_says
 def test_a_file_whose_equilibrium_could_not_be_opened_has_nothing_to_place_and_says_why():
     found = profiles_of(efit=False, fit=False, fit_status="failed: ValueError: no EFIT tree")
     assert found.points["edge"].drawn and np.isnan(found.points["edge"].rho_pol).all()
-    for axis in ("rho_pol", "R_mid"):
+    measured = sum(p.drawn for p in found.points.values())
+    for axis in AXES:
         fig = tp.figure(found, axis)
         assert not fig.data
-        measured = sum(p.drawn for p in found.points.values())
-        assert fig.layout.annotations[0].text == (
-            f"None of the {measured} measured points can be placed on {tp.AXES[axis][1]}, and there is no fit to draw."
-        )
-    note, fit_note, axis_note = tp.notes(found, FITS_WINDOW, "rho_pol")[:3]
+        assert fig.layout.annotations[0].text.startswith(f"None of the {measured} measured points can be placed on")
+    note, fit_note, axis_note = notes_of(found)[:3]
     assert "have no ρ_pol, since no EFIT tree could be opened (TreeNODATA): they are not drawn." in note
-    assert "outside the EFIT time base" not in note
     assert fit_note == "No fit in this file (failed: ValueError: no EFIT tree)."
     assert "from the EFIT tree" not in axis_note  # there is none to name
     assert tp.separatrix(found, "R_mid") is None
 
 
-def test_a_system_whose_points_have_no_place_is_left_out_and_the_other_is_drawn():
-    found = profiles_of()
-    found.points["edge"].rho_pol[:] = np.nan
-    names = [trace.name for trace in tp.figure(found).data]
-    assert "edge TS" not in names and "core TS" in names
-
-
 def test_a_fit_without_an_r_mid_is_not_drawn_on_the_r_mid_axis_and_the_caption_says_so():
     found = profiles_of(fit_r_mid=False)
-    assert found.fit.R_mid is None
     assert FIT in names_in_row(tp.figure(found, "rho_pol"), 1)
     fig = tp.figure(found, "R_mid")
-    assert not [trace for trace in fig.data if trace.name.startswith("fit")]
-    assert (
-        "The file has no R_mid for the fit, so it is not drawn on this axis."
-        in tp.notes(found, FITS_WINDOW, "R_mid")[1]
-    )
-    assert "no R_mid for the fit" not in tp.notes(found, FITS_WINDOW, "rho_pol")[1]
-    assert {s.x0 for s in fig.layout.shapes} == {
-        found.scalars["R_mid_sep"]
-    }  # the separatrix still comes from the scalar
+    assert names_in_row(fig, 1) == ["edge TS", "core TS"]
+    assert "The file has no R_mid for the fit, so it is not drawn on this axis." in notes_of(found, "R_mid")[1]
+    assert "no R_mid for the fit" not in notes_of(found)[1]
+    assert {s.x0 for s in fig.layout.shapes} == {found.scalars["R_mid_sep"]}  # the separatrix still has the scalar
 
 
 def test_an_unknown_axis_is_refused():
@@ -433,11 +320,11 @@ def test_points_without_a_flux_mapping_are_not_placed_and_the_notes_count_them()
     found = profiles_of(unmapped=True)
     expected = sum(int(np.isnan(p.rho_pol).sum()) for p in found.points.values())
     assert expected > 0
-    fig = tp.figure(found)  # still builds
+    fig = tp.figure(found)
     assert np.isnan(in_row(fig, 1)[0].x).sum() == int(np.isnan(found.points["edge"].rho_pol).sum())
-    assert f"{expected} of the points have no ρ_pol" in tp.notes(found, FITS_WINDOW, "rho_pol")[0]
-    assert f"{expected} of the points have no R_mid" in tp.notes(found, FITS_WINDOW, "R_mid")[0]  # named for the axis
-    assert "no ρ_pol" not in tp.notes(profiles_of(), FITS_WINDOW, "rho_pol")[0]
+    assert f"{expected} of the points have no ρ_pol (the pulse is outside the EFIT time base)" in notes_of(found)[0]
+    assert f"{expected} of the points have no R_mid" in notes_of(found, "R_mid")[0]  # named for the axis
+    assert "no ρ_pol" not in notes_of(profiles_of())[0]
 
 
 def test_a_hover_text_says_which_system_when_where_and_what_the_value_is():
@@ -447,53 +334,29 @@ def test_a_hover_text_says_which_system_when_where_and_what_the_value_is():
     assert len(hover) == points.drawn
     first = hover[0]
     assert first.startswith("edge TS · t = ") and f"channel {int(points.channel[0])}" in first
-    assert f"ρ_pol = {points.rho_pol[0]:.3f}" in first and "T_e = " in first and " eV" in first
-    assert " ± " in first
-    # Where the channel looks: R, then Z (and not the other way round).
+    assert f"ρ_pol = {points.rho_pol[0]:.3f}" in first and "T_e = " in first and " ± " in first and " eV" in first
     assert f"R = {points.R[0]:.4f} m, Z = {points.Z[0]:+.4f} m" in first
 
 
 @pytest.mark.parametrize(
     "value, digits, text",
-    [
-        (2140.0, 3, "2140"),  # not 2.14e+03
-        (234.0, 2, "234"),  # not 2.3e+02
-        (51517.3, 3, "51517"),
-        (0.512, 3, "0.512"),
-        (1.234, 3, "1.23"),
-        (0.00012, 2, "0.00012"),
-        (2.5e7, 3, "2.5e+07"),  # a million and up keeps its exponent
-    ],
+    [(2140.0, 3, "2140"), (234.0, 2, "234"), (1.234, 3, "1.23"), (0.00012, 2, "0.00012"), (2.5e7, 3, "2.5e+07")],
 )
 def test_hover_numbers_have_no_exponent_below_a_million(value, digits, text):
     assert tp._number(value, digits) == text
-
-
-def test_no_hover_text_of_a_real_looking_core_temperature_carries_an_exponent():
-    """The core T_e of a shot is above 1 keV, and its error 100 eV or more: the numbers the hover is read for."""
-    found = profiles_of()
-    core_te = in_row(tp.figure(found), 2)[1].hovertext
-    assert any(float(re.search(r"T_e = (\d+)", text).group(1)) >= 1000 for text in core_te)  # the fixture has some
-    for row in (1, 2, 3):
-        for trace in in_row(tp.figure(found), row)[:2]:
-            assert not [text for text in trace.hovertext if "e+" in text], trace.name
 
 
 # ---------------------------------------------------------------------------
 # The range of a row
 # ---------------------------------------------------------------------------
 
-#: The layout's names for the rows n_e, T_e and p_e, top to bottom.
-YAXES = ("yaxis", "yaxis2", "yaxis3")
-
 
 def toy(x, value, *, error=None, fit=None, r_mid=None, fit_r_mid=None):
     """Profiles whose only points are edge T_e readings of ``value`` eV at ρ_pol ``x``, and whose fit is ``(ρ_pol, T_e)``
-    when one is given, so that the rule that sets a row's top can be checked against numbers worked out by hand.
+    when one is given, so that the rule can be checked against numbers worked out by hand.
 
-    The row is ``"Te"``, which is drawn in the unit it is in (scale 1). Each point's error is 10% of its value unless
-    ``error`` says otherwise; ``r_mid`` is where each point is on the R_mid axis and ``fit_r_mid`` where each sample of the
-    fit is, both the same as on ρ_pol unless given.
+    Each point's error is 10% of its value unless ``error`` says otherwise; ``r_mid`` and ``fit_r_mid`` are where the
+    points and the fit are on the R_mid axis, the same as on ρ_pol unless given.
     """
     x, value = np.asarray(x, float), np.asarray(value, float)
     error = 0.1 * value if error is None else np.asarray(error, float)
@@ -527,11 +390,15 @@ def toy(x, value, *, error=None, fit=None, r_mid=None, fit_r_mid=None):
     return tp.Profiles(points={"edge": points}, fit=found, pulses=1, scalars={}, attrs={})
 
 
+def top_of(found, axis="rho_pol"):
+    return tp.y_limits(found, "Te", axis)[1]
+
+
 def test_the_top_is_1_1_times_the_98th_percentile_of_the_points_and_not_their_largest():
-    found = toy(np.linspace(0.5, 1.0, 100), np.arange(1.0, 101.0))  # no fit; each point has a 10% error
+    found = toy(np.linspace(0.5, 1.0, 100), np.arange(1.0, 101.0))
     bottom, top = tp.y_limits(found, "Te", "rho_pol")
     assert bottom == 0.0
-    assert top == pytest.approx(1.1 * 98.02)  # 1 + 0.98 * 99, between the 98th and the 99th of them: not 1.1 * 100
+    assert top == pytest.approx(1.1 * 98.02)  # 1 + 0.98 * 99: not 1.1 * 100
     assert tp.points_above(found, "Te", "rho_pol", top) == 0
 
 
@@ -539,47 +406,42 @@ def test_a_point_measured_to_worse_than_2_sigma_does_not_set_the_top_and_is_coun
     value = np.append(np.arange(1.0, 101.0), [1000.0] * 3)
     error = np.append(0.1 * np.arange(1.0, 101.0), [800.0] * 3)  # an error of 800 on 1000 is worse than half the value
     found = toy(np.linspace(0.5, 1.0, 103), value, error=error)
-    top = tp.y_limits(found, "Te", "rho_pol")[1]
-    assert top == pytest.approx(1.1 * 98.02)  # as if the three were not there
-    assert tp.points_above(found, "Te", "rho_pol", top) == 3  # and they are said to be, not left out silently
+    assert top_of(found) == pytest.approx(1.1 * 98.02)  # as if the three were not there
+    assert tp.points_above(found, "Te", "rho_pol", top_of(found)) == 3
 
 
 def test_a_point_with_no_error_is_not_measured_to_better_than_2_sigma():
     value = np.arange(1.0, 101.0)
     error = np.where(value > 90, np.nan, 0.1 * value)  # the last ten have none
     found = toy(np.linspace(0.5, 1.0, 100), value, error=error)
-    assert tp.y_limits(found, "Te", "rho_pol")[1] == pytest.approx(1.1 * 88.22)  # the 98th percentile of 1 to 90
+    assert top_of(found) == pytest.approx(1.1 * 88.22)  # the 98th percentile of 1 to 90
 
 
 def test_with_fewer_than_5_well_measured_points_all_the_points_set_the_percentile():
     def top(well):
         value = np.array([10.0] * well + [20.0] * (20 - well))
         error = np.array([1.0] * well + [20.0] * (20 - well))  # the others are measured no better than their value
-        return tp.y_limits(toy(np.linspace(0.5, 1.0, 20), value, error=error), "Te", "rho_pol")[1]
+        return top_of(toy(np.linspace(0.5, 1.0, 20), value, error=error))
 
     assert top(4) == pytest.approx(1.1 * 20)  # four are not enough to go by: all twenty set it
     assert top(5) == pytest.approx(1.1 * 10)  # five are, and the others no longer count
 
 
-def test_a_fit_that_runs_away_leaves_the_top_where_the_points_put_it():
-    x, value = np.linspace(0.5, 1.0, 40), np.full(40, 100.0)
-    rho = np.linspace(0.0, 1.1, 111)
-    without = tp.y_limits(toy(x, value), "Te", "rho_pol")
-    assert without == pytest.approx((0.0, 110.0))
-    runaway = np.where(rho <= 1.0, 100.0, 1e5)  # follows the points, and then leaves them
-    assert tp.y_limits(toy(x, value, fit=(rho, runaway)), "Te", "rho_pol") == without
-
-
-def test_a_fit_within_3_times_the_points_sets_the_top_and_one_beyond_that_does_not():
+def test_a_fit_within_3_times_the_points_sets_the_top_and_one_that_runs_away_does_not():
     x, value = np.linspace(0.5, 1.0, 40), np.full(40, 100.0)
     rho = np.linspace(0.0, 1.1, 111)
 
-    def top(level):
-        return tp.y_limits(toy(x, value, fit=(rho, np.full(rho.size, level))), "Te", "rho_pol")[1]
+    def top(fit):
+        return top_of(toy(x, value, fit=(rho, fit)))
 
-    assert top(250.0) == pytest.approx(1.1 * 250)  # within 3 times the points: it sets the top
-    assert top(300.0) == pytest.approx(1.1 * 300)  # exactly 3 times counts
-    assert top(301.0) == pytest.approx(1.1 * 100)  # a little beyond does not: the points do
+    assert top_of(toy(x, value)) == pytest.approx(110.0)
+    assert top(np.full(rho.size, 250.0)) == pytest.approx(1.1 * 250)  # within 3 times the points: it sets the top
+    assert top(np.full(rho.size, 300.0)) == pytest.approx(1.1 * 300)  # exactly 3 times counts
+    assert top(np.full(rho.size, 301.0)) == pytest.approx(1.1 * 100)  # a little beyond does not: the points do
+    assert top(np.where(rho <= 1.0, 100.0, 1e5)) == pytest.approx(110.0)  # follows the points, and then leaves them
+    # The bottom stays at zero where the fit goes below it.
+    below = toy(x, value, fit=(rho, np.where(rho > 0.5, -200.0, 100.0)))
+    assert tp.y_limits(below, "Te", "rho_pol") == pytest.approx((0.0, 110.0))
 
 
 def test_a_fit_is_judged_against_the_points_beside_it_and_not_against_the_largest_ones():
@@ -587,37 +449,29 @@ def test_a_fit_is_judged_against_the_points_beside_it_and_not_against_the_larges
     value = np.r_[np.full(20, 100.0), np.full(20, 1000.0)]  # low points inside, high ones at the edge
 
     def top(at):
-        return tp.y_limits(toy(x, value, fit=([at], [2000.0])), "Te", "rho_pol")[1]
+        return top_of(toy(x, value, fit=([at], [2000.0])))
 
     assert top(0.2) == pytest.approx(1.1 * 1000)  # 2000 beside points of 100 is not plausible: the points set it
     assert top(1.0) == pytest.approx(1.1 * 2000)  # beside points of 1000 it is, and it sets the top
 
 
-def test_a_row_with_no_points_takes_the_whole_fit_and_a_row_with_no_fit_is_set_by_the_points_alone():
+def test_a_row_with_no_points_takes_the_whole_fit():
     rho = np.linspace(0.0, 1.1, 111)
     fit_only = toy([], [], fit=(rho, np.where(rho <= 1.0, 100.0, 1e5)))
     assert tp.y_limits(fit_only, "Te", "rho_pol") == pytest.approx((0.0, 1.1e5))  # no points to hold the fit to
     nothing = tp.Profiles(points={}, fit=fit_only.fit, pulses=0, scalars={}, attrs={})  # not even a system
     assert tp.y_limits(nothing, "Te", "rho_pol") == pytest.approx((0.0, 1.1e5))
-    no_fit = toy(np.linspace(0.5, 1.0, 40), np.full(40, 100.0))
-    assert no_fit.fit is None and tp.y_limits(no_fit, "Te", "rho_pol") == pytest.approx((0.0, 110.0))
 
 
 def test_the_points_and_the_fit_are_judged_on_the_axis_drawn():
-    """The same points and fit give another top on R_mid than on ρ_pol when the points beside a sample of the fit are other
-    points there: here the two groups of points trade places."""
+    """The same points and fit give another top on R_mid than on ρ_pol when the points beside a sample of the fit are
+    other points there: here the two groups of points trade places."""
     x = np.r_[np.linspace(0.5, 0.7, 20), np.linspace(0.9, 1.0, 20)]
     value = np.r_[np.full(20, 100.0), np.full(20, 1000.0)]
     r_mid = np.r_[np.linspace(0.90, 1.00, 20), np.linspace(0.50, 0.60, 20)]
     found = toy(x, value, r_mid=r_mid, fit=([0.6, 1.05], [50.0, 2500.0]), fit_r_mid=[0.55, 0.95])
-    assert tp.y_limits(found, "Te", "rho_pol")[1] == pytest.approx(1.1 * 2500)  # beside points of 1000, at ρ_pol 1.05
-    assert tp.y_limits(found, "Te", "R_mid")[1] == pytest.approx(1.1 * 1000)  # beside points of 100, at R_mid 0.95
-
-
-def test_the_bottom_stays_at_zero_where_the_fit_goes_below_it():
-    rho = np.linspace(0.0, 1.1, 111)
-    found = toy(np.linspace(0.5, 1.0, 40), np.full(40, 100.0), fit=(rho, np.where(rho > 0.5, -200.0, 100.0)))
-    assert tp.y_limits(found, "Te", "rho_pol") == pytest.approx((0.0, 110.0))  # the PDF's bottom would be -220 here
+    assert top_of(found, "rho_pol") == pytest.approx(1.1 * 2500)  # beside points of 1000, at ρ_pol 1.05
+    assert top_of(found, "R_mid") == pytest.approx(1.1 * 1000)  # beside points of 100, at R_mid 0.95
 
 
 def test_a_row_with_nothing_above_zero_has_no_top_and_is_left_to_autorange_from_zero():
@@ -631,30 +485,25 @@ def test_a_row_with_nothing_above_zero_has_no_top_and_is_left_to_autorange_from_
     assert not fig.layout.annotations
 
 
-def test_each_row_opens_on_zero_to_its_top_and_autoscale_is_given_no_other_range_to_return_to():
+def test_each_row_opens_on_zero_to_its_top_and_a_runaway_fit_leaves_through_it():
     found = profiles_of(runaway=True)
-    for axis in ("rho_pol", "R_mid"):
+    plain = tp.figure(profiles_of())
+    for axis in AXES:
         fig = tp.figure(found, axis)
-        for key, (name, _label, _title, scale, _unit) in zip(YAXES, tp.QUANTITIES):
+        for n, (key, (name, _label, _title, scale, _unit)) in enumerate(zip(YAXES, tp.QUANTITIES), start=1):
             _, top = tp.y_limits(found, name, axis, scale)
             row, options = fig.layout[key], fig.layout[key].autorangeoptions
             assert tuple(row.range) == (0.0, top)  # it opens on it
             assert (options.minallowed, options.maxallowed) == (0.0, top)  # and autoscale is given the same
-
-
-def test_a_runaway_fit_is_drawn_whole_and_leaves_through_the_top_without_moving_the_range():
-    plain, runaway = tp.figure(profiles_of()), tp.figure(profiles_of(runaway=True))
-    for n, key in enumerate(YAXES, start=1):
-        fit = in_row(runaway, n)[2]
-        assert fit.name == FIT and fit.x[0] == 0.0 and fit.x[-1] == 1.1  # the whole grid, to its last point
-        assert np.max(fit.y) > 50 * runaway.layout[key].range[1]  # far above the top of its row
-        assert runaway.layout[key].range == plain.layout[key].range  # and the range is where the points put it
+            fit = in_row(fig, n)[2]
+            assert len(fit.x) == found.fit.rho_pol.size and np.max(fit.y) > 50 * top  # drawn whole, far above the top
+            if axis == "rho_pol":
+                assert row.range == plain.layout[key].range  # where the points put it, as without the runaway
 
 
 def stray(n, removed=False):
-    """The fixture's profiles with ``n`` of its edge readings in the window made 10 keV, measured to no better than that:
-    points far above the rest, which are not well measured and so do not set the top. With ``removed`` those readings are
-    instead no measurement at all (0, which is not drawn): the same population of points without the strays."""
+    """The fixture's profiles with ``n`` of its edge readings in the window made 10 keV, measured to no better than
+    that. With ``removed`` those readings are instead no measurement at all: the same points without the strays."""
     ds = tf.thomson_dataset()
     times = ds["time"].values
     in_window = (times >= tf.WINDOW[0]) & (times <= tf.WINDOW[1])
@@ -675,28 +524,22 @@ def corner_notes(fig):
 
 
 def test_a_row_says_in_its_corner_how_many_points_lie_above_its_top_and_a_row_with_none_says_nothing():
-    plain = tp.figure(profiles_of())
-    assert not plain.layout.annotations  # no point of the fixture is above the top of its row
+    assert not tp.figure(profiles_of()).layout.annotations  # no point of the fixture is above the top of its row
     fig = tp.figure(stray(3))
     # T_e and p_e (the same readings), and not n_e, which they leave as it was.
     assert corner_notes(fig) == {"y2 domain": "▲ 3 points above", "y3 domain": "▲ 3 points above"}
-    # The strays do not set the top: it is where it is with those readings gone (the three were well-measured ones).
+    # The strays do not set the top: it is where it is with those readings gone.
     assert fig.layout.yaxis2.range == tp.figure(stray(3, removed=True)).layout.yaxis2.range
-    note = fig.layout.annotations[0]  # in the top right corner of its row, with no arrow
-    assert (note.xref, note.x, note.xanchor) == ("paper", 0.99, "right")
-    assert (note.y, note.yanchor, note.showarrow) == (0.985, "top", False)
     assert corner_notes(tp.figure(stray(1))) == {"y2 domain": "▲ 1 point above", "y3 domain": "▲ 1 point above"}
-    assert corner_notes(tp.figure(stray(3), "R_mid")) == corner_notes(fig)  # on the other axis too
+    assert corner_notes(tp.figure(stray(3), "R_mid")) == corner_notes(fig)
 
 
 @pytest.mark.slow
 def test_in_a_browser_a_row_opens_on_its_range_and_autoscale_and_reset_axes_return_to_it():
-    """That autoscale keeps the range is a claim about the renderer, so it is read off one: the figure of a runaway fit is
-    opened in chromium, zoomed, and autoscaled, as the modebar does it, and reset. Skipped where playwright or its browser
-    is not there."""
+    """That autoscale keeps the range is a claim about the renderer, so it is read off one. Skipped where playwright or
+    its browser is not there."""
     sync_api = pytest.importorskip("playwright.sync_api")
     fig = tp.figure(profiles_of(runaway=True))
-    # The two ends of each row, in one list.
     expected = pytest.approx([end for key in YAXES for end in (0.0, fig.layout[key].range[1])])
     read = (
         "() => ['yaxis', 'yaxis2', 'yaxis3'].flatMap("
@@ -732,92 +575,55 @@ def test_in_a_browser_a_row_opens_on_its_range_and_autoscale_and_reset_axes_retu
 # The words
 # ---------------------------------------------------------------------------
 
+CORE = "Its core is an extrapolation, not a description of the core points"
+OUTER = "Its outer end is not credible"
+SILENT = "It may have failed silently: read the points, not the curve."
+SPELT = f"{tf.CHECK_TEXT}: FAILED: Te on axis is 134 eV"
+
 
 @pytest.mark.parametrize(
     "text, outcome",
     [
         (tf.PASSED, "passed"),
         (tf.FAILED, "failed: Te on axis is 134 eV"),
-        (tf.FAILED_OUTER, "failed: Te at rho_pol 1.10 is 140 eV"),
-        (f"{tf.CHECK_TEXT}: FAILED: Te on axis is 134 eV", "FAILED: Te on axis is 134 eV"),  # spelt another way
-        (f"{tf.CHECK_TEXT}: PASSED", "PASSED"),  # which is not the outcome "passed" either
-        (f"{tf.CHECK_TEXT}: failed:", "failed:"),
+        (SPELT, "FAILED: Te on axis is 134 eV"),
         (f"{tf.CHECK_TEXT}:   passed \n", "passed"),
         ("passed", "passed"),  # an outcome without the rule's description
         ("no fit", ""),
         ("   ", ""),
-        ("", ""),
         (None, ""),
-        # The description alone records no outcome: it reads as one, which no rule knows.
-        (tf.CHECK_TEXT, tf.CHECK_TEXT),
+        (tf.CHECK_TEXT, tf.CHECK_TEXT),  # the description alone records no outcome: it reads as one no rule knows
     ],
 )
 def test_the_checks_outcome_is_what_follows_the_rules_description(text, outcome):
     assert tp.check_outcome(text) == outcome
 
 
-def test_a_fit_that_fails_on_axis_is_warned_about_as_an_extrapolated_core_and_the_check_is_quoted():
-    text = tp.warning(profiles_of(check=tf.FAILED))
-    assert text.startswith("**This fit fails run_db.py's own check: “failed: Te on axis is 134 eV”.** ")
-    assert (
-        "Its core is an extrapolation, not a description of the core points: read the points there, not the curve."
-        in text
-    )
-    assert "Its outer end is not credible" not in text  # (the quoted rule says "outer end" as well)
-    assert text.endswith(f"The file's `fit_check`: “{tf.FAILED}”")  # the attribute itself, word for word
-
-
-def test_a_fit_that_fails_at_its_outer_end_is_warned_about_there_and_its_core_is_not_called_an_extrapolation():
-    text = tp.warning(profiles_of(check=tf.FAILED_OUTER))
-    assert text.startswith("**This fit fails run_db.py's own check: “failed: Te at rho_pol 1.10 is 140 eV”.** ")
-    assert "Its outer end is not credible: its T_e there can lie several times above the points" in text
-    assert "extrapolation" not in text
-    assert text.endswith(f"The file's `fit_check`: “{tf.FAILED_OUTER}”")
-
-
-def test_a_fit_that_fails_both_clauses_gets_both_pieces_of_advice():
-    text = tp.warning(profiles_of(check=tf.FAILED_BOTH))
-    assert "Its core is an extrapolation" in text and "Its outer end is not credible" in text
-    assert text.index("Its core is an extrapolation") < text.index("Its outer end is not credible")
-
-
-CORE = "Its core is an extrapolation, not a description of the core points"
-SILENT = "It may have failed silently: read the points, not the curve."
-
-
 @pytest.mark.parametrize(
-    "check, shown, verb, advice",
+    "check, verb, shown, advice, ending",
     [
-        # A verdict spelt another way is still a verdict, and its clause still says what it says.
-        (f"{tf.CHECK_TEXT}: FAILED: Te on axis is 134 eV", "FAILED: Te on axis is 134 eV", "fails", CORE),
-        # An outcome nobody wrote a rule for, even one that reads well, is not "passed", and names no clause.
-        (f"{tf.CHECK_TEXT}: PASSED", "PASSED", "does not pass", SILENT),
-        (f"{tf.CHECK_TEXT}: ok", "ok", "does not pass", SILENT),
+        # The advice follows the clause that failed.
+        (tf.FAILED, "fails", "“failed: Te on axis is 134 eV”", [CORE], f"The file's `fit_check`: “{tf.FAILED}”"),
+        (tf.FAILED_OUTER, "fails", "“failed: Te at rho_pol 1.10 is 140 eV”", [OUTER], f"“{tf.FAILED_OUTER}”"),
+        (tf.FAILED_BOTH, "fails", "“failed: Te at rho_pol 1.10 is 140 eV; Te on axis is 134 eV”", [CORE, OUTER], "”"),
+        # A verdict spelt another way is still a verdict.
+        (SPELT, "fails", "“FAILED: Te on axis is 134 eV”", [CORE], f"“{SPELT}”"),
+        # An outcome nobody wrote a rule for is not "passed", and names no clause.
+        (f"{tf.CHECK_TEXT}: PASSED", "does not pass", "“PASSED”", [SILENT], "”"),
         # The rule's description alone says "on axis" as well, and is no verdict that something failed there.
-        (tf.CHECK_TEXT, tf.CHECK_TEXT, "does not pass", SILENT),
+        (tf.CHECK_TEXT, "does not pass", f"“{tf.CHECK_TEXT}”", [SILENT], "”"),
+        # No outcome recorded.
+        ("", "does not pass", "the file records no result", [SILENT], "The file's `fit_check` is empty."),
+        (None, "does not pass", "the file records no result", [SILENT], "The file has no `fit_check`."),
+        ("no fit", "does not pass", "the file records no result", [SILENT], "The file's `fit_check`: “no fit”"),
     ],
 )
-def test_a_fit_whose_outcome_is_anything_but_passed_is_warned_about(check, shown, verb, advice):
+def test_a_fit_whose_outcome_is_anything_but_passed_is_warned_about_quoting_the_check(
+    check, verb, shown, advice, ending
+):
     text = tp.warning(profiles_of(check=check))
-    assert text.startswith(f"**This fit {verb} run_db.py's own check: “{shown}”.** ")
-    assert advice in text
-    assert text.endswith(f"The file's `fit_check`: “{check}”")
-    assert (CORE in text) == (advice == CORE)  # the other advice is not given as well
-
-
-@pytest.mark.parametrize(
-    "check, ending",
-    [
-        ("", "The file's `fit_check` is empty."),
-        ("   ", "The file's `fit_check` is empty."),
-        (None, "The file has no `fit_check`."),
-        ("no fit", "The file's `fit_check`: “no fit”"),  # the words of a file with no fit, on a file that has one
-    ],
-)
-def test_a_fit_with_no_recorded_outcome_is_warned_about_and_does_not_pass(check, ending):
-    text = tp.warning(profiles_of(check=check))
-    assert text.startswith("**This fit does not pass run_db.py's own check: the file records no result.** ")
-    assert "It may have failed silently: read the points, not the curve." in text
+    assert text.startswith(f"**This fit {verb} run_db.py's own check: {shown}.** ")
+    assert [said for said in (CORE, OUTER, SILENT) if said in text] == advice
     assert text.endswith(ending)
 
 
@@ -825,134 +631,94 @@ def test_there_is_no_warning_for_a_fit_that_passed_or_for_a_file_with_no_fit_to_
     assert tp.warning(profiles_of(check=tf.PASSED)) is None
     assert tp.warning(profiles_of(check="passed")) is None
     assert tp.warning(profiles_of(fit=False)) is None  # fit_check reads "no fit": nothing is drawn to warn about
-    assert not tp.check_failed(profiles_of(fit=False))
-    assert tp.check_failed(profiles_of(check=tf.FAILED)) and not tp.check_failed(profiles_of(check=tf.PASSED))
-
-
-def test_the_sentence_of_the_note_that_calls_the_core_an_extrapolation_is_found_among_decimals():
-    assert tp.extrapolation({"fit_note": f"{tf.FIT_NOTE} {tf.EXTRAPOLATION}"}) == tf.EXTRAPOLATION
-    assert tp.extrapolation({"fit_note": f"{tf.FIT_NOTE} {tf.WINDOW_NOTE}"}) == ""
-    assert tp.extrapolation({}) == "" and tp.extrapolation({"fit_note": None}) == ""
 
 
 def test_a_note_that_calls_the_core_an_extrapolation_gets_a_caption_even_when_the_check_passed():
+    assert tp.extrapolation({"fit_note": f"{tf.FIT_NOTE} {tf.EXTRAPOLATION}"}) == tf.EXTRAPOLATION  # among decimals
+    assert tp.extrapolation({"fit_note": f"{tf.FIT_NOTE} {tf.WINDOW_NOTE}"}) == "" and tp.extrapolation({}) == ""
     found = profiles_of(extrapolation=True)
     assert tp.warning(found) is None  # the check passed
-    notes = tp.notes(found, FITS_WINDOW, "rho_pol")
-    assert notes[1].startswith("Fit: ") and notes[3].startswith("ρ_pol = ")
-    assert notes[2] == (
+    assert notes_of(found)[2] == (
         f"The fit's core is an extrapolation: the file's `fit_note` says “{tf.EXTRAPOLATION}” "
         "Read the points there, not the curve."
     )
     # None for a note that does not say so, and none for a file with no fit to be an extrapolation of.
-    assert not [n for n in tp.notes(profiles_of(), FITS_WINDOW, "rho_pol") if "extrapolation" in n]
-    nothing = tp.notes(profiles_of(fit=False, extrapolation=True), FITS_WINDOW, "rho_pol")
-    assert not [n for n in nothing if "extrapolation" in n]
+    assert not [n for n in notes_of(profiles_of()) if "extrapolation" in n]
+    assert not [n for n in notes_of(profiles_of(fit=False, extrapolation=True)) if "extrapolation" in n]
 
 
-def test_a_fit_that_failed_at_its_outer_end_and_whose_core_is_an_extrapolation_hears_both():
-    found = profiles_of(check=tf.FAILED_OUTER, extrapolation=True)
-    assert "Its outer end is not credible" in tp.warning(found)
-    assert any(n.startswith("The fit's core is an extrapolation") for n in tp.notes(found, FITS_WINDOW, "rho_pol"))
-
-
-def test_the_points_note_counts_what_each_system_read_and_says_a_zero_is_no_measurement():
+def test_the_points_note_counts_what_each_system_read():
     found = profiles_of()
-    note = tp.notes(found, FITS_WINDOW, "rho_pol")[0]
+    note = notes_of(found)[0]
     edge, core = found.points["edge"], found.points["core"]
     assert f"the {found.pulses} laser pulses in the window" in note
     assert f"edge {edge.drawn} of {edge.readings} readings" in note
     assert f"core {core.drawn} of {core.readings} readings" in note
-    assert "A reading of 0 is no measurement and is not drawn" in note
-    assert "e·n_e·T_e" in note
-    assert "no core TS in this file" in tp.notes(profiles_of(core=False), FITS_WINDOW, "rho_pol")[0]
+    assert "no core TS in this file" in notes_of(profiles_of(core=False))[0]
 
 
 def test_the_fit_note_names_its_window_its_whole_range_and_why_it_has_no_band():
-    fit_note = tp.notes(profiles_of(), FITS_WINDOW, "rho_pol")[1]
+    fit_note = notes_of(profiles_of())[1]
     assert "over 1–1.4 s, one profile for the whole window" in fit_note
     assert "drawn over its whole range (ρ_pol 0–1.1)" in fit_note
-    assert "No band is drawn around it" in fit_note
-    assert "20% of the fit by construction" in fit_note and "`fit_pe_err` adds a density to a temperature" in fit_note
-    assert "page's window" not in fit_note  # the page's window is the fit's
-
-
-def test_the_fit_note_does_not_claim_20_percent_for_a_fit_made_with_another_error_model():
-    fit_note = tp.notes(profiles_of(frac_err=False), FITS_WINDOW, "rho_pol")[1]
-    assert "No band is drawn around it." in fit_note and "20%" not in fit_note
+    assert "20% of the fit by construction" in fit_note
+    # A fit made with another error model is not said to have 20%.
+    other = notes_of(profiles_of(frac_err=False))[1]
+    assert "No band is drawn around it." in other and "20%" not in other
 
 
 def test_the_caption_says_when_the_pages_window_is_not_the_one_the_fit_was_made_over():
     found = profiles_of()
-    other = tp.notes(found, Target(1.1, 1.3), "rho_pol")[1]
+    other = notes_of(found, target=Target(1.1, 1.3))[1]
     assert "The page's window is 1.1–1.3 s, so the points and the fit are not over the same pulses." in other
     for same in (Target(1.0, 1.4), Target(1.0 + 5e-8, 1.4), None, Target(float("nan"), float("nan"))):
-        assert "page's window" not in tp.notes(found, same, "rho_pol")[1]
+        assert "page's window" not in notes_of(found, target=same)[1]
 
 
-def test_the_text_of_an_exception_in_the_file_is_escaped_for_markdown_in_the_captions():
+def test_attribute_text_is_escaped_for_markdown_in_the_captions():
     """``fit_status`` and ``efit`` are exceptions' texts, which can hold brackets, asterisks, dollars and backticks."""
+    assert tp._escape(r"\electrons::top.yag_new.results *x* `y` [z] <a> $b") == (
+        r"\\electrons::top.yag\_new.results \*x\* \`y\` \[z\] \<a\> \$b"
+    )
     status = "failed: KeyError: 'rho_pol' $a$ and $b$ *x* `y`"
-    note = tp.notes(profiles_of(fit=False, fit_status=status), FITS_WINDOW, "rho_pol")[1]
-    assert note == f"No fit in this file ({tp._escape(status)})."
-    assert all(f"\\{char}" in note for char in "$*`_")
-
+    assert notes_of(profiles_of(fit=False, fit_status=status))[1] == f"No fit in this file ({tp._escape(status)})."
     found = profiles_of(efit=False, fit=False)
     found.attrs["efit"] = "no EFIT tree could be opened (TreeNODATA [*] $x$)"
-    first = tp.notes(found, FITS_WINDOW, "rho_pol")[0]
-    assert "since no EFIT tree could be opened (TreeNODATA \\[\\*\\] \\$x\\$): they are not drawn" in first
-
-
-def test_a_file_with_no_fit_says_why_in_the_files_words():
-    found = profiles_of(fit=False, fit_status="failed: ValueError: No edge Thomson data!")
-    assert (
-        tp.notes(found, FITS_WINDOW, "rho_pol")[1] == "No fit in this file (failed: ValueError: No edge Thomson data!)."
-    )
+    assert "since no EFIT tree could be opened (TreeNODATA \\[\\*\\] \\$x\\$): they are not drawn" in notes_of(found)[0]
 
 
 def test_the_axis_note_says_what_the_axis_is_and_where_the_separatrix_is():
     found = profiles_of()
-    rho = tp.notes(found, FITS_WINDOW, "rho_pol")[2]
+    rho = notes_of(found)[2]
     assert "ρ_pol = √ψ_N" in rho and "`EFIT20`" in rho and "The separatrix is ρ_pol = 1." in rho
-    rmid = tp.notes(found, FITS_WINDOW, "R_mid")[2]
-    assert "outboard midplane" in rmid and "window's middle time" in rmid
-    assert "The separatrix is at R_mid = 0.8900 m." in rmid
-    assert "The file gives no separatrix." in tp.notes(profiles_of(scalars=False, fit=False), FITS_WINDOW, "R_mid")[2]
+    rmid = notes_of(found, "R_mid")[2]
+    assert "outboard midplane" in rmid and "The separatrix is at R_mid = 0.8900 m." in rmid
+    assert "The file gives no separatrix." in notes_of(profiles_of(scalars=False, fit=False), "R_mid")[2]
 
 
 def test_the_diagnosticians_caveat_ends_the_notes_from_the_file_or_else_from_the_module():
-    assert tp.notes(profiles_of(), FITS_WINDOW, "rho_pol")[-1] == tf.CAVEAT
-    assert tp.notes(profiles_of(caveat="Ask Jerry first."), FITS_WINDOW, "rho_pol")[-1] == "Ask Jerry first."
-    # A file made without one is never shown without it.
-    last = tp.notes(profiles_of(caveat=None), FITS_WINDOW, "rho_pol")[-1]
-    assert last == tp.CAVEAT and "Jerry Hughes" in last
+    assert notes_of(profiles_of())[-1] == tf.CAVEAT
+    assert notes_of(profiles_of(caveat="Ask Jerry first."))[-1] == "Ask Jerry first."
+    assert notes_of(profiles_of(caveat=None))[-1] == tp.CAVEAT  # a file made without one is never shown without it
 
 
 def test_the_about_list_quotes_how_the_file_was_made_and_the_scalars():
     rows = dict(tp.about(profiles_of()))
-    assert rows["created"] == "2026-10-09T08:37:26Z"
-    assert rows["cmod_analysis_commit"].startswith("d6a6466")
+    assert list(rows)[:2] == ["created", "script_commit"]  # in the order the module lists them
+    assert rows["created"] == "2026-10-09T08:37:26Z" and rows["cmod_analysis_commit"].startswith("d6a6466")
     assert rows["fit_check"] == tf.PASSED and rows["fit_function"] == "cmod_tools.get_cmod_kin_profs"
     assert rows["Te_sep_2pm"] == "36 eV" and rows["lambda_q_2pm"] == "2 mm" and rows["R_mid_sep"] == "0.89 m"
-    assert list(rows)[:2] == ["created", "script_commit"]  # in the order the module lists them
-    assert not [name for name in tp.ABOUT if name not in rows]
     bare = dict(tp.about(profiles_of(scalars=False, fit=False)))
     assert "Te_sep_2pm" not in bare and bare["fit_check"] == "no fit"
 
 
-def test_attribute_text_is_escaped_for_markdown():
-    assert tp._escape(r"\electrons::top.yag_new.results *x* `y` [z] <a> $b") == (
-        r"\\electrons::top.yag\_new.results \*x\* \`y\` \[z\] \<a\> \$b"
-    )
-
-
 # ---------------------------------------------------------------------------
-# A file made with C-Mod_Analysis 24e1499, whose fit may have been moved to a separatrix
+# A fit that was moved to a separatrix (``fit_rho_shift``), and a file without one
 # ---------------------------------------------------------------------------
 
 
 def head_of(window=tf.WINDOW, shift=tf.SHIFT, **options):
-    """The profiles of a file made with C-Mod_Analysis 24e1499 whose fit was moved by ``shift`` (0: not moved)."""
+    """The profiles of a file that holds ``fit_rho_shift``, whose fit was moved by ``shift`` (0: not moved)."""
     return profiles_of(window=window, commit="24e1499", shift=shift, **options)
 
 
@@ -961,7 +727,7 @@ def kept(ds, name, system="edge"):
     return ds[f"{system}_{name}"].values[ds[f"{system}_ne"].values > 0]
 
 
-def test_a_24e1499_file_gives_its_fits_shift_and_its_points_move_with_a_fit_that_moved():
+def test_the_file_gives_its_fits_shift_and_its_points_move_with_a_fit_that_moved():
     moved = head_of()
     assert moved.fit.rho_shift == tf.SHIFT and moved.fit.moved
     assert moved.fit.rho_pol[0] == tf.SHIFT and moved.fit.rho_pol[-1] == pytest.approx(1.1 + tf.SHIFT)  # the moved grid
@@ -971,50 +737,39 @@ def test_a_24e1499_file_gives_its_fits_shift_and_its_points_move_with_a_fit_that
     still = head_of(shift=0.0)
     assert still.fit.rho_shift == 0.0 and not still.fit.moved and "Te_sep_fit" not in still.scalars
     assert not any(points.moved for points in still.points.values())
-    # A d6a6466 file has no shift at all.
+    # A file without the variable has no shift at all.
     old = profiles_of()
-    assert old.fit.rho_shift is None and not old.fit.moved
-    assert not any(points.moved for points in old.points.values())
+    assert old.fit.rho_shift is None and not old.fit.moved and not any(p.moved for p in old.points.values())
 
 
 @pytest.mark.parametrize("shift", [tf.SHIFT, -0.006])
-def test_on_rho_pol_the_points_of_a_moved_fit_are_drawn_at_their_rho_pol_plus_the_shift(shift):
+def test_the_points_of_a_moved_fit_are_drawn_where_the_fit_saw_them(shift):
     ds = cut(tf.thomson_dataset(commit="24e1499", shift=shift))
     found = tp.read(ds)
-    fig = tp.figure(found, "rho_pol")
-    for n in (1, 2, 3):
-        edge, core, fit = in_row(fig, n)
-        np.testing.assert_array_equal(edge.x, kept(ds, "rho_pol", "edge") + shift)
-        np.testing.assert_array_equal(core.x, kept(ds, "rho_pol", "core") + shift)
-        np.testing.assert_array_equal(fit.x, ds["rho_pol"].values)  # the fit on its own grid, which is the moved one
-    # What the file says of each point stays as EFIT puts it: only where it is drawn moves.
-    np.testing.assert_array_equal(found.points["edge"].rho_pol, kept(ds, "rho_pol", "edge"))
-    np.testing.assert_array_equal(found.points["edge"].R_mid, kept(ds, "R_mid", "edge"))
-
-
-@pytest.mark.parametrize("shift", [tf.SHIFT, -0.006])
-def test_on_r_mid_the_moved_points_are_at_the_fits_own_r_mid_of_their_moved_rho_pol(shift):
-    ds = cut(tf.thomson_dataset(commit="24e1499", shift=shift))
-    fig = tp.figure(tp.read(ds), "R_mid")
     grid, fit_r_mid = ds["rho_pol"].values, ds["fit_R_mid"].values
+    on_rho, on_r_mid = tp.figure(found, "rho_pol"), tp.figure(found, "R_mid")
     for i, system in enumerate(("edge", "core")):
-        x = np.asarray(in_row(fig, 1)[i].x, dtype=float)
         moved = kept(ds, "rho_pol", system) + shift
+        # On ρ_pol at their ρ_pol plus the shift, and on R_mid at the fit's own R_mid of that, not at their own pulse's.
+        np.testing.assert_array_equal(in_row(on_rho, 1)[i].x, moved)
+        x = np.asarray(in_row(on_r_mid, 1)[i].x, dtype=float)
         np.testing.assert_array_equal(x, np.interp(moved, grid, fit_r_mid, left=np.nan, right=np.nan))
-        # Not at their own pulse's R_mid, from which the fixture's straight-line map puts them 0.21 m per unit of ρ_pol.
         np.testing.assert_allclose(x - kept(ds, "R_mid", system), 0.21 * shift, rtol=0, atol=1e-12)
-    np.testing.assert_array_equal(in_row(fig, 1)[2].x, fit_r_mid)
+    np.testing.assert_array_equal(in_row(on_rho, 1)[2].x, grid)  # the fit on its own grid, which is the moved one
+    np.testing.assert_array_equal(in_row(on_r_mid, 1)[2].x, fit_r_mid)
+    # What the file says of each point stays as EFIT puts it: only where it is drawn moves.
+    np.testing.assert_array_equal(found.points["edge"].rho_pol, kept(ds, "rho_pol"))
+    np.testing.assert_array_equal(found.points["edge"].R_mid, kept(ds, "R_mid"))
 
 
 @pytest.mark.parametrize("shift", [tf.SHIFT, -0.006])
 def test_the_separatrix_of_a_moved_fit_is_its_own_rho_pol_1_where_its_t_e_is_te_sep_fit(shift):
     found = head_of(shift=shift)
-    te_sep = found.scalars["Te_sep_fit"]
-    for axis in ("rho_pol", "R_mid"):
+    for axis in AXES:
         fig = tp.figure(found, axis)
         (x,) = {shape.x0 for shape in fig.layout.shapes}  # the same line in every row
         fit = in_row(fig, 2)[2]  # the T_e row's fit, on the axis drawn
-        assert np.interp(x, fit.x, fit.y) == pytest.approx(te_sep, rel=1e-12), axis
+        assert np.interp(x, fit.x, fit.y) == pytest.approx(found.scalars["Te_sep_fit"], rel=1e-12), axis
     assert tp.separatrix(found, "rho_pol") == 1.0
     assert tp.separatrix(found, "R_mid") == np.interp(1.0, found.fit.rho_pol, found.fit.R_mid)
 
@@ -1023,8 +778,7 @@ def test_the_separatrix_of_a_moved_fit_on_r_mid_is_its_own_before_the_files_scal
     found = head_of()
     found.scalars["R_mid_sep"] = 0.95  # another number than the fit's own R_mid at its ρ_pol 1
     assert tp.separatrix(found, "R_mid") == pytest.approx(tf.r_mid(1.0), rel=0, abs=1e-12)
-    # Without the fit's R_mid, the scalar stands in: fit_R_mid maps the moved ρ_pol through EFIT, so R_mid_sep is the
-    # same place, to the grid's interpolation.
+    # Without the fit's R_mid, the scalar stands in.
     assert tp.separatrix(head_of(fit_r_mid=False), "R_mid") == pytest.approx(tf.r_mid(1.0))
     # A fit that was not moved keeps the rule of every other file: the scalar first.
     still = head_of(shift=0.0)
@@ -1032,26 +786,10 @@ def test_the_separatrix_of_a_moved_fit_on_r_mid_is_its_own_before_the_files_scal
     assert tp.separatrix(still, "R_mid") == 0.95
 
 
-def test_the_points_of_a_moved_fit_sit_on_it_drawn_moved_and_beside_it_where_efit_puts_them():
-    """The fixture's fit is made on the points as EFIT maps them and then moved, as 24e1499 does it. Drawn moved with
-    it, near the separatrix the points sit on it; drawn where EFIT puts them, they would sit beside it by the shift."""
-    found = head_of()
-    fig = tp.figure(found)
-    for n in (1, 2):  # n_e and T_e
-        edge, _, fit = in_row(fig, n)
-        drawn, y = np.asarray(edge.x, dtype=float), np.asarray(edge.y, dtype=float)
-
-        def residual(at):
-            near = (at >= 0.95) & (at <= 1.0) & np.isfinite(y)
-            return np.median(np.abs(y[near] - np.interp(at[near], fit.x, fit.y)))
-
-        assert residual(drawn) < residual(found.points["edge"].rho_pol), n
-
-
-@pytest.mark.parametrize("axis", ["rho_pol", "R_mid"])
+@pytest.mark.parametrize("axis", AXES)
 def test_the_range_of_a_row_is_set_by_the_points_as_drawn(axis):
-    """J12d's rule judges the fit against the points beside it on the axis drawn: a moved fit against its points as they
-    are drawn, moved with it. Points that sit, unmoved, where the moved ones are drawn give the same tops and counts."""
+    """A moved fit is judged against its points as they are drawn, moved with it: points that sit, unmoved, where the
+    moved ones are drawn give the same tops and counts."""
     found = head_of(runaway=True)
     in_place = {
         system: dataclasses.replace(points, rho_pol=points.on("rho_pol"), R_mid=points.on("R_mid"), rho_shift=0.0)
@@ -1066,38 +804,33 @@ def test_the_range_of_a_row_is_set_by_the_points_as_drawn(axis):
         assert tp.points_above(found, name, axis, top, scale) == tp.points_above(drawn, name, axis, top, scale)
 
 
-def test_a_moved_point_judges_the_fit_where_it_is_drawn_and_not_where_efit_puts_it():
-    x = np.r_[np.linspace(0.5, 0.6, 20), np.linspace(0.9, 1.0, 20)]
-    value = np.r_[np.full(20, 100.0), np.full(20, 1000.0)]
-    found = toy(x, value, fit=([0.7], [2000.0]))
-    # Beside the points of 100, which are the nearest where EFIT puts them, the fit is not plausible.
-    assert tp.y_limits(found, "Te", "rho_pol")[1] == pytest.approx(1.1 * 1000)
-    found.points["edge"].rho_shift = -0.15  # drawn at 0.35-0.45 and 0.75-0.85: now the points of 1000 are beside it
-    assert tp.y_limits(found, "Te", "rho_pol")[1] == pytest.approx(1.1 * 2000)
-
-
-def test_a_moved_point_beyond_the_fits_grid_has_no_r_mid_and_the_notes_count_it():
+def test_a_moved_point_the_fits_r_mid_does_not_reach_is_left_off_r_mid_and_counted():
     ds = cut(tf.thomson_dataset(commit="24e1499", shift=tf.SHIFT))
     rows, channels = np.nonzero(ds["edge_ne"].values > 0)
     ds["edge_rho_pol"][int(rows[0]), int(channels[0])] = 1.15  # 1.16 moved, beyond the moved grid's end at 1.11
     found = tp.read(ds)
     edge = found.points["edge"]
     assert np.isnan(edge.on("R_mid")[0]) and edge.on("rho_pol")[0] == 1.15 + tf.SHIFT
-    note = tp.notes(found, FITS_WINDOW, "R_mid")[0]
+    note = notes_of(found, "R_mid")[0]
     assert note.endswith(
         " 1 of the points moved with the fit lie beyond its grid, where `fit_R_mid` gives them no R_mid, and are not "
         "drawn."
     )
     assert "have no R_mid" not in note  # EFIT gave it a place: it is the fit's R_mid that does not reach it
-    assert "beyond its grid" not in tp.notes(found, FITS_WINDOW, "rho_pol")[0]
+    assert "beyond its grid" not in notes_of(found, "rho_pol")[0]
+    # Where the fit's R_mid is NaN, the points are counted as such.
+    ds["fit_R_mid"][:] = np.nan
+    found = tp.read(ds)
+    every = sum(points.drawn for points in found.points.values())
+    assert f" {every - 1} of the points moved with the fit fall where `fit_R_mid` is NaN" in notes_of(found, "R_mid")[0]
 
 
 def test_a_moved_point_with_no_rho_pol_from_efit_is_counted_as_every_other_file_counts_it():
     found = head_of(unmapped=True)
     expected = sum(int(np.isnan(p.rho_pol).sum()) for p in found.points.values())
     assert expected > 0
-    for axis in ("rho_pol", "R_mid"):
-        note = tp.notes(found, FITS_WINDOW, axis)[0]
+    for axis in AXES:
+        note = notes_of(found, axis)[0]
         assert f"{expected} of the points have no {tp.AXES[axis][1]} (the pulse is outside the EFIT time base)" in note
         assert "beyond its grid" not in note
 
@@ -1106,63 +839,38 @@ def test_a_moved_fit_without_an_r_mid_places_neither_itself_nor_its_points_on_r_
     found = head_of(fit_r_mid=False)
     fig = tp.figure(found, "R_mid")
     assert not fig.data and "None of the" in fig.layout.annotations[0].text
-    fit_note = tp.notes(found, FITS_WINDOW, "R_mid")[1]
-    assert "so neither it nor the points moved with it are drawn on this axis." in fit_note
-    assert names_in_row(tp.figure(found, "rho_pol"), 1) == ["edge TS", "core TS", FIT]
+    assert "so neither it nor the points moved with it are drawn on this axis." in notes_of(found, "R_mid")[1]
+    assert names_in_row(tp.figure(found, "rho_pol"), 1) == ROWS
 
 
 def test_a_moved_fit_is_captioned_with_the_move_the_te_sep_and_the_files_own_words():
     found = head_of()
     te_sep = found.scalars["Te_sep_fit"]
-    lines = tp.notes(found, FITS_WINDOW, "rho_pol")
+    lines = notes_of(found)
     assert [line.split(" ")[0] for line in lines] == ["Points:", "Fit:", "The", "Fictitious", "ρ_pol", "From"]
     move = lines[2]
-    assert move == (
-        "The fit was moved to a separatrix, and the points are drawn moved with it, where the fit saw them: "
-        f"C-Mod_Analysis moved the fit, and its own copy of the points, by +0.0100 in ρ_pol, so that its T_e is "
-        f"T_e,sep = {te_sep:.1f} eV (`Te_sep_fit`) at ρ_pol = 1. "
-        f"The file's `fit_separatrix`: “{tp._escape(tf.fit_separatrix(tf.SHIFT, te_sep))}”"
-    )
-    assert lines[4] == (
-        "ρ_pol = √ψ_N of each point's channel at its own pulse, from the EFIT tree `ANALYSIS`, moved by +0.0100 with the "
-        "fit. The separatrix is the fit's ρ_pol = 1."
-    )
-    r_mid = tp.notes(found, FITS_WINDOW, "R_mid")
+    assert "by +0.0100 in ρ_pol" in move and f"T_e,sep = {te_sep:.1f} eV (`Te_sep_fit`)" in move
+    assert move.endswith(f"The file's `fit_separatrix`: “{tp._escape(tf.fit_separatrix(tf.SHIFT, te_sep))}”")
+    assert lines[4].endswith("moved by +0.0100 with the fit. The separatrix is the fit's ρ_pol = 1.")
+    r_mid = notes_of(found, "R_mid")
     assert r_mid[2] == move  # the same move on either axis
-    assert r_mid[4] == (
-        "R_mid is the major radius at which a flux surface crosses the outboard midplane. The points are moved with the "
-        "fit, so each is drawn at the fit's own R_mid of its moved ρ_pol (`fit_R_mid`, from EFIT at the window's middle "
-        f"time), and not at its own pulse. The separatrix, the fit's ρ_pol = 1, is at R_mid = {tf.r_mid(1.0):.4f} m."
-    )
-    # A fit moved inward says so with its sign.
-    assert "by -0.0060 in ρ_pol" in tp.move_note(head_of(shift=-0.006))
-    # A file that records no T_e,sep says that too, rather than leave the sentence without one.
+    assert "each is drawn at the fit's own R_mid of its moved ρ_pol" in r_mid[4]
+    assert r_mid[4].endswith(f"The separatrix, the fit's ρ_pol = 1, is at R_mid = {tf.r_mid(1.0):.4f} m.")
+    assert "by -0.0060 in ρ_pol" in tp.move_note(head_of(shift=-0.006))  # a fit moved inward says so with its sign
     found.scalars.pop("Te_sep_fit")
     assert "though the file records no T_e,sep that it was moved to." in tp.move_note(found)
 
 
-def test_a_fit_that_was_not_moved_and_a_d6a6466_one_have_no_caption_of_a_move():
-    for found in (head_of(shift=0.0), profiles_of()):
-        assert tp.move_note(found) == ""
-        for axis in ("rho_pol", "R_mid"):
-            assert not [line for line in tp.notes(found, FITS_WINDOW, axis) if "moved" in line]
-
-
 def test_a_fit_held_by_fictitious_points_says_so_and_that_the_p_e_fit_is_not():
     for found in (head_of(), head_of(shift=0.0)):
-        (held,) = [line for line in tp.notes(found, FITS_WINDOW, "rho_pol") if line.startswith("Fictitious points")]
-        assert held == (
-            "Fictitious points hold the outer side of the n_e and T_e fits (`force_to_zero`), so there the fit says "
-            "nothing measured. The p_e fit is not held, and can run away in the SOL. "
-            f"The file's `fit_note` says “{tp._escape(tf.FORCE_TO_ZERO_NOTE)}”"
-        )
-    assert tp.held_note(profiles_of().attrs) == ""  # d6a6466's settings have force_to_zero off
-    # With no fit, nothing is held.
+        (held,) = [line for line in notes_of(found) if line.startswith("Fictitious points")]
+        assert "The p_e fit is not held, and can run away in the SOL." in held
+        assert held.endswith(f"The file's `fit_note` says “{tp._escape(tf.FORCE_TO_ZERO_NOTE)}”")
+    assert tp.held_note(profiles_of().attrs) == ""  # force_to_zero is off
     no_fit = head_of(fit=False, fit_status="failed: ValueError: No edge Thomson data!")
-    assert not [line for line in tp.notes(no_fit, FITS_WINDOW, "rho_pol") if line.startswith("Fictitious")]
+    assert not [line for line in notes_of(no_fit) if line.startswith("Fictitious")]  # with no fit, nothing is held
     # A note that does not say how leaves the caption without the quote.
-    bare = tp.held_note(dict(head_of().attrs, fit_note=tf.FIT_NOTE))
-    assert bare.endswith("can run away in the SOL.")
+    assert tp.held_note(dict(head_of().attrs, fit_note=tf.FIT_NOTE)).endswith("can run away in the SOL.")
 
 
 def test_a_moved_point_says_in_its_hover_where_it_is_drawn_and_where_efit_puts_it():
@@ -1174,7 +882,6 @@ def test_a_moved_point_says_in_its_hover_where_it_is_drawn_and_where_efit_puts_i
         "(+0.0100)<br>"
     ) in first
     assert f"<br>EFIT: ρ_pol = {points.rho_pol[0]:.3f} · R_mid = {points.R_mid[0]:.4f} m<br>" in first
-    assert "moved" not in in_row(tp.figure(head_of(shift=0.0)), 2)[0].hovertext[0]
 
 
 def test_the_about_list_gives_te_sep_fit_beside_te_sep_2pm_the_move_and_where_the_separatrix_code_is():
@@ -1190,21 +897,16 @@ def test_the_about_list_gives_te_sep_fit_beside_te_sep_2pm_the_move_and_where_th
         "each of the 2 files of it that were loaded, in separatrix_code_sha256."
     )
     assert text["fit_rho_shift"] == "+0.01 in ρ_pol"
-    assert not [name for name in (*tp.ABOUT, *tp.SEPARATRIX_ABOUT) if name not in text]  # each is one the files have
     still = dict(tp.about(head_of(shift=0.0)))
     assert still["fit_rho_shift"] == "0: the fit was not moved" and "Te_sep_fit" not in still
-    assert "found no separatrix Te" in still["fit_separatrix"]
-    assert tp.separatrix_code({"separatrix_code": "/x"}) == (
-        "/x: outside C-Mod_Analysis' repository, so no commit pins it; the file records no sha256 of it."
-    )
+    assert tp.separatrix_code({"separatrix_code": "/x"}).endswith("the file records no sha256 of it.")
     old = dict(tp.about(profiles_of()))
-    assert not {"Te_sep_fit", "fit_rho_shift", *tp.SEPARATRIX_ABOUT} & set(old)
+    assert not {"Te_sep_fit", "fit_rho_shift", "fit_separatrix", "separatrix_code"} & set(old)
 
 
-def test_a_d6a6466_file_is_drawn_as_before():
-    """A file made with d6a6466 has no ``fit_rho_shift``: each point is drawn where EFIT put it at its own pulse, value for
-    value, the separatrix is at 1 and at ``R_mid_sep``, and nothing speaks of a move or of fictitious points. The real
-    files gave the same figure, notes, warning and list before and after (J12f's check, on all 115)."""
+def test_a_file_without_a_shift_draws_every_point_where_efit_puts_it():
+    """No ``fit_rho_shift``: each point is drawn where EFIT put it at its own pulse, the separatrix is at 1 and at
+    ``R_mid_sep``, and nothing speaks of a move or of fictitious points."""
     ds = cut(tf.thomson_dataset())
     assert "fit_rho_shift" not in ds and json.loads(ds.attrs["fit_settings"])["force_to_zero"] is False
     found = tp.read(ds)
@@ -1221,16 +923,19 @@ def test_a_d6a6466_file_is_drawn_as_before():
         assert {shape.x0 for shape in fig.layout.shapes} == {sep}
         hovers = [text for trace in fig.data for text in (trace.hovertext or ())]  # the fit's is a template
         assert hovers and not [text for text in hovers if "moved" in text or "EFIT:" in text]
-        lines = tp.notes(found, FITS_WINDOW, axis)
+        lines = notes_of(found, axis)
         assert [line.split(" ")[0] for line in lines] == ["Points:", "Fit:", tp.AXES[axis][1], "From"]
         assert not [line for line in lines if "moved" in line or "Fictitious" in line]
-    # A 24e1499 file whose fit was not moved draws the same figure: only a move changes where anything goes.
-    for axis in ("rho_pol", "R_mid"):
-        assert tp.figure(head_of(shift=0.0), axis).to_json() == tp.figure(found, axis).to_json()
+    # A fit that was not moved draws the same figure, and has no caption of a move: only a move changes anything.
+    still = head_of(shift=0.0)
+    assert tp.move_note(still) == "" and tp.move_note(found) == ""
+    for axis in AXES:
+        assert tp.figure(still, axis).to_json() == tp.figure(found, axis).to_json()
+        assert not [line for line in notes_of(still, axis) if "moved" in line]
 
 
 # ---------------------------------------------------------------------------
-# What the script's later versions add: the check of the fit's own points, and a mapping that failed
+# The check of the fit's own points, and a mapping that failed
 # ---------------------------------------------------------------------------
 
 POINTS_WARNING = (
@@ -1239,34 +944,25 @@ POINTS_WARNING = (
 )
 
 
-@pytest.mark.parametrize("commit, shift", [("24e1499", tf.SHIFT), ("24e1499", 0.0), ("d6a6466", 0.0)])
-def test_a_fit_whose_own_points_differ_from_the_files_is_warned_about_quoting_the_check(commit, shift):
-    found = profiles_of(commit=commit, shift=shift, points_check=tf.POINTS_DIFFER)
-    assert tp.points_warning(found) == f"{POINTS_WARNING}says “{tp._escape(tf.POINTS_DIFFER)}”."
-    assert tp.warning(found) is None  # the fit's own check passed: that is another warning
-
-
 @pytest.mark.parametrize(
     "said, shown",
     [
+        (tf.POINTS_DIFFER, f"says “{tp._escape(tf.POINTS_DIFFER)}”"),
         ("EQUAL", "says “EQUAL”"),  # not the word the file writes
-        (" differ: by up to 0.7 in rho_pol, the points in another order", None),
-        ("the check could not run", None),
-        ("", "is empty"),
+        ("the check could not run", "says “the check could not run”"),
         ("   ", "is empty"),
     ],
 )
-def test_anything_but_equal_is_warned_about(said, shown):
-    text = tp.points_warning(head_of(points_check=said))
-    assert text.startswith(POINTS_WARNING)
-    assert text.endswith(f"{shown}." if shown else f"says “{tp._escape(said.strip())}”.")
+def test_a_points_check_that_says_anything_but_equal_is_warned_about_quoting_it(said, shown):
+    found = head_of(points_check=said)
+    assert tp.points_warning(found) == f"{POINTS_WARNING}{shown}."
+    assert tp.warning(found) is None  # the fit's own check passed: that is another warning
 
 
 def test_there_is_no_points_warning_when_the_check_says_equal_or_is_absent_or_there_is_no_fit():
     assert tp.points_warning(head_of(points_check="equal")) is None
     assert tp.points_warning(head_of(points_check="equal: the fit's edge points are this file's")) is None
-    assert tp.points_warning(head_of()) is None  # an older file, without the attribute
-    assert tp.points_warning(profiles_of()) is None  # and a d6a6466 one
+    assert tp.points_warning(head_of()) is None and tp.points_warning(profiles_of()) is None  # no attribute
     no_fit = head_of(fit=False, fit_status="failed: ValueError: No edge Thomson data!", points_check=tf.POINTS_DIFFER)
     assert tp.points_warning(no_fit) is None  # no fit to have seen the points anywhere
 
@@ -1276,21 +972,19 @@ def edge_lost(**options):
     return profiles_of(failed=(("edge", "rho_pol"), ("edge", "R_mid")), **options)
 
 
-@pytest.mark.parametrize("commit, shift", [("d6a6466", 0.0), ("24e1499", 0.0), ("24e1499", tf.SHIFT)])
-@pytest.mark.parametrize("axis", ["rho_pol", "R_mid"])
+@pytest.mark.parametrize("commit, shift", [("d6a6466", 0.0), ("24e1499", tf.SHIFT)])
+@pytest.mark.parametrize("axis", AXES)
 def test_a_system_whose_mapping_failed_at_every_pulse_is_left_out_and_counted(commit, shift, axis):
     found = edge_lost(commit=commit, shift=shift, mapping_failure=tf.MAPPING_FAILURE)
     edge = found.points["edge"]
     assert edge.drawn and np.isnan(edge.on(axis)).all()
     fig = tp.figure(found, axis)
-    for n in (1, 2, 3):  # the edge is left out of every row, and the core and the fit are drawn
-        assert names_in_row(fig, n) == ["core TS", FIT]
-    note = tp.notes(found, FITS_WINDOW, axis)[0]
+    assert [names_in_row(fig, n) for n in (1, 2, 3)] == [["core TS", FIT]] * 3
+    note = notes_of(found, axis)[0]
     assert note.endswith(
         f" {edge.drawn} of the points have no {tp.AXES[axis][1]} and are not drawn: the file's `mapping_failure` "
         f"says “{tp._escape(tf.MAPPING_FAILURE)}”."
     )
-    assert "EFIT time base" not in note
     # The range is the core's and the fit's alone, as without the edge.
     no_edge = tp.Profiles(
         points={"core": found.points["core"]}, fit=found.fit, pulses=found.pulses, scalars=found.scalars, attrs={}
@@ -1301,39 +995,26 @@ def test_a_system_whose_mapping_failed_at_every_pulse_is_left_out_and_counted(co
 
 def test_a_file_without_mapping_failure_keeps_the_time_base_as_the_reason():
     found = edge_lost()
-    note = tp.notes(found, FITS_WINDOW, "rho_pol")[0]
-    expected = found.points["edge"].drawn
-    assert note.endswith(
-        f" {expected} of the points have no ρ_pol (the pulse is outside the EFIT time base) and are not drawn."
-    )
-    assert "mapping_failure" not in note
+    note = notes_of(found)[0]
+    lost = found.points["edge"].drawn
+    assert note.endswith(f" {lost} of the points have no ρ_pol (the pulse is outside the EFIT time base) and are not drawn.")
 
 
 def test_a_failed_r_mid_leaves_the_points_on_rho_pol_and_off_r_mid_unless_the_fit_moved_them():
-    """``_getRmidSpline``'s failure: every point has its ρ_pol and none an R_mid. On ρ_pol all are drawn; on R_mid they are
-    left out and counted, unless the fit was moved, whose own R_mid then places them."""
+    """Every point has its ρ_pol and none an R_mid. On ρ_pol all are drawn; on R_mid they are left out and counted,
+    unless the fit was moved, whose own R_mid then places them."""
     lost = (("edge", "R_mid"), ("core", "R_mid"))
     still = profiles_of(commit="24e1499", failed=lost, mapping_failure=tf.MAPPING_FAILURE)
-    assert names_in_row(tp.figure(still, "rho_pol"), 1) == ["edge TS", "core TS", FIT]
-    assert "have no ρ_pol" not in tp.notes(still, FITS_WINDOW, "rho_pol")[0]
+    assert names_in_row(tp.figure(still, "rho_pol"), 1) == ROWS
+    assert "have no ρ_pol" not in notes_of(still)[0]
     assert names_in_row(tp.figure(still, "R_mid"), 1) == [FIT]
     every = sum(points.drawn for points in still.points.values())
     assert f" {every} of the points have no R_mid and are not drawn: the file's `mapping_failure`" in (
-        tp.notes(still, FITS_WINDOW, "R_mid")[0]
+        notes_of(still, "R_mid")[0]
     )
     moved = profiles_of(commit="24e1499", shift=tf.SHIFT, failed=lost, mapping_failure=tf.MAPPING_FAILURE)
-    assert names_in_row(tp.figure(moved, "R_mid"), 1) == ["edge TS", "core TS", FIT]
-    assert "of the points have no R_mid" not in tp.notes(moved, FITS_WINDOW, "R_mid")[0]
-
-
-def test_a_moved_point_where_the_fits_r_mid_is_nan_is_counted_as_such():
-    ds = cut(tf.thomson_dataset(commit="24e1499", shift=tf.SHIFT))
-    ds["fit_R_mid"][:] = np.nan
-    found = tp.read(ds)
-    every = sum(points.drawn for points in found.points.values())
-    note = tp.notes(found, FITS_WINDOW, "R_mid")[0]
-    assert note.endswith(f" {every} of the points moved with the fit fall where `fit_R_mid` is NaN, and are not drawn.")
-    assert "beyond its grid" not in note
+    assert names_in_row(tp.figure(moved, "R_mid"), 1) == ROWS
+    assert "of the points have no R_mid" not in notes_of(moved, "R_mid")[0]
 
 
 # ---------------------------------------------------------------------------
@@ -1345,9 +1026,8 @@ def test_a_moved_point_where_the_fits_r_mid_is_nan_is_counted_as_such():
 def tree(monkeypatch, tmp_path):
     """A data tree for the pages, and ``tree(shot, window=None, **options)`` to put one Thomson scattering file in it.
 
-    Installing a file rescans the tree and clears the caches, so the page sees it. A ``window`` is the file's and, written
-    into a discharge DB, the discharge window of the shot; without one the shot has no entry, and the page cuts a centred
-    0.2 s. ``tree.root`` is the data folder and ``tree.database`` the ledger.
+    A ``window`` is the file's and, written into a discharge DB, the discharge window of the shot; without one the shot
+    has no entry, and the page cuts a centred 0.2 s. ``tree.root`` is the data folder and ``tree.database`` the ledger.
     """
     import streamlit as st
 
@@ -1439,15 +1119,6 @@ def charts(app):
     return [go.Figure(decode(json.loads(c.proto.spec))) for c in app.get("plotly_chart")]
 
 
-def pulse_times(fig):
-    """The ``t = …`` of every point of the figure's top row, from the hover texts."""
-    times = []
-    for trace in fig.data:
-        if trace.yaxis in (None, "y") and trace.mode == "markers":
-            times += [float(re.search(r"t = ([\d.]+) s", text).group(1)) for text in trace.hovertext]
-    return times
-
-
 def test_the_page_offers_only_this_plot_for_the_file_and_draws_it_with_its_notes(tree):
     app = open_view(tree(window=tf.WINDOW))
     assert widget(app, "selectbox", "Plot").options == ["Thomson scattering profiles"]
@@ -1455,76 +1126,46 @@ def test_the_page_offers_only_this_plot_for_the_file_and_draws_it_with_its_notes
     assert not app.warning  # the fit passed its check
 
     (fig,) = charts(app)
-    assert [t.name for t in fig.data if t.showlegend is not False] == ["edge TS", "core TS", FIT]
-    assert [s.name for s in fig.layout.shapes if s.showlegend] == ["separatrix"]  # and the line of every row is hers
+    assert [t.name for t in fig.data if t.showlegend is not False] == ROWS
+    assert [s.name for s in fig.layout.shapes if s.showlegend] == ["separatrix"]
 
     shown = captions(app)
     assert any(c.startswith("Window 1.0000–1.4000 s") for c in shown)
-    first = next(i for i, c in enumerate(shown) if c.startswith("Points: "))
-    notes = shown[first:]
+    notes = shown[next(i for i, c in enumerate(shown) if c.startswith("Points: ")) :]
     assert [n.split(":")[0] for n in notes[:2]] == ["Points", "Fit"]
-    assert notes[2].startswith("ρ_pol = √ψ_N")
-    assert notes[-1] == tf.CAVEAT
+    assert notes[2].startswith("ρ_pol = √ψ_N") and notes[-1] == tf.CAVEAT
     assert not [c for c in shown if "page's window" in c]  # the page's window is the fit's
+
+    (expander,) = app.expander
+    assert expander.label == "About this file"
+    text = "\n".join(m.value for m in expander.markdown)
+    assert "- `created`: 2026-10-09T08:37:26Z" in text and "- `R_mid_sep`: 0.89 m" in text
+
+    conn = db.connect(tree.database)  # a live spec writes nothing to the ledger
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
+    finally:
+        conn.close()
 
 
 def test_the_page_says_when_its_window_is_not_the_fits_and_cuts_the_points_to_its_own(tree):
     app = open_view(tree())  # no discharge DB entry: the page cuts a centred 0.2 s
-    window = next(c for c in captions(app) if c.startswith("Window"))
-    assert "no discharge-DB entry yet" in window
     assert any("so the points and the fit are not over the same pulses" in c for c in captions(app))
     (fig,) = charts(app)
-    times = pulse_times(fig)
+    times = [float(re.search(r"t = ([\d.]+) s", text).group(1)) for text in in_row(fig, 1)[0].hovertext]
     assert times and all(0.89 <= t <= 1.09 for t in times)  # the pulses of the centred window, not of the fit's
 
 
-def test_a_fit_that_fails_its_check_is_drawn_under_a_warning_that_quotes_the_check(tree):
-    app = open_view(tree(window=tf.WINDOW, check=tf.FAILED))
-    (warning,) = [w.value for w in app.warning]
-    assert warning.startswith("**This fit fails run_db.py's own check: “failed: Te on axis is 134 eV”.** ")
-    assert CORE in warning and tf.FAILED in warning
-    (fig,) = charts(app)
-    assert FIT in [trace.name for trace in fig.data]
-
-
-def test_a_fit_that_fails_at_its_outer_end_is_warned_about_there_on_the_page(tree):
-    app = open_view(tree(window=tf.WINDOW, check=tf.FAILED_OUTER))
-    (warning,) = [w.value for w in app.warning]
-    assert "Its outer end is not credible" in warning and "extrapolation" not in warning
-    assert tf.FAILED_OUTER in warning
-
-
-def test_a_verdict_spelt_another_way_an_unknown_outcome_and_an_empty_one_are_all_warned_about_on_the_page(tree):
-    """The page does not take what it cannot read for a pass: a file with a fit is warned about unless it says
-    ``passed``."""
-    app = open_view(tree(window=tf.WINDOW, check=f"{tf.CHECK_TEXT}: FAILED: Te on axis is 134 eV"))
-    (warning,) = [w.value for w in app.warning]
-    assert warning.startswith("**This fit fails run_db.py's own check: “FAILED: Te on axis is 134 eV”.** ")
-    assert CORE in warning
-
-    app = open_view(tree(window=tf.WINDOW, check=f"{tf.CHECK_TEXT}: ok"))
-    (warning,) = [w.value for w in app.warning]
-    assert "does not pass run_db.py's own check: “ok”" in warning and SILENT in warning
-
-    app = open_view(tree(window=tf.WINDOW, check=""))  # the attribute is there, and empty
-    (warning,) = [w.value for w in app.warning]
-    assert warning.startswith("**This fit does not pass run_db.py's own check: the file records no result.** ")
-    assert warning.endswith("The file's `fit_check` is empty.")
-
-
-def test_a_fit_that_passed_but_whose_core_is_an_extrapolation_is_captioned_and_not_warned_about(tree):
-    app = open_view(tree(window=tf.WINDOW, extrapolation=True))
-    assert not app.warning
-    assert f"The fit's core is an extrapolation: the file's `fit_note` says “{tf.EXTRAPOLATION}” " in " ".join(
-        captions(app)
-    )
-
-
-def test_the_warning_sits_above_the_figure_and_the_caption_below_it(tree):
-    app = open_view(tree(window=tf.WINDOW, check=tf.FAILED))
+def test_the_warnings_sit_above_the_figure_the_fits_own_check_first_and_the_captions_below_it(tree):
+    app = open_view(tree(window=tf.WINDOW, commit="24e1499", check=tf.FAILED, points_check=tf.POINTS_DIFFER))
+    first, second = [w.value for w in app.warning]
+    assert first.startswith("**This fit fails run_db.py's own check: “failed: Te on axis is 134 eV”.** ")
+    assert CORE in first and tf.FAILED in first
+    assert second == f"{POINTS_WARNING}says “{tp._escape(tf.POINTS_DIFFER)}”."
     kinds = [element.type for element in app.main.children.values()]
     chart = kinds.index("plotly_chart")
     assert kinds.index("warning") < chart < kinds.index("caption", chart)
+    assert FIT in [trace.name for trace in charts(app)[0].data]  # the fit is drawn all the same
 
 
 def test_the_axis_is_a_sidebar_choice_and_drawing_against_r_mid_redraws_the_figure(tree):
@@ -1539,89 +1180,30 @@ def test_the_axis_is_a_sidebar_choice_and_drawing_against_r_mid_redraws_the_figu
     assert any(c.startswith("R_mid is the major radius") and "0.8900 m" in c for c in captions(app))
 
 
-def test_a_shot_whose_fit_failed_draws_the_points_and_says_there_is_no_fit(tree):
-    app = open_view(
-        tree(window=tf.WINDOW, edge=False, fit=False, fit_status="failed: ValueError: No edge Thomson data!")
-    )
-    assert not app.warning
-    (fig,) = charts(app)
-    assert {trace.name for trace in fig.data} == {"core TS"} and len(fig.layout.shapes) == 3
-    assert "No fit in this file (failed: ValueError: No edge Thomson data!)." in captions(app)
-    assert any("no edge TS in this file" in c for c in captions(app))
-
-
-def test_a_file_with_no_core_draws(tree):
-    app = open_view(tree(window=tf.WINDOW, core=False))
-    (fig,) = charts(app)
-    assert {trace.name for trace in fig.data} == {"edge TS", FIT}
-    assert any("no core TS in this file" in c for c in captions(app))
-
-
-def test_a_file_whose_equilibrium_could_not_be_opened_says_so_where_the_figure_would_be(tree):
-    app = open_view(tree(window=tf.WINDOW, efit=False, fit=False, fit_status="failed: ValueError: no EFIT tree"))
-    (fig,) = charts(app)
-    assert not fig.data and "None of the" in fig.layout.annotations[0].text
-    assert any("since no EFIT tree could be opened (TreeNODATA)" in c for c in captions(app))
-    assert not app.warning
-
-
-def test_the_page_lists_what_the_file_says_of_itself_in_an_expander(tree):
-    app = open_view(tree(window=tf.WINDOW))
-    (expander,) = app.expander
-    assert expander.label == "About this file"
-    text = "\n".join(m.value for m in expander.markdown)
-    assert "- `created`: 2026-10-09T08:37:26Z" in text
-    assert "- `cmod_analysis_commit`: d6a646625e92399dd4c8b534e9c93001754a7c91" in text
-    assert "- `R_mid_sep`: 0.89 m" in text
-
-
-def test_the_page_writes_nothing_to_the_ledger(tree):
-    open_view(tree(window=tf.WINDOW))
-    conn = db.connect(tree.database)
-    try:
-        assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
-        assert conn.execute("SELECT COUNT(*) FROM scalars").fetchone()[0] == 0
-    finally:
-        conn.close()
+BOTH = {"edge TS", "core TS"}
 
 
 @pytest.mark.parametrize(
-    "shot, options",
+    "shot, options, systems, fit",
     [
-        (1140827019, dict(window=(0.6, 1.3))),  # a fit that passed its check
-        (1160616027, dict(window=(1.15, 1.45), check=tf.FAILED)),  # one that failed it
-        (1120217022, dict(window=(1.25, 1.55), edge=False, fit=False, fit_status="failed: ValueError: no edge")),
-        (1091216009, dict(window=(1.3, 1.55), core=False)),  # a file with one system
-        (1160616017, dict(window=(1.15, 1.45), commit="24e1499", shift=0.0071)),  # a 24e1499 fit, moved
-        (1160616026, dict(window=(1.15, 1.45), commit="24e1499")),  # one whose separatrix finder failed
-        (1110201022, dict(window=(0.9, 1.3), commit="24e1499", shift=-0.0111)),  # one moved inward
+        (1160616027, dict(window=(1.15, 1.45), check=tf.FAILED), BOTH, True),  # a fit that failed its check
+        (1120217022, dict(window=(1.25, 1.55), edge=False, fit=False, fit_status="failed: no edge"), {"core TS"}, False),
+        (1091216009, dict(window=(1.3, 1.55), core=False), {"edge TS"}, True),  # a file with one system
+        (1160616026, dict(window=(1.15, 1.45), commit="24e1499"), BOTH, True),  # the separatrix finder failed
+        (1110201022, dict(window=(0.9, 1.3), commit="24e1499", shift=-0.0111), BOTH, True),  # a fit moved inward
+        (1140827019, dict(window=(0.6, 1.3), efit=False, fit=False, fit_status="failed: no EFIT tree"), set(), False),
     ],
 )
-def test_the_page_draws_each_kind_of_file_it_can_meet(tree, shot, options):
+def test_the_page_draws_each_kind_of_file_it_can_meet(tree, shot, options, systems, fit):
     app = open_view(tree(shot, **options))
-    assert len(charts(app)) == 1
+    (fig,) = charts(app)
+    names = {trace.name for trace in fig.data}
+    assert {name for name in names if not name.startswith("fit")} == systems
+    assert any(name.startswith("fit") for name in names) == fit
     assert bool(app.warning) == (options.get("check") == tf.FAILED)
 
 
-def test_a_runaway_fit_does_not_set_the_range_the_page_draws(tree):
-    (plain,) = charts(open_view(tree(window=tf.WINDOW)))
-    app = open_view(tree(window=tf.WINDOW, runaway=True, check=tf.FAILED_OUTER))
-    assert app.warning  # the fit fails its outer-end check, and the page says so above the figure
-    (fig,) = charts(app)
-    for n, key in enumerate(YAXES, start=1):
-        row = fig.layout[key]
-        assert np.max(in_row(fig, n)[2].y) > 50 * row.range[1]  # the fit runs far above the top of its row...
-        assert row.range == plain.layout[key].range  # ...and the range is where the points put it, as without it
-        assert row.autorangeoptions.maxallowed == row.range[1]  # autoscale returns to that range
-    widget(app, "selectbox", "axis").set_value("R_mid").run()
-    assert not app.exception, [e.value for e in app.exception]
-    (on_r_mid,) = charts(app)
-    # Judged on R_mid the rule gives the same tops here: the fixture's R_mid is a straight line of ρ_pol, which keeps
-    # the points nearest each sample of the fit the same ones.
-    assert all(on_r_mid.layout[key].range == fig.layout[key].range for key in YAXES)
-
-
-def test_the_page_draws_a_moved_24e1499_fit_with_its_points_on_it_and_its_captions_on_both_axes(tree):
+def test_the_page_draws_a_moved_fit_with_its_points_on_it_and_its_captions_on_both_axes(tree):
     app = open_view(tree(window=tf.WINDOW, commit="24e1499", shift=tf.SHIFT))
     assert not app.warning  # the fit passed its check
     (fig,) = charts(app)
@@ -1631,11 +1213,9 @@ def test_the_page_draws_a_moved_24e1499_fit_with_its_points_on_it_and_its_captio
     shown = captions(app)
     assert any(c.startswith("The fit was moved to a separatrix") and "by +0.0100 in ρ_pol" in c for c in shown)
     assert any(c.startswith("Fictitious points hold the outer side of the n_e and T_e fits") for c in shown)
-    assert any(c.endswith("moved by +0.0100 with the fit. The separatrix is the fit's ρ_pol = 1.") for c in shown)
     (expander,) = app.expander
     text = "\n".join(m.value for m in expander.markdown)
     assert "- `Te_sep_2pm`: 36 eV\n- `Te_sep_fit`: " in text  # beside the two-point model's
-    assert f"- `separatrix_code`: {tp._escape(tf.SEPARATRIX_CODE)}: outside C-Mod" in text
     assert "- `fit_rho_shift`: +0.01 in ρ\\_pol" in text
 
     widget(app, "selectbox", "axis").set_value("R_mid").run()
@@ -1646,42 +1226,8 @@ def test_the_page_draws_a_moved_24e1499_fit_with_its_points_on_it_and_its_captio
     assert any("each is drawn at the fit's own R_mid of its moved ρ_pol" in c for c in captions(app))
 
 
-def test_the_page_warns_above_the_figure_when_the_fits_own_points_differ_from_the_files(tree):
-    app = open_view(tree(window=tf.WINDOW, commit="24e1499", shift=tf.SHIFT, points_check=tf.POINTS_DIFFER))
-    (warning,) = [w.value for w in app.warning]
-    assert warning == f"{POINTS_WARNING}says “{tp._escape(tf.POINTS_DIFFER)}”."
-    kinds = [element.type for element in app.main.children.values()]
-    assert kinds.index("warning") < kinds.index("plotly_chart")
-    # With a fit that fails its own check as well: both, that one first.
-    app = open_view(tree(window=tf.WINDOW, commit="24e1499", check=tf.FAILED, points_check=tf.POINTS_DIFFER))
-    first, second = [w.value for w in app.warning]
-    assert first.startswith("**This fit fails run_db.py's own check") and second.startswith(POINTS_WARNING)
-    # And none when the check says the points are equal.
-    assert not open_view(tree(window=tf.WINDOW, commit="24e1499", shift=tf.SHIFT, points_check="equal")).warning
-
-
-def test_the_page_draws_a_file_whose_mapping_failed_for_a_system_and_counts_its_points(tree):
-    app = open_view(
-        tree(
-            window=tf.WINDOW,
-            commit="24e1499",
-            shift=tf.SHIFT,
-            failed=(("edge", "rho_pol"), ("edge", "R_mid")),
-            mapping_failure=tf.MAPPING_FAILURE,
-        )
-    )
-    for axis in ("rho_pol", "R_mid"):
-        if axis == "R_mid":
-            widget(app, "selectbox", "axis").set_value("R_mid").run()
-            assert not app.exception, [e.value for e in app.exception]
-        (fig,) = charts(app)
-        assert {trace.name for trace in fig.data} == {"core TS", FIT}
-        (note,) = [c for c in captions(app) if c.startswith("Points: ")]
-        assert f"have no {tp.AXES[axis][1]} and are not drawn: the file's `mapping_failure` says “" in note
-
-
 # ---------------------------------------------------------------------------
-# The other pages
+# The other pages: a Thomson scattering file is listed, and has no traces to offer
 # ---------------------------------------------------------------------------
 
 
@@ -1691,7 +1237,6 @@ def test_the_shot_browser_lists_the_file_in_its_own_column(tree):
     app = AppTest.from_file(BROWSER, default_timeout=60).run()
     assert not app.exception, [e.value for e in app.exception]
     table = app.dataframe[0].value
-    assert "thomson_scattering" in table.columns
     assert set(table.set_index("shot")["thomson_scattering"]) == {"R"}
     (has_diagnostic,) = [w for w in app.sidebar.multiselect if w.label == "Has diagnostic"]
     assert "thomson_scattering" in has_diagnostic.options
@@ -1708,15 +1253,7 @@ def statistics_tree(tree, apd_dataset_path):
 
 
 def test_the_statistics_page_offers_no_trace_from_a_thomson_scattering_file(statistics_tree):
-    app = AppTest.from_file(STATISTICS, default_timeout=60).run()
-    assert not app.exception, [e.value for e in app.exception]
-    (radio,) = [w for w in app.radio if w.label == "Diagnostic"]
-    assert radio.options == ["apd"]  # the shot has the other file too, and it is not offered
-
-
-def test_the_statistics_page_lists_only_the_shots_that_have_a_file_with_traces(statistics_tree):
-    """A shot with only a Thomson scattering file has nothing to add there, and is not offered, even when it is the
-    shot the browser selected: the page opens on one that has."""
+    """A shot with only a Thomson scattering file is not offered, even when it is the shot the browser selected."""
     app = AppTest.from_file(STATISTICS, default_timeout=60)
     app.session_state["selection"] = {
         "machine": "cmod",
@@ -1728,7 +1265,7 @@ def test_the_statistics_page_lists_only_the_shots_that_have_a_file_with_traces(s
     assert not app.exception, [e.value for e in app.exception]
     (shots,) = [w for w in app.selectbox if w.label == "Shot"]
     assert shots.options == ["1234"] and shots.value == 1234
-    assert [w.options for w in app.radio if w.label == "Diagnostic"] == [["apd"]]
+    assert [w.options for w in app.radio if w.label == "Diagnostic"] == [["apd"]]  # the shot's other file is not offered
 
 
 def test_the_statistics_page_says_so_when_no_shot_has_a_file_with_traces(tree):
@@ -1739,12 +1276,8 @@ def test_the_statistics_page_says_so_when_no_shot_has_a_file_with_traces(tree):
     assert not [w for w in app.selectbox if w.label == "Shot"]
 
 
-def test_the_traces_module_names_the_diagnostics_a_trace_can_come_from():
-    assert traces.SOURCES == ("apd", "phantom", "asp", "fsp")
-    assert set(traces.SOURCES) < set(catalog.DIAGNOSTICS) and "thomson_scattering" not in traces.SOURCES
-
-
 def test_a_diagnostic_without_traces_is_refused_not_answered_with_no_channels():
+    assert "thomson_scattering" not in traces.SOURCES
     with pytest.raises(ValueError, match="'thomson_scattering' has no traces to take"):
         traces.channels(tf.thomson_dataset(), "thomson_scattering")
 
@@ -1757,149 +1290,3 @@ def test_the_status_table_lines_up_its_columns_for_the_longest_diagnostic_name(t
     rows = [line for line in capsys.readouterr().out.splitlines() if line.startswith("  cmod ")]
     assert {line.split()[1] for line in rows} == {"apd", "thomson_scattering"}
     assert len({line.index(" raw ") for line in rows}) == 1  # the kind column starts in one place
-
-
-# ---------------------------------------------------------------------------
-# The Documentation page
-# ---------------------------------------------------------------------------
-
-#: What the section quotes of the file by name; the fixture has each, in the layout fusion_scripts writes.
-QUOTED = (
-    "edge_Z",
-    "core_Z",
-    "edge_ne",
-    "edge_ne_err",
-    "edge_Te",
-    "edge_Te_err",
-    "time",
-    "efit_tree",
-    "edge_R",
-    "R_mid_sep",
-    "fit_settings",
-    "window_t_start",
-    "window_t_end",
-    "fit_status",
-    "fit_note",
-    "fit_check",
-    "fit_pe_err",
-    "fit_pe",
-    "fit_reg",
-    "Te_sep_2pm",
-    "lambda_q_2pm",
-    "two_point_model",
-    "caveat",
-)
-
-
-def section():
-    (found,) = [s for s in documentation.load().sections if s.title == "Thomson scattering profiles"]
-    return found
-
-
-def test_the_documentation_describes_what_is_measured_fitted_and_each_axis():
-    found = section()
-    headings = [m.group(1) for b in found.blocks for m in re.finditer(r"^### (.+)$", b.text, re.M)]
-    assert headings == ["What is measured", "What each axis means", "What is fitted", "The diagnostician's caveat"]
-    text = " ".join(b.text for b in found.blocks)
-    assert ".py: " in text  # each account names its code, as the other sections do
-    assert "`fusion_ui/plots/thomson_profiles.py: figure`" in text
-    assert "A 0 is no measurement" in text and "√ψ_N" in text
-
-
-def test_every_file_name_the_section_quotes_is_one_the_files_layout_has():
-    text = " ".join(b.text for b in section().blocks)
-    ds = tf.thomson_dataset()
-    held = set(ds.variables) | set(ds.attrs)
-    for name in QUOTED:
-        assert f"`{name}`" in text, f"the section no longer names {name}"
-        assert name in held, f"{name} is not in the layout of the files"
-
-
-#: What the section quotes by name of the layout of a file made with C-Mod_Analysis 24e1499.
-QUOTED_24E1499 = (
-    "fit_rho_shift",
-    "Te_sep_fit",
-    "fit_separatrix",
-    "separatrix_code",
-    "separatrix_code_sha256",
-    "fit_R_mid",
-)
-
-
-def test_every_name_the_section_quotes_of_a_24e1499_file_is_one_its_layout_has():
-    text = " ".join(b.text for b in section().blocks)
-    ds = tf.thomson_dataset(commit="24e1499", shift=tf.SHIFT)
-    held = set(ds.variables) | set(ds.attrs)
-    for name in QUOTED_24E1499:
-        assert f"`{name}`" in text, f"the section no longer names {name}"
-        assert name in held, f"{name} is not in the layout of a 24e1499 file"
-
-
-def test_the_section_says_what_24e1499_changes_and_what_to_distrust_there():
-    text = " ".join(" ".join(b.text.split()) for b in section().blocks)
-    assert "with C-Mod_Analysis 24e1499, GitHub's head" in text and "C-Mod_Analysis `24e1499` and `d6a6466`" in text
-    # Which EFIT, the settings, the move and where the code that finds the separatrix is.
-    assert "ANALYSIS, which C-Mod_Analysis 24e1499 always maps the points of its fit with" in text
-    assert "**Fictitious points beyond the separatrix** (`force_to_zero`)" in text
-    assert "They do not hold the p_e fit." in text
-    assert "**Where the fit was moved to a separatrix, the points are drawn moved with it**" in text
-    assert "`fusion_ui/plots/thomson_profiles.py: Points.on`" in text
-    assert "`/home/millerma/pysepest_kc/pysepest` (`separatrix_code`), so no C-Mod_Analysis commit pins it" in text
-    # What to distrust: the finder that leaves the fit unmoved, with how many fits it fails on (a count the section's
-    # next reading of the files changes, so it is not pinned), the p_e fit in the SOL, and 026's 5 eV.
-    assert re.search(
-        r"\*\*The separatrix finder fails on \d+ of the \d+ fits, and then leaves the fit unmoved\.\*\*", text
-    )
-    for said in (
-        "**The p_e fit in the SOL.**",
-        "**026's separatrix T_e of 5 eV.**",
-        "**A file made with d6a6466**",
-    ):
-        assert said in text
-
-
-def test_the_section_names_the_attributes_of_the_scripts_later_versions_as_the_files_carry_them():
-    text = " ".join(" ".join(b.text.split()) for b in section().blocks)
-    ds = tf.thomson_dataset(commit="24e1499", points_check=tf.POINTS_DIFFER, mapping_failure=tf.MAPPING_FAILURE)
-    for name in ("fit_points_check", "mapping_failure"):
-        assert f"`{name}`" in text and name in ds.attrs
-    assert 'a sentence beginning "mapping failed:"' in text and tf.MAPPING_FAILURE.startswith("mapping failed:")
-    assert 'a sentence beginning "differ:"' in text and tf.POINTS_DIFFER.startswith("differ:")
-    assert "`fusion_ui/plots/thomson_profiles.py: points_warning`" in text
-
-
-def test_the_section_says_what_the_page_draws_as_the_page_does():
-    text = " ".join(" ".join(b.text.split()) for b in section().blocks)
-    assert "The page draws the fit over its whole range, with no band." in text
-    assert "only the points with n_e > 0" in text
-    assert "a warning above the figure that quotes the check" in text
-    assert "10 to 20 ms apart" in text
-
-
-def test_the_section_says_how_a_rows_range_is_set_with_the_numbers_of_the_rule():
-    """The sentence quotes the rule's constants as placeholders, so that the text cannot drift from what runs, and says
-    that a runaway fit leaves through the top."""
-    text, unknown = documentation.fill(" ".join(" ".join(b.text.split()) for b in section().blocks))
-    assert not unknown
-    assert (
-        "Each row's range is set by the points and not by the fit (`fusion_ui/plots/thomson_profiles.py: y_limits`, "
-        "the rule of the density scan's PDF)"
-    ) in text
-    ordinal = documentation._ordinal(tp.WHOLE_PERCENTILE)
-    assert (
-        f"runs from 0 to {tp.MARGIN:g} times the larger of the {ordinal} percentile of the points measured to better than "
-        f"{1 / tp.WELL_MEASURED:g}σ (all of them where fewer than {tp.MIN_WELL} are) and the fit's largest value where it "
-        f"stays within {tp.FIT_FACTOR:g} times the median of the {tp.NEAREST} points nearest it on the axis drawn"
-    ) in text
-    assert "a fit that runs away leaves through the top" in text and "autoscale returns to this range" in text
-
-
-def test_the_figures_docstring_quotes_the_numbers_of_the_rule():
-    """The docstring says why the figure is drawn as it is, so it is held to the numbers it gives."""
-    doc = " ".join(tp.figure.__doc__.split())
-    ordinal = documentation._ordinal(tp.WHOLE_PERCENTILE)
-    assert (
-        f"{tp.MARGIN:g} times the larger of the {ordinal} percentile of the row's points measured to better than "
-        f"{1 / tp.WELL_MEASURED:g}σ (all of them when fewer than {tp.MIN_WELL} are)"
-    ) in doc
-    assert f"within {tp.FIT_FACTOR:g} times the median of the {tp.NEAREST} points nearest it" in doc

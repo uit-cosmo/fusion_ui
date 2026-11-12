@@ -1,38 +1,24 @@
 """What is drawn over a frame of a conditional average: the contour, the reference, the tracks.
 
-A track is drawn two ways: its marker at the frame's lag, and, on a frame the figure chooses, its
-whole trajectory in R and Z (:func:`path_traces`), which is what the lag strip puts on its zero-lag
-panel.
+The contour:
 
-The contour of ``plotting_scripts.plot_frames_with_contour``, with its semantics kept:
+- **One absolute level for every lag**: ``level`` times the maximum of the field over all lags and
+  pixels, as ``imaging_methods.get_contour_evolution`` thresholds. A lag whose peak has decayed
+  below the level has no contour: a contour that shrinks and vanishes is the average decaying.
+- **The level is read off the average**: ``neighbour_level`` is the mean of the zero-lag peak's
+  four neighbours as a fraction of the peak. ``method_fields`` stores the level the centroid track
+  used; the other fields get the same rule applied to their own zero-lag frame.
 
-- **One absolute level for every lag**: ``level`` times the maximum of the field over *all* lags and
-  pixels, as ``imaging_methods.get_contour_evolution`` thresholds. On a conditional average that
-  maximum is the zero-lag peak, so a lag whose peak has decayed below the level has no contour,
-  and a contour that shrinks and vanishes is the average decaying, not a drawing fault.
-- **The level is read off the average**, not set: ``neighbour_level`` is the mean of the zero-lag
-  peak's four neighbours as a fraction of the peak (``twodca_manuscript.contour_level``). It is a
-  lookup, not a search. ``method_fields`` stores the level the centroid track used; the other
-  fields get the same rule applied to their own zero-lag frame.
-
-The outline is found as ``imaging_methods.get_contour_evolution`` finds it, so what is drawn is
-what the stored centroid track was computed from: marching squares on the frame
-(``skimage.measure.find_contours``), the contour of highest mass when there are several, and its
-points mapped to R and Z by interpolating the grid (``imaging_methods.indexes_to_coordinates``). The
-rest of what that function computes (the ellipse fit, the convex hull, the polygon's centroid)
-costs about 20 ms a frame and some BLAS threads, and a figure that draws a few outlines has no use
-for it. ``tests/test_views_pixel.py`` holds the two to the same points.
+The outline is found as ``get_contour_evolution`` finds it (marching squares, the contour of
+highest mass, its points mapped to R and Z), so what is drawn is what the stored centroid track was
+computed from, without the ellipse fit and convex hull that function also pays for.
+``tests/test_views_pixel.py`` holds the two to the same points.
 """
 
 import numpy as np
 import plotly.graph_objects as go
 
 from fusion_ui.views.figures import TRACK_COLOURS, TRACK_SYMBOLS
-
-
-def zero_lag_index(time):
-    """Index of the lag closest to zero."""
-    return int(np.argmin(np.abs(np.asarray(time, dtype=float))))
 
 
 def neighbour_level(field, time, step=1):
@@ -43,7 +29,7 @@ def neighbour_level(field, time, step=1):
     ``NaN`` when there is no positive peak.
     """
     field = np.asarray(field, dtype=float)
-    frame = field[:, :, zero_lag_index(time)]
+    frame = field[:, :, int(np.argmin(np.abs(np.asarray(time, dtype=float))))]
     if not np.isfinite(frame).any():
         return float("nan")
     y0, x0 = np.unravel_index(np.nanargmax(frame), frame.shape)
@@ -85,9 +71,8 @@ def contours(field, indices, level):
     """``{lag index: (r, z)}``: the contour of each requested lag at ``level`` times the field's maximum.
 
     ``field`` is one reference's ``(y, x, time)`` DataArray with 2-D ``R`` and ``Z`` coordinates.
-    A lag with no contour at that level is left out: one that has decayed below it is not even
-    looked at, and one that cannot be contoured (a ``ValueError`` from the marching squares) leaves
-    its own panel without an outline and no other.
+    A lag with no contour at that level is left out: one that has decayed below it, or one the
+    marching squares cannot contour.
     """
     peak = float(field.max())
     if not np.isfinite(level) or not np.isfinite(peak) or peak <= 0:
@@ -141,17 +126,13 @@ def frame_trace(z, x_axis, y_axis, axes, coloraxis, name):
 def path_traces(axes, path):
     """One track's trajectory over a frame: every lag, the lags its slope rests on, the stored velocity.
 
-    ``path`` is a :class:`fusion_ui.views.pixel.TrackPath`. The three layers are the Tracks view's, in
-    the R-Z plane instead of against the lag, and in the track's own colour, symbol and legend group
-    (so the legend entry the track's markers carry hides its trajectory too):
+    ``path`` is a :class:`fusion_ui.views.pixel.TrackPath`. Three layers, in the track's colour,
+    symbol and legend group (its legend entry hides them too):
 
-    - **every lag of the bank**, a faint line with small markers; a lag with no position leaves a gap
-      in it rather than a bridge;
-    - **the lags the slope rests on** that have a position, over it, thicker and with larger markers;
-    - **the stored velocity**, dashed: a straight path along ``(v_R, v_Z)`` through the mean of the
-      fitted points, over the span of the fitted lags. Not drawn when the fit failed.
-
-    None of them has a legend entry of its own. ``name`` says which layer a trace is.
+    - every lag of the bank, a faint line with small markers; a lag with no position leaves a gap;
+    - the lags the slope rests on that have a position, thicker;
+    - the stored velocity, dashed: a straight path along ``(v_R, v_Z)`` through the mean of the
+      fitted points, over the fitted lags. Not drawn when the fit failed.
     """
     track = path.track
     colour, symbol = TRACK_COLOURS[track.key], TRACK_SYMBOLS[track.key]
@@ -224,10 +205,8 @@ def overlay_traces(
 
     ``reference`` is ``(r, z)``; ``contour`` is ``(r, z)`` arrays or ``None``; ``tracks`` is
     ``[(Track, (r, z)), …]`` with NaN where a track is untracked at this lag, which draws nothing.
-    ``contour_name`` is what the contour is called in the legend, so a figure with two rows
-    contoured at different levels can say so. ``paths`` is ``[TrackPath, …]``, the trajectories to
-    draw over this frame (:func:`path_traces`); drawn over the contour and under the markers, so a
-    track's marker at this lag sits on its own trajectory and the reference stays on top of all.
+    ``paths`` is ``[TrackPath, …]``, the trajectories to draw over this frame, over the contour and
+    under the markers.
     """
     traces = []
     if contour is not None:

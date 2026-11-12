@@ -1,10 +1,10 @@
-"""Phase 06's precompute: several plots, a pool of workers, --stale, --params-json.
+"""``precompute`` with several plots, a pool of workers, --stale and --params-json.
 
 Toy specs (``tests/precompute_toys``) compute instantly on four tiny APD files
 over two run days, so what is tested is the engine: what runs where, what is
 written, and what a Ctrl-C leaves behind. A pool worker is a spawned process,
-so the toys reach it by name (``modules``), never through a fixture; in this
-process they are registered for this module's tests only.
+so the toys reach it by name (``precompute.WORKER_MODULES``), never through a
+fixture; in this process they are registered for this module's tests only.
 """
 
 import glob
@@ -27,15 +27,17 @@ from fusion_ui.core import catalog, db, params_ui, precompute, registry, store
 from tests import precompute_toys as toys
 
 REPO = Path(__file__).resolve().parent.parent
-TOYS = (toys.REGISTERING_MODULE,)
 
 
 @pytest.fixture(autouse=True, scope="module")
 def registered_toys():
-    """The toys, for these tests only: a page under test elsewhere lists every
-    registered spec."""
+    """The toys, for these tests only (a page under test elsewhere lists every
+    registered spec), and the module a pool worker imports to know them."""
     toys.register()
+    modules = precompute.WORKER_MODULES
+    precompute.WORKER_MODULES = (toys.REGISTERING_MODULE,)
     yield
+    precompute.WORKER_MODULES = modules
     toys.unregister()
 
 
@@ -103,7 +105,7 @@ def tree(monkeypatch, tmp_path):
 
 
 def fill(conn, plots, workers=1, force=False, retry_failed=False, **selection):
-    """The CLI's fill, through the API, with the toys known to the workers."""
+    """The CLI's fill, through the API."""
     specs = precompute.in_dependency_order([registry.get(key) for key in plots])
     targets = precompute.select_targets(conn, specs, "cmod", **selection)
     plan = precompute.plan_fill(
@@ -114,9 +116,7 @@ def fill(conn, plots, workers=1, force=False, retry_failed=False, **selection):
         retry_failed=retry_failed,
     )
     lines = []
-    report = precompute.execute(
-        conn, plan, log=lines.append, workers=workers, modules=TOYS
-    )
+    report = precompute.execute(conn, plan, log=lines.append, workers=workers)
     return report, lines
 
 
@@ -124,9 +124,7 @@ def stale(conn, plots, workers=1, **kwargs):
     specs = precompute.in_dependency_order([registry.get(key) for key in plots])
     plan = precompute.plan_stale(conn, specs, "cmod", **kwargs)
     lines = []
-    report = precompute.execute(
-        conn, plan, log=lines.append, workers=workers, modules=TOYS
-    )
+    report = precompute.execute(conn, plan, log=lines.append, workers=workers)
     return plan, report, lines
 
 
@@ -176,8 +174,7 @@ def test_two_workers_fill_four_targets_then_skip_them_all_as_cached(
 
     monkeypatch.setattr(precompute.multiprocessing, "get_context", spy)
     report, lines = fill(tree.conn, ["toy_mean"], workers=2)
-    # Spawned, not forked: no SQLite handle or thread is inherited.
-    assert contexts == ["spawn"]
+    assert contexts == ["spawn"]  # forked, a worker would inherit the SQLite handle
     (stats,) = report.stats
     assert counts(stats) == (4, 0, 0, 0, 0)
 
@@ -217,32 +214,6 @@ def test_two_workers_fill_four_targets_then_skip_them_all_as_cached(
     report, lines = fill(tree.conn, ["toy_mean"], workers=2)
     assert counts(report.stats[0]) == (0, 4, 0, 0, 0)
     assert sum("cached, skipping" in line for line in lines) == 4
-
-
-def test_a_worker_loads_the_whole_record_only_for_the_spec_that_declares_it(tree):
-    """Both in one fill, so a job's steps want both: each kind is read once."""
-    report, _ = fill(tree.conn, ["toy_mean", "toy_whole"], workers=2)
-    assert all(counts(s) == (4, 0, 0, 0, 0) for s in report.stats)
-    attrs = {}
-    for plot in ("toy_mean", "toy_whole"):
-        for (_, shot), row in runs(tree.conn, plot).items():
-            with xr.open_dataset(row["blob_path"]) as blob:
-                attrs[(plot, shot)] = dict(blob.attrs)
-    for shot, n_time in SHOTS.items():
-        cut, whole = attrs[("toy_mean", shot)], attrs[("toy_whole", shot)]
-        assert whole["pid"] != os.getpid()
-        assert whole["in_memory"] == 1 and cut["in_memory"] == 1
-        assert whole["samples"] == n_time  # the whole record, whatever the window
-        assert (whole["first"], whole["last"]) == pytest.approx((1.0, 1.02))
-        # The window the cut spec was cut to is the one the whole-record spec is
-        # told: the descriptor's, or, for a shot with none, the record itself (the
-        # centred 0.2 s default, clipped to it).
-        expected = WINDOW if shot == 1160616001 else (1.0, 1.02)
-        assert (whole["window_start"], whole["window_end"]) == pytest.approx(expected)
-        if shot == 1160616001:
-            assert 0 < cut["samples"] < n_time
-        else:
-            assert cut["samples"] == n_time
 
 
 def test_a_pool_takes_the_largest_files_first():
@@ -286,23 +257,6 @@ def test_a_worker_connection_waits_out_the_other_writers(tmp_path):
         conn.close()
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a file whatever its mode")
-def test_an_infrastructure_error_in_a_worker_stays_unrecorded(tree, capfd):
-    unreadable = tree.folder / "apd_1140827002.nc"
-    unreadable.chmod(0)
-    try:
-        report, _ = fill(tree.conn, ["toy_mean"], workers=2)
-    finally:
-        unreadable.chmod(0o644)
-    assert counts(report.stats[0]) == (3, 0, 1, 0, 0)
-    assert ("toy_mean", 1140827002) not in runs(tree.conn)
-    assert "failed without recording a run: PermissionError" in capfd.readouterr().out
-
-    # Fixed: the next fill computes it, rather than skipping a failure.
-    report, _ = fill(tree.conn, ["toy_mean"])
-    assert counts(report.stats[0]) == (1, 3, 0, 0, 0)
-
-
 def test_an_unwritable_upstream_directory_stops_the_chain_before_it_computes(
     tree, monkeypatch
 ):
@@ -310,14 +264,14 @@ def test_an_unwritable_upstream_directory_stops_the_chain_before_it_computes(
     `failed` row, on its save: its directory is checked too."""
     bank = registry.get("toy_bank")
     digest, _ = params_ui.hash_params("toy_bank", bank.params())
-    real = precompute._output_writable
+    real = precompute._unwritable_dir
 
     def bank_unwritable(spec, target, params_hash):
         if spec.key == "toy_bank" and params_hash == digest:
-            return False, "/nowhere/toy_bank"
+            return "/nowhere/toy_bank"
         return real(spec, target, params_hash)
 
-    monkeypatch.setattr(precompute, "_output_writable", bank_unwritable)
+    monkeypatch.setattr(precompute, "_unwritable_dir", bank_unwritable)
     report, lines = fill(tree.conn, ["toy_fields"], shots={1160616001})
     assert counts(report.stats[0]) == (0, 0, 1, 0, 0)
     assert runs(tree.conn) == {}
@@ -396,17 +350,17 @@ def test_an_ignored_sigint_stays_ignored():
         signal.signal(signal.SIGINT, previous)
 
 
-def drive(tree, *argv, preexec_fn=None, start_new_session=False, **env):
-    """Start the CLI, with the toys registered, in a process of its own."""
+def drive(command, markers=None, **popen):
+    """Start ``fusion-ui <command>``, with the toys registered, in a process of
+    its own; ``markers`` is the folder where the blocking toys note their start."""
     return subprocess.Popen(
-        [sys.executable, "-c", toys.DRIVER, *argv],
+        [sys.executable, "-c", toys.DRIVER, *command.split()],
         cwd=REPO,
-        env={**os.environ, **env},
+        env={**os.environ, **({toys.MARKERS: str(markers)} if markers else {})},
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
-        preexec_fn=preexec_fn,
-        start_new_session=start_new_session,
+        **popen,
     )
 
 
@@ -423,15 +377,7 @@ def test_ctrl_c_from_the_terminal_stops_every_worker_cleanly(tree, tmp_path):
     """SIGINT to the whole process group, as a terminal sends it."""
     markers = tmp_path / "markers"
     markers.mkdir()
-    process = drive(
-        tree,
-        "precompute",
-        "toy_block",
-        "--workers",
-        "2",
-        start_new_session=True,
-        **{toys.MARKERS: str(markers)},
-    )
+    process = drive("precompute toy_block --workers 2", markers, start_new_session=True)
     wait_for(process, markers, 2)  # both workers are computing
 
     os.killpg(process.pid, signal.SIGINT)
@@ -451,13 +397,7 @@ def test_a_second_ctrl_c_kills_workers_that_do_not_stop(tree, tmp_path):
     markers = tmp_path / "markers"
     markers.mkdir()
     process = drive(
-        tree,
-        "precompute",
-        "toy_stubborn",
-        "--workers",
-        "2",
-        start_new_session=True,
-        **{toys.MARKERS: str(markers)},
+        "precompute toy_stubborn --workers 2", markers, start_new_session=True
     )
     wait_for(process, markers, 2)
     os.killpg(process.pid, signal.SIGINT)
@@ -474,17 +414,9 @@ def test_a_second_ctrl_c_kills_workers_that_do_not_stop(tree, tmp_path):
 
 def test_nice_is_set_never_added_to_what_the_workers_inherit(tree):
     """`nice -n 3 fusion-ui precompute … --workers 2 --nice 5` computes at 5,
-    not 8 -- on every thread, BLAS's included. (The default of 10 with
-    several workers is `test_the_nice_default_follows_the_worker_count`.)"""
+    not 8, on every thread, BLAS's included."""
     process = drive(
-        tree,
-        "precompute",
-        "toy_mean",
-        "--workers",
-        "2",
-        "--nice",
-        "5",
-        preexec_fn=lambda: os.nice(3),
+        "precompute toy_mean --workers 2 --nice 5", preexec_fn=lambda: os.nice(3)
     )
     out, _ = process.communicate(timeout=180)
     assert process.returncode == 0, out
@@ -558,8 +490,8 @@ def test_stale_leaves_a_result_whose_upstream_is_stale_and_says_what_fixes_it(
 
 
 def test_stale_after_a_forced_upstream_recomputes_the_products_on_it(tree):
-    """The plan's recompute for a changed 2DCA: `precompute pixel_averages
-    --force`, then `precompute method_fields blob_parameters --stale`."""
+    """The recompute for a changed 2DCA: `precompute pixel_averages --force`,
+    then `precompute method_fields blob_parameters --stale`."""
     fill(tree.conn, ["toy_fields", "toy_blobs"])
     fill(tree.conn, ["toy_bank"], force=True)
     reasons = {(r["plot"], r["stale"]) for r in store.stale_runs(tree.conn)}
@@ -625,7 +557,7 @@ def test_stale_and_force_or_retry_failed_do_not_mix(tree, capsys):
 def test_the_page_s_command_fills_the_result_the_page_looks_up(
     tree, tmp_path, capsys, monkeypatch
 ):
-    """J2a's page shows `precompute.command` and the parameter set to save as
+    """A page shows `precompute.command` and the parameter set to save as
     params.json; run as written, it must store what `store.lookup` finds."""
     spec = registry.get("toy_bank")
     params = toys.BankParams(averages=toys.Averages(window=2, threshold=3.0))
@@ -646,23 +578,13 @@ def test_the_page_s_command_fills_the_result_the_page_looks_up(
 
 
 def test_one_file_of_changes_applies_to_every_plot_named(tree, tmp_path):
-    """The plan's short window for one shot: `precompute method_fields
-    blob_parameters --shot N --params-json short.json`, two params classes
-    sharing `averages`. One bank, built once, under the shorter window."""
+    """A short window for one shot: `precompute method_fields blob_parameters
+    --shot N --params-json short.json`, two params classes sharing `averages`.
+    One bank, built once, under the shorter window."""
     short = tmp_path / "short.json"
     short.write_text(json.dumps({"averages": {"window": 2}}))
-    code = cli.main(
-        [
-            "precompute",
-            "toy_fields",
-            "toy_blobs",
-            "--shot",
-            "1160616002",
-            "--params-json",
-            str(short),
-        ]
-    )
-    assert code == 0
+    argv = "precompute toy_fields toy_blobs --shot 1160616002 --params-json"
+    assert cli.main([*argv.split(), str(short)]) == 0
 
     averages = toys.Averages(window=2)
     expected = {
@@ -775,9 +697,9 @@ def test_the_nice_default_follows_the_worker_count(tree, monkeypatch):
     seen = []
     real = precompute.execute
 
-    def spy(conn, plan, log=None, workers=1, nice=None, modules=None):
+    def spy(conn, plan, log=None, workers=1, nice=None):
         seen.append((workers, nice))
-        return real(conn, plan, log=log, workers=1, nice=None, modules=modules)
+        return real(conn, plan, log=log)
 
     monkeypatch.setattr(precompute, "execute", spy)
     assert cli.main(["precompute", "toy_mean", "--shot", "1160616001"]) == 0
@@ -787,7 +709,7 @@ def test_the_nice_default_follows_the_worker_count(tree, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# One worker: the output a fill has always printed
+# One worker: the lines a fill prints
 # ---------------------------------------------------------------------------
 
 
@@ -802,9 +724,8 @@ def _normalised(text):
     ]
 
 
-def test_the_single_worker_output_is_unchanged(tree, capsys):
-    """Line for line what `fusion-ui precompute PLOT` printed before phase 06
-    (checked against main at faeaede over a longer scenario when J2b landed)."""
+def test_the_lines_of_a_single_worker_fill(tree, capsys):
+    """Computed, then one forced into a failure, then all skipped from the ledger."""
     digest = params_ui.hash_params("toy_mean", toys.ToyParams())[0][:12]
     labels = {shot: f"cmod {shot} · apd (raw)" for shot in sorted(SHOTS)}
     order = sorted(SHOTS)

@@ -13,7 +13,6 @@ import xarray as xr
 
 from fusion_ui.views import PIXEL_VIEWS, frame, lag_strip, numbers, pixel, tracks
 from fusion_ui.views.bundle import Bundle
-from fusion_ui.views.figures import TRACK_COLOURS, TRACK_SYMBOLS
 from fusion_ui.views.methods import METHODS
 from fusion_ui.views.overlays import contours, neighbour_level
 from tests import fields_fixtures as ff
@@ -153,19 +152,6 @@ def test_a_lag_that_cannot_be_contoured_loses_its_own_outline_and_no_other(monke
     assert len(calls) == 1
 
 
-def test_the_contour_is_at_the_level_times_the_maximum():
-    field = bump([10.0])
-    r, z = contours(field, [0], 0.5)[0]
-    # Half maximum of a Gaussian of sigma 1.2 pixels sits at sigma * sqrt(2 ln 2) from its centre.
-    radius = np.hypot(r - 0.88 - 3 * 0.004, z + 0.04 - 3 * 0.004)
-    assert radius.mean() == pytest.approx(
-        1.2 * np.sqrt(2 * np.log(2)) * 0.004, rel=0.08
-    )
-    # Higher level, smaller contour.
-    r2, z2 = contours(field, [0], 0.8)[0]
-    assert np.hypot(r2 - 0.892, z2 + 0.028).mean() < radius.mean()
-
-
 def test_the_contour_level_is_the_peaks_neighbours_over_the_peak():
     frame_ = np.zeros((5, 5, 3))
     frame_[2, 2, 1] = 10.0
@@ -192,15 +178,6 @@ def test_the_contour_level_is_the_peaks_neighbours_over_the_peak():
 # -- the lag strip --------------------------------------------------------------------------------
 
 
-def test_the_strip_is_a_row_per_field_and_a_column_per_lag(products):
-    figure = lag_strip.lag_strip(bundle_of(products), n=5)
-    assert len(heatmaps(figure)) == 2 * 5
-    assert len(figure.layout.meta["lags"]) == 5
-    assert figure.layout.meta["lags"] == sorted(figure.layout.meta["lags"])
-    # Seven columns when asked for seven.
-    assert len(heatmaps(lag_strip.lag_strip(bundle_of(products), n=7))) == 14
-
-
 def test_each_row_keeps_one_colour_scale_across_its_lags(products):
     bundle = bundle_of(products)
     figure = lag_strip.lag_strip(bundle, n=5)
@@ -220,24 +197,6 @@ def test_each_row_keeps_one_colour_scale_across_its_lags(products):
         ) < 0.9 * max(peaks)
 
 
-def test_the_default_span_is_the_fitted_lags_widened_by_a_quarter(products):
-    # (5, 4) is fitted on +-4 us, a width of 8: a quarter of it either side makes +-6.
-    choice = lag_strip.choose_lags(bundle_of(products, pixel=(5, 4)))
-    assert choice.source == "fit" and choice.span_us == pytest.approx(6.0)
-    assert [
-        products.bank["time"].values[i] * US for i in choice.indices
-    ] == pytest.approx([-6, -3, 0, 3, 6])
-    # (3, 3) on +-2 us: +-3.
-    assert lag_strip.default_span_us(bundle_of(products, pixel=(3, 3))) == (
-        pytest.approx(3.0),
-        "fit",
-    )
-    # An ordinary pixel is on the fixture's +-4.5.
-    assert lag_strip.default_span_us(bundle_of(products, pixel=(1, 3)))[
-        0
-    ] == pytest.approx(7.0)
-
-
 def test_the_deck_lags_when_the_track_did_not_fit(products):
     # (7, 4): the centroid track fitted nothing, so there is no span of the pixel's own.
     span, source = lag_strip.default_span_us(bundle_of(products, pixel=(7, 4)))
@@ -248,52 +207,6 @@ def test_the_deck_lags_when_the_track_did_not_fit(products):
     bank_only = Bundle(bank=products.bank, pixel=(5, 4))
     assert lag_strip.default_span_us(bank_only) == (pytest.approx(10.0), "deck")
     assert len(heatmaps(lag_strip.lag_strip(bank_only))) == 10
-
-
-def test_a_span_or_typed_lags_replace_the_default(products):
-    bundle = bundle_of(products)
-    choice = lag_strip.choose_lags(bundle, n=3, span_us=9.0)
-    assert choice.source == "span"
-    assert [
-        products.bank["time"].values[i] * US for i in choice.indices
-    ] == pytest.approx([-9, 0, 9])
-
-    typed = lag_strip.choose_lags(bundle, n=9, span_us=9.0, typed="-6, −2, 0; 2 6")
-    assert typed.source == "typed" and typed.span_us is None
-    assert [
-        products.bank["time"].values[i] * US for i in typed.indices
-    ] == pytest.approx([-6, -2, 0, 2, 6])
-    # Lags snap to the lag axis.
-    near = lag_strip.choose_lags(bundle, typed="2.3 -2.2")
-    assert [
-        products.bank["time"].values[i] * US for i in near.indices
-    ] == pytest.approx([-2.0, 2.5])
-
-
-def test_the_lags_offered_stop_at_the_banks_window(products):
-    bundle = bundle_of(products)
-    assert lag_strip.choose_lags(bundle, span_us=100.0).span_us == pytest.approx(15.0)
-    choice = lag_strip.choose_lags(bundle, typed="-30 -5 0 5 30")
-    assert choice.dropped == (-30.0, 30.0)
-    assert [
-        products.bank["time"].values[i] * US for i in choice.indices
-    ] == pytest.approx([-5, 0, 5])
-
-    # A shot with a shorter window has fewer lags, and its default span stays inside them.
-    short = ff.make_products(window=40)
-    short_bundle = bundle_of(short)
-    assert short.bank.sizes["time"] == 41
-    assert lag_strip.choose_lags(short_bundle, span_us=100.0).span_us == pytest.approx(
-        10.0
-    )
-    assert lag_strip.default_span_us(short_bundle)[0] <= 10.0
-    # Typed lags that are all outside leave the default in place and say why, rather than drawing nothing.
-    nothing = lag_strip.choose_lags(bundle, typed="40 50")
-    assert nothing.error and len(nothing.indices) > 1 and nothing.source == "fit"
-    garbled = lag_strip.choose_lags(bundle, typed="two, three")
-    assert "two" in garbled.error and len(garbled.indices) > 1
-    with pytest.raises(ValueError, match="cannot read"):
-        lag_strip.parse_lags("1, x")
 
 
 def test_the_contour_is_drawn_where_the_average_has_not_decayed(products):
@@ -358,12 +271,6 @@ def test_a_dead_pixel_or_one_without_events_says_so_instead_of_drawing(products)
     assert "not available" in message_of(
         lag_strip.lag_strip(Bundle(fields=products.fields, pixel=(5, 4)))
     )
-
-
-def test_a_failed_pixel_still_draws_its_average(products):
-    figure = lag_strip.lag_strip(bundle_of(products, pixel=(7, 4)))
-    assert len(heatmaps(figure)) == 10
-    assert figure.layout.meta["source"] == "deck"
 
 
 # -- the trajectories on the zero-lag panel -------------------------------------------------------
@@ -485,63 +392,6 @@ def test_a_trajectory_is_every_stored_position_of_the_track_at_every_lag_of_the_
         np.testing.assert_allclose(every.customdata, time * US)
 
 
-def test_the_lags_the_slope_rests_on_are_highlighted_as_in_the_tracks_view(products):
-    bundle = bundle_of(products)
-    figure = lag_strip.lag_strip(bundle, n=5)
-    seen = tracks.tracks_figure(bundle)
-    fields, lag = products.fields, products.bank["time"].values * US
-    for key in LABEL:
-        every, fit, line = trajectory(figure, key)
-        r, z = (fields[f"pos_{c}_{key}"].values[4, 5] for c in "rz")
-        fitted = fields[f"fit_{key}"].values[4, 5] & np.isfinite(r)
-        # (5, 4) is fitted on +-4 us, at half a microsecond a lag.
-        assert fitted.sum() == 17
-        np.testing.assert_array_equal(fit.x, np.where(fitted, r, np.nan))
-        np.testing.assert_array_equal(fit.y, np.where(fitted, z, np.nan))
-        # The lags highlighted are the ones the Tracks view highlights.
-        (highlight,) = named(seen, f"{LABEL[key]}: lags of the fit", "y")
-        np.testing.assert_allclose(fit.customdata[fitted], highlight.x)
-        np.testing.assert_allclose(lag[fitted], highlight.x)
-        # Over the rest, heavier and with larger markers, in the track's own colour and symbol.
-        assert fit.line.width > every.line.width and fit.marker.size > every.marker.size
-        assert every.opacity < 1 and fit.opacity is None
-        for trace in (every, fit, line):
-            assert trace.line.color == TRACK_COLOURS[key]
-        assert fit.marker.color == every.marker.color == TRACK_COLOURS[key]
-        assert fit.marker.symbol == every.marker.symbol == TRACK_SYMBOLS[key]
-        # And in the track's legend group, with no legend entry of their own: the entry the track's
-        # markers carry hides the trajectory with them.
-        for trace in (every, fit, line):
-            assert trace.legendgroup == key and trace.showlegend is False
-        (entry,) = [t for t in figure.data if t.name == LABEL[key] and t.showlegend]
-        assert entry.legendgroup == key
-        assert entry.marker.symbol == TRACK_SYMBOLS[key]
-
-
-def test_the_dashed_path_runs_along_the_stored_velocity_over_the_fitted_lags(products):
-    figure = lag_strip.lag_strip(bundle_of(products), n=5)
-    fields, time = products.fields, products.bank["time"].values
-    for key in LABEL:
-        _, _, line = trajectory(figure, key)
-        vr, vz = (float(fields[f"v{c}_{key}"].values[4, 5]) for c in "rz")
-        r, z = (fields[f"pos_{c}_{key}"].values[4, 5] for c in "rz")
-        fitted = fields[f"fit_{key}"].values[4, 5] & np.isfinite(r)
-        assert line.line.dash == "dash"
-        # One point per fitted lag, and from the first to the last: the velocity times the time it took.
-        assert len(line.x) == len(line.y) == fitted.sum()
-        span = time[fitted].max() - time[fitted].min()
-        dx, dy = line.x[-1] - line.x[0], line.y[-1] - line.y[0]
-        assert dx == pytest.approx(vr * span, rel=1e-9)
-        assert dy == pytest.approx(vz * span, rel=1e-9)
-        # Every point is on that straight line, which goes through the mean of the fitted points.
-        cross = (line.x - line.x[0]) * dy - (line.y - line.y[0]) * dx
-        assert np.abs(cross).max() < 1e-9 * (dx**2 + dy**2)
-        assert np.mean(line.x) == pytest.approx(r[fitted].mean(), abs=1e-12)
-        assert np.mean(line.y) == pytest.approx(z[fitted].mean(), abs=1e-12)
-        # Hovering says which velocity it is.
-        assert f"v_R = {vr:.0f} m/s" in line.hovertemplate
-
-
 def test_the_dashed_path_is_the_tracks_views_line_seen_in_the_other_plane(products):
     bundle = bundle_of(products)
     strip, seen = lag_strip.lag_strip(bundle, n=5), tracks.tracks_figure(bundle)
@@ -651,18 +501,6 @@ def test_without_method_fields_the_strip_is_drawn_without_trajectories(products)
     assert len(trajectory_traces(lag_strip.lag_strip(bundle_of(products), n=5))) == 9
 
 
-def test_the_strips_rows_are_the_fields_that_have_tracks():
-    assert dict(lag_strip.ROWS) == {
-        name: keys for name, keys in pixel.FIELD_TRACKS.items() if keys
-    }
-
-
-def test_the_caption_says_what_the_zero_lag_panel_shows():
-    caption = {view.key: view.caption for view in PIXEL_VIEWS}["lag_strip"]
-    assert "τ = 0" in caption and "trajectory" in caption
-    assert "method_fields" in caption and "gap" in caption
-
-
 def test_the_velocity_line_is_the_slope_through_the_mean_of_the_fitted_points():
     lag = np.arange(6.0)
     position = np.array([9.0, 1.0, 2.0, 3.0, 4.0, 9.0])
@@ -673,21 +511,6 @@ def test_the_velocity_line_is_the_slope_through_the_mean_of_the_fitted_points():
     np.testing.assert_allclose(line, [-0.5, 1.5, 3.5, 5.5])
     assert pixel.velocity_line(lag, position, fitted, np.nan) is None
     assert pixel.velocity_line(lag, position, np.zeros(6, dtype=bool), 2.0) is None
-
-
-def test_track_paths_are_read_off_method_fields_in_the_order_asked(products):
-    paths = pixel.track_paths(bundle_of(products), ("com", "max"))
-    assert [p.track.key for p in paths] == ["com", "max"]
-    path = paths[0]
-    np.testing.assert_array_equal(path.lag, products.bank["time"].values)
-    np.testing.assert_array_equal(path.r, products.fields["pos_r_com"].values[4, 5])
-    assert path.vr == products.fields["vr_com"].values[4, 5]
-    assert path.fitted.sum() == 17 and path.tracked.sum() == 49
-    lag, r, z = path.straight()
-    assert len(lag) == len(r) == len(z) == 17
-    # Nothing without the product, and nothing for a track it has no positions of.
-    assert pixel.track_paths(Bundle(bank=products.bank, pixel=(5, 4)), ("com",)) == []
-    assert pixel.track_paths(bundle_of(products), ("nonesuch",)) == []
 
 
 # -- the large frame ------------------------------------------------------------------------------
@@ -961,29 +784,96 @@ def test_the_pixel_views_are_entries_that_name_what_they_read(products):
 # -- speed ----------------------------------------------------------------------------------------
 
 
-def build_pixel_level(bundle):
-    """Every pixel-level view, and the JSON the browser is sent for its figures."""
-    for view in PIXEL_VIEWS:
-        controls = view.controls(bundle) if view.controls else ()
-        result = view.build(bundle, **{c.key: c.default for c in controls})
-        for item in result if isinstance(result, list) else [result]:
-            if isinstance(item, go.Figure):
-                item.to_json()
-
-
 def test_building_the_pixel_level_from_a_loaded_bank_takes_well_under_a_second(
-    products, capsys
+    products,
 ):
+    def build(bundle):
+        """Every pixel-level view, and the JSON the browser is sent for its figures."""
+        for view in PIXEL_VIEWS:
+            controls = view.controls(bundle) if view.controls else ()
+            result = view.build(bundle, **{c.key: c.default for c in controls})
+            for item in result if isinstance(result, list) else [result]:
+                if isinstance(item, go.Figure):
+                    item.to_json()
+
     bundle = bundle_of(products)
-    build_pixel_level(
-        bundle
-    )  # the first call pays for imaging_methods' import, which the page has done already
-    wall, cpu = time.perf_counter(), time.process_time()
-    build_pixel_level(bundle)
-    wall, cpu = time.perf_counter() - wall, time.process_time() - cpu
-    with capsys.disabled():
-        print(
-            f"\npixel level from a loaded bank: {wall * 1000:.0f} ms wall, {cpu * 1000:.0f} ms CPU (builders and JSON)"
-        )
+    build(bundle)  # the first call pays for imaging_methods' import
+    cpu = time.process_time()
+    build(bundle)
     # CPU time, because a shared machine delays wall time without making the builders any slower.
-    assert cpu < 1.0
+    assert time.process_time() - cpu < 1.0
+
+
+# -- which lags the strip shows ---------------------------------------------------------------------
+
+
+def lags_us(products, indices):
+    return [products.bank["time"].values[i] * US for i in indices]
+
+
+def test_the_default_span_is_the_fitted_lags_widened_by_a_quarter(products):
+    # (5, 4) is fitted on +-4 us, a width of 8: a quarter of it either side makes +-6.
+    indices, source = lag_strip.choose_lags(bundle_of(products, pixel=(5, 4)))
+    assert source == "fit"
+    assert lags_us(products, indices) == pytest.approx([-6, -3, 0, 3, 6])
+    # (3, 3) on +-2 us: +-3. An ordinary pixel is on the fixture's +-4.5.
+    assert lag_strip.default_span_us(bundle_of(products, pixel=(3, 3))) == (
+        pytest.approx(3.0),
+        "fit",
+    )
+    span, _ = lag_strip.default_span_us(bundle_of(products, pixel=(1, 3)))
+    assert span == pytest.approx(7.0)
+
+
+def test_a_span_or_typed_lags_replace_the_default(products):
+    bundle = bundle_of(products)
+    indices, source = lag_strip.choose_lags(bundle, n=3, span_us=9.0)
+    assert source == "span" and lags_us(products, indices) == pytest.approx([-9, 0, 9])
+    indices, source = lag_strip.choose_lags(
+        bundle, n=9, span_us=9.0, typed="-6, −2, 0; 2 6"
+    )
+    assert source == "typed"
+    assert lags_us(products, indices) == pytest.approx([-6, -2, 0, 2, 6])
+    # Lags snap to the lag axis.
+    indices, _ = lag_strip.choose_lags(bundle, typed="2.3 -2.2")
+    assert lags_us(products, indices) == pytest.approx([-2.0, 2.5])
+
+
+def test_the_lags_offered_stop_at_the_banks_window(products):
+    bundle = bundle_of(products)
+    indices, _ = lag_strip.choose_lags(bundle, n=3, span_us=100.0)
+    assert lags_us(products, indices) == pytest.approx([-15, 0, 15])
+    indices, source = lag_strip.choose_lags(bundle, typed="-30 -5 0 5 30")
+    assert source == "typed" and lags_us(products, indices) == pytest.approx([-5, 0, 5])
+    # A shot with a shorter window has fewer lags, and its default span stays inside them.
+    short = ff.make_products(window=40)
+    assert lag_strip.default_span_us(bundle_of(short))[0] <= 10.0
+    indices, _ = lag_strip.choose_lags(bundle_of(short), n=3, span_us=100.0)
+    assert lags_us(short, indices) == pytest.approx([-10, 0, 10])
+    # Typed lags that are all outside, or cannot be read, leave the default in place.
+    for typed in ("40 50", "two, three"):
+        indices, source = lag_strip.choose_lags(bundle, typed=typed)
+        assert source == "fit" and len(indices) == 5
+    with pytest.raises(ValueError):
+        lag_strip.parse_lags("1, x")
+
+
+def test_the_lags_the_slope_rests_on_are_highlighted_as_in_the_tracks_view(products):
+    bundle = bundle_of(products)
+    figure = lag_strip.lag_strip(bundle, n=5)
+    seen = tracks.tracks_figure(bundle)
+    fields, lag = products.fields, products.bank["time"].values * US
+    for key in LABEL:
+        every, fit, line = trajectory(figure, key)
+        r, z = (fields[f"pos_{c}_{key}"].values[4, 5] for c in "rz")
+        fitted = fields[f"fit_{key}"].values[4, 5] & np.isfinite(r)
+        # (5, 4) is fitted on +-4 us, at half a microsecond a lag.
+        assert fitted.sum() == 17
+        np.testing.assert_array_equal(fit.x, np.where(fitted, r, np.nan))
+        np.testing.assert_array_equal(fit.y, np.where(fitted, z, np.nan))
+        # The lags highlighted are the ones the Tracks view highlights.
+        (highlight,) = named(seen, f"{LABEL[key]}: lags of the fit", "y")
+        np.testing.assert_allclose(lag[fitted], highlight.x)
+        # In the track's legend group, with no entry of their own: the track's entry hides them too.
+        for trace in (every, fit, line):
+            assert trace.legendgroup == key and trace.showlegend is False

@@ -1,19 +1,18 @@
 """Synthetic ``pixel_averages``, ``method_fields`` and ``blob_parameters`` blobs, and stand-in specs that serve them.
 
-The three product specs (J3) are written in parallel with the Fields page, so this builds the blobs
-from the frozen schemas in docs/PHASE_06_DECORRELATION.md ("Products") and registers cached stand-in
-specs under the permanent keys: ``pixel_averages`` batch only, the other two chained to it. Each
-stand-in's ``compute`` ignores the record and returns a synthetic dataset, so the page, the store
-and the ledger are exercised end to end -- ``seed`` fills them through ``store.result(batch=True)``,
-as ``fusion-ui precompute`` does -- without an analysis. Parameter dataclasses mirror the plan's
-(``averages``, ``tracking``, ``tde``, ``neighbour_step``, ``blobs``) with the deck's C-Mod values.
+The blobs have the products' schemas, and the stand-in specs are registered under the three product
+keys: ``pixel_averages`` batch only, the other two chained to it. Each stand-in's ``compute``
+ignores the record and returns a synthetic dataset, so the page, the store and the ledger are
+exercised end to end without an analysis: ``seed`` fills them through ``store.result(batch=True)``,
+as ``fusion-ui precompute`` does. The parameter dataclasses have the real ones' shape
+(``averages``, ``tracking``, ``tde``, ``neighbour_step``, ``blobs``).
 
 The physics is a blob moving at a known velocity across a 10 x 9 array with C-Mod's geometry and
 the 22 dead pixels of the hand-made 1160616 mask, so that a test can say what a pixel's velocity,
 track and fitted lags are and read them back off the figure. Every number is deterministic.
 
-``World.install`` replaces whatever is registered under the three keys for the length of a test and
-puts it back, so these tests keep working once the real specs are registered.
+``World.install`` replaces the real specs under the three keys for the length of a test and puts
+them back.
 """
 
 import dataclasses
@@ -64,7 +63,7 @@ BLOB_NAMES = (
 
 
 # ---------------------------------------------------------------------------
-# Parameters: the plan's structure, the deck's values
+# Parameters
 # ---------------------------------------------------------------------------
 
 
@@ -397,8 +396,8 @@ def _render(result, params, target):
 class World:
     """Stand-in specs under the three product keys, plus the synthetic data they serve.
 
-    ``seed`` runs them through the store the way a batch job does. The parameters decide the data
-    where the plan says they do: ``averages.window`` sets the number of lags of the bank.
+    ``seed`` runs them through the store the way a batch job does. ``averages.window`` sets the
+    number of lags of the bank.
     """
 
     def __init__(self, **options):
@@ -462,10 +461,8 @@ class World:
     def install(self):
         """Register the stand-ins, remembering whatever was registered under those keys.
 
-        Only the first time: a test may install again after a second world was swapped in and out
-        (``test_the_mask_is_shown_with_its_source``), and the second call would otherwise remember the
-        stand-ins themselves and put *them* back at the end, leaving the real specs replaced for every test
-        that runs after this one.
+        Only the first time: a second ``install`` (after another world was swapped in and out) would
+        otherwise remember the stand-ins themselves and leave them registered for every later test.
         """
         for key, spec in self.specs().items():
             if key not in self._saved:
@@ -505,10 +502,6 @@ class World:
             runs[key] = run
         self.calls.clear()
         return runs
-
-
-def default_params(key):
-    return registry.get(key).params()
 
 
 def with_window(window):

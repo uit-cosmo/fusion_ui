@@ -1,10 +1,9 @@
 """The Langmuir probe view: one (quantity, position) trace at a time.
 
-Also a live spec. ASP/FSP files are ragged -- every quantity x position carries
-its own time dimension, 107k-207k samples each, with no shared axis -- so the
-choice of what to plot is data-dependent in a way no annotation can express.
-That is what :attr:`PlotSpec.choices` is for: the quantity list comes from the
-opened file, and the position list from the quantity chosen a moment earlier.
+A live spec. ASP/FSP files are ragged: every quantity at every position has
+its own time dimension, so what can be plotted is read off the opened file
+through :attr:`PlotSpec.choices`: the quantities, and the positions of the
+quantity chosen a moment earlier.
 """
 
 from dataclasses import dataclass
@@ -26,19 +25,12 @@ class ProbeTraceParams:
 
 
 def choices(ds, path, chosen):
-    """Quantity and position lists, read off the file rather than declared.
-
-    ``chosen`` carries the fields decided so far in this pass, so the position
-    list narrows to the quantity that was just picked.
-    """
+    """The file's quantities, and the positions of the quantity ``chosen``."""
     available = probes.quantities_and_positions(ds)
     if path == "quantity":
         return tuple(available) or None
-    if path == "position":
-        quantity = chosen.get("quantity")
-        if quantity in available:
-            return tuple(available[quantity])
-        return None
+    if path == "position" and chosen.get("quantity") in available:
+        return tuple(available[chosen["quantity"]])
     return None
 
 

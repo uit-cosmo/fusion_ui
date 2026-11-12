@@ -1,15 +1,12 @@
 """``sys.modules['__main__']`` after a Streamlit test: put back, so that a later spawned pool still works.
 
-The mechanism is in the docstring of ``keep_the_main_module`` (``conftest.py``): Streamlit installs the script it runs
-as ``__main__`` and never puts the old one back, and a process started with ``spawn`` runs its parent's ``__main__``
-again from the file it came from. ``AppTest.from_function`` generates a script that ends in
-``function(*__args, **__kwargs)``, which only AppTest, which puts those names in the running module, can run.
+Streamlit installs the script it runs as ``__main__`` and never puts the old one back, and a process started with
+``spawn`` runs its parent's ``__main__`` again from its file. ``AppTest.from_function`` generates a script that only
+AppTest can run, so a pool spawned after such a test dies; the ``keep_the_main_module`` fixture (``conftest.py``)
+restores ``__main__`` after every test.
 
-Two tests, and their order matters. The first leaves ``__main__`` as a test can; the second is the test that follows it,
-and is the regression test: it gets the ``__main__`` the session started with and a pool that works. Without the
-fixture it fails twice over -- ``__main__`` is still the generated script, and the pool's children die with
-``NameError: name '__args' is not defined``, as every pool test did when it ran straight after
-``tests/test_plots_dead_pixel_words.py``, whose tests use ``from_function`` too.
+Two tests, and their order matters. The first leaves ``__main__`` replaced; the second, which follows it, gets the
+``__main__`` the session started with and a pool that works.
 """
 
 import concurrent.futures

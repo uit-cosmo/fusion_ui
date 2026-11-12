@@ -1,15 +1,10 @@
 """The raw imaging view: frames, click-a-pixel, movie export.
 
-A *live* spec -- there is nothing derived to cache. The time-sliced dataset is
-the result, and everything expensive about it (a frame, a pixel's series) is
-read one slice at a time from the open file. It is registered anyway so that
-the single-shot page needs no special case for it: the page picks a spec and
-renders it, and this happens to be the one that draws its own widgets.
+A live spec: the time-sliced dataset is the result, and a frame or a pixel's
+series is read off the open file one slice at a time.
 
-Frame index and selected pixel are **view state**, not parameters: they live in
-``st.session_state`` keyed off ``Target.key`` and never reach a hash. Minting a
-new ``param_sets`` row on every slider drag would fill the table with noise and
-tell you nothing.
+The frame index and the selected pixel are view state, not parameters: they
+live in ``st.session_state`` keyed off ``Target.key`` and never reach a hash.
 """
 
 import math
@@ -46,11 +41,6 @@ params_ui.CHOICES[("RawFramesParams", "colorscale")] = (
 )
 
 
-# ---------------------------------------------------------------------------
-# Frame selection
-# ---------------------------------------------------------------------------
-
-
 def _frame_index(times, target):
     """The slider, plus a jump-to-time box that agrees with it."""
     state_key = f"frame.{target.key}"
@@ -60,8 +50,7 @@ def _frame_index(times, target):
     jump_key = f"{state_key}.jump"
 
     def jump_to_nearest():
-        # Fires only on an actual edit (Streamlit's on_change semantics), so it
-        # cannot fight the slider on an ordinary drag rerun.
+        # on_change fires only on an edit, so it cannot fight the slider.
         st.session_state[state_key] = loader.nearest_index(
             times, st.session_state[jump_key]
         )
@@ -82,36 +71,22 @@ def _frame_index(times, target):
 
 
 def _axes(ds, values):
-    """``(x axis, y axis, x label, y label)`` -- physical R/Z where we have it."""
+    """``(x axis, y axis, x label, y label)``: R and Z where the file has them."""
     r_grid, z_grid = loader.pixel_grid(ds)
     if r_grid is None:
-        return (
-            np.arange(values.shape[1]),
-            np.arange(values.shape[0]),
-            "x",
-            "y",
-        )
+        return np.arange(values.shape[1]), np.arange(values.shape[0]), "x", "y"
     return r_grid[0, :], z_grid[:, 0], "R [cm]", "Z [cm]"
 
 
-def _selected_pixel(target, shape):
-    key = f"pixel.{target.key}"
-    iy, ix = st.session_state.get(key, (shape[0] // 2, shape[1] // 2))
-    return min(iy, shape[0] - 1), min(ix, shape[1] - 1)
-
-
 def _point_to_pixel(point, x_axis, y_axis, shape):
-    """Nearest ``(iy, ix)`` for one selected point, or ``None``.
+    """``(iy, ix)`` for one selected point, or ``None`` for one that cannot be
+    mapped.
 
-    Three spellings, most reliable first: the click-grid overlay (see
-    :func:`_frame_figure`) stamps each of its markers with ``[iy, ix, value]``
-    customdata, whose first two entries map back exactly with no coordinate
-    arithmetic; some
-    backends report a heatmap cell as a ``[row, col]`` pair in
-    ``point_number``; otherwise the physical ``x``/``y`` coordinates map back
-    through the axis arrays. An unmappable point is skipped, never fatal.
+    A marker of the click grid (see :func:`_frame_figure`) carries its own
+    ``[iy, ix, value]`` as customdata. Any other point maps to the pixel
+    nearest its ``x`` and ``y``.
     """
-    custom = point.get("customdata", point.get("customData"))
+    custom = point.get("customdata")
     if isinstance(custom, (list, tuple)) and len(custom) >= 2:
         try:
             iy, ix = int(custom[0]), int(custom[1])
@@ -120,25 +95,6 @@ def _point_to_pixel(point, x_axis, y_axis, shape):
         else:
             if 0 <= iy < shape[0] and 0 <= ix < shape[1]:
                 return iy, ix
-    number = point.get("point_number", point.get("pointNumber"))
-    if isinstance(number, (list, tuple)) and len(number) == 2:
-        try:
-            iy, ix = int(number[0]), int(number[1])
-        except (TypeError, ValueError):
-            iy = ix = None
-        else:
-            if 0 <= iy < shape[0] and 0 <= ix < shape[1]:
-                return iy, ix
-    else:
-        # A scalar point number on the click grid is the row-major index of
-        # the cell (see _frame_figure); anything else falls through to the
-        # coordinate mapping below.
-        try:
-            flat = int(number)
-        except (TypeError, ValueError):
-            flat = None
-        if flat is not None and 0 <= flat < shape[0] * shape[1]:
-            return flat // shape[1], flat % shape[1]
     try:
         ix = int(np.argmin(np.abs(x_axis - point["x"])))
         iy = int(np.argmin(np.abs(y_axis - point["y"])))
@@ -156,24 +112,16 @@ def _frame_figure(values, x_axis, y_axis, labels, pixel, colorscale):
             y=y_axis,
             colorscale=colorscale,
             colorbar=dict(title="signal"),
-            # A heatmap is not a selectable trace -- Plotly has no
-            # ``selectPoints`` for it, so a click on the image itself can
-            # never become a selection event. It is skipped from hover so
-            # that the click grid below is always the closest hit.
+            # A heatmap cannot be selected, so a click on it never reaches the
+            # server. Skipped from hover so that the click grid below is
+            # always the closest hit.
             hoverinfo="skip",
         )
     )
-    # The click target: one invisible marker per cell, each stamped with its
-    # own ``[iy, ix]``, on the scatter path that does turn a click into a
-    # selection.
-    #
-    # ``hoverinfo`` here must NOT be "skip". Streamlit's ``onClick`` handler
-    # only forwards hierarchical (sunburst/treemap) points, so an ordinary
-    # click reaches the server only as a *selection*, via Plotly's
-    # select-on-click -- and ``selectOnClick`` starts from ``gd._hoverdata``.
-    # A trace with ``hoverinfo="skip"`` produces no hover data at all, so it
-    # produced no click event either: that is why clicking the frame did
-    # nothing. "none" draws no tooltip but still fires the events.
+    # The click target: one invisible marker per cell, carrying its own
+    # ``[iy, ix, value]``. A click reaches the server only as a selection, and
+    # Plotly's select-on-click starts from the hover data, so this trace must
+    # not have ``hoverinfo="skip"``.
     ny, nx = values.shape
     grid_x, grid_y, grid_custom = [], [], []
     for row in range(ny):
@@ -213,10 +161,8 @@ def _frame_figure(values, x_axis, y_axis, labels, pixel, colorscale):
         margin=dict(l=10, r=10, t=20, b=10),
         # Clicks must select, and must never miss. ``hoverdistance=-1``
         # removes the 20-pixel cutoff, so a click anywhere in the axes finds
-        # the nearest grid marker instead of falling between two cells and
-        # being silently dropped. ``dragmode="pan"`` keeps the plain drag off
-        # ``select``: Streamlit forces ``clickmode`` back to plain "event"
-        # -- no select-on-click -- whenever the dragmode is select or lasso.
+        # the nearest grid marker. ``dragmode="pan"``, because Streamlit turns
+        # select-on-click off whenever the dragmode is select or lasso.
         clickmode="event+select",
         dragmode="pan",
         hovermode="closest",
@@ -225,13 +171,7 @@ def _frame_figure(values, x_axis, y_axis, labels, pixel, colorscale):
     return figure
 
 
-# ---------------------------------------------------------------------------
-# Movie export
-# ---------------------------------------------------------------------------
-
-
-#: Plotly's colour-scale names to matplotlib's. Mostly the lowercase form, but
-#: not for the ColorBrewer scales -- "RdBu".lower() is not a matplotlib cmap.
+#: Plotly's colour-scale names to matplotlib's.
 _MPL_CMAP = {
     "Plasma": "plasma",
     "Viridis": "viridis",
@@ -242,21 +182,8 @@ _MPL_CMAP = {
 }
 
 
-def _movie_extent(r_grid, z_grid):
-    """``(r0, r1, z0, z1)`` for ``imshow(..., origin='lower')``, or ``None``."""
-    if r_grid is None:
-        return None
-    return (
-        float(r_grid[0, 0]),
-        float(r_grid[0, -1]),
-        float(z_grid[0, 0]),
-        float(z_grid[-1, 0]),
-    )
-
-
 def _render_movie(ds, stride, params, out_path):
-    """Matplotlib, not Plotly: animation is the one thing the interactive stack
-    is worse at, and ``plot_movies.py`` already produces what we want."""
+    """The window as an mp4, every ``stride``-th frame, with matplotlib."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -266,6 +193,9 @@ def _render_movie(ds, stride, params, out_path):
     indices = list(range(0, ds.sizes[loader.TIME_DIM], stride))
     times = ds[loader.TIME_DIM].values
     r_grid, z_grid = loader.pixel_grid(ds)
+    extent = None
+    if r_grid is not None:
+        extent = tuple(map(float, (r_grid[0, 0], r_grid[0, -1], z_grid[0, 0], z_grid[-1, 0])))
 
     first = loader.frame(ds, indices[0]).values
     figure, axes = plt.subplots(figsize=(4, 4))
@@ -275,7 +205,7 @@ def _render_movie(ds, stride, params, out_path):
         cmap=_MPL_CMAP.get(params.colorscale, "plasma"),
         vmin=float(np.nanmin(first)),
         vmax=float(np.nanmax(first)),
-        extent=_movie_extent(r_grid, z_grid),
+        extent=extent,
     )
     title = axes.set_title(f"t = {times[indices[0]]:.5f} s")
     axes.set_xticks([])
@@ -304,8 +234,7 @@ def _movie_export(ds, times, params, target):
             f"frames, {n_frames / params.movie_fps:.1f} s of video at "
             f"{params.movie_fps} fps. Max frames and fps are in the sidebar."
         )
-        # The movie's own parameters are in its path, so changing the frame rate
-        # produces a second file rather than silently overwriting the first.
+        # The parameters are in the path: another frame rate is another file.
         digest, _ = params_ui.hash_params("movie", params)
         out_path = store.blob_path("movie", digest, target, suffix=".mp4")
         if os.path.exists(out_path):
@@ -322,11 +251,6 @@ def _movie_export(ds, times, params, target):
                     st.video(out_path)
 
 
-# ---------------------------------------------------------------------------
-# render
-# ---------------------------------------------------------------------------
-
-
 def render(ds, params, target):
     times = loader.cached_frame_times(target.path, target.t_start, target.t_end)
     if times.size == 0:
@@ -337,8 +261,11 @@ def render(ds, params, target):
     st.caption(f"t = {times[index]:.6f} s · frame {index + 1} / {times.size}")
 
     values = loader.frame(ds, index).values
+    ny, nx = values.shape
     x_axis, y_axis, x_label, y_label = _axes(ds, values)
-    iy, ix = _selected_pixel(target, values.shape)
+    pixel_key = f"pixel.{target.key}"
+    iy, ix = st.session_state.get(pixel_key, (ny // 2, nx // 2))
+    iy, ix = min(iy, ny - 1), min(ix, nx - 1)
 
     event = st.plotly_chart(
         _frame_figure(
@@ -348,15 +275,10 @@ def render(ds, params, target):
         selection_mode="points",
         key=f"click.{target.key}",
     )
-    # Any clicked trace maps to its nearest pixel -- including the marker
-    # itself, which maps back to the pixel it already marks (a no-op). The
-    # previous code accepted heatmap clicks only and silently dropped
-    # everything else, so a click the backend attributed to the overlay left
-    # the pixel unchanged with no error to explain it.
     for point in decimate.selection_points(event):
         mapped = _point_to_pixel(point, x_axis, y_axis, values.shape)
         if mapped is not None and mapped != (iy, ix):
-            st.session_state[f"pixel.{target.key}"] = mapped
+            st.session_state[pixel_key] = mapped
             st.rerun()
 
     location = (
@@ -366,25 +288,11 @@ def render(ds, params, target):
         f"Selected pixel: y={iy}, x={ix}{location} — click the frame to move it, "
         "or type the indices below."
     )
-    # The click target above depends on the Plotly selection event reaching
-    # the server; the indices below always work. They are deliberately
-    # keyless: the pixel tuple in session state is the single source of
-    # truth, and keyed widgets would keep stale values that fight it --
-    # each run they display the tuple, and a typed change writes it back.
-    pixel_key = f"pixel.{target.key}"
+    # Keyless on purpose: the pixel in session state is the one source of
+    # truth, and keyed widgets would keep stale values that fight it.
     x_col, y_col = st.columns(2)
-    new_ix = x_col.number_input(
-        "Pixel x",
-        min_value=0,
-        max_value=values.shape[1] - 1,
-        value=int(ix),
-    )
-    new_iy = y_col.number_input(
-        "Pixel y",
-        min_value=0,
-        max_value=values.shape[0] - 1,
-        value=int(iy),
-    )
+    new_ix = x_col.number_input("Pixel x", min_value=0, max_value=nx - 1, value=int(ix))
+    new_iy = y_col.number_input("Pixel y", min_value=0, max_value=ny - 1, value=int(iy))
     if (int(new_iy), int(new_ix)) != (iy, ix):
         st.session_state[pixel_key] = (int(new_iy), int(new_ix))
         st.rerun()
@@ -404,14 +312,11 @@ def render(ds, params, target):
 
 
 def overlay(items, params, target):
-    """Every selected pixel's time trace on one axis.
+    """Every selected pixel's time trace on one axis, each as its min/max
+    envelope.
 
-    The live overlay: ``items`` carry the open time-sliced dataset (the same
-    object ``render`` gets, possibly already sliced to a zoom window by the
-    caller), so each trace is read off it with :func:`loader.pixel_series` --
-    no run, no blob, nothing cached. Each trace goes through the min/max
-    envelope first: a full window is hundreds of thousands of samples per
-    pixel, and striding would drop the spikes this view is for.
+    ``items`` carry the open time-sliced dataset ``render`` gets, which the
+    caller may have sliced to a zoom window.
     """
     from plotly.colors import qualitative
 

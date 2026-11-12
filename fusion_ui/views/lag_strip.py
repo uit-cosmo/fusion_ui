@@ -1,28 +1,20 @@
 """The lag strip: the conditional average and the cross-correlation at a few lags, with contour and tracks.
 
 One row per field, one column per lag; the reference pixel is marked, the contour is drawn at the
-level the average implies, and each track's position is marked at each lag. The reference drawing
-is ``figures.fig_lags`` through ``plotting_scripts.plot_frames_with_contour``.
+level the average implies, and each track's position is marked at each lag. Each row keeps one
+colour scale across its lags: a per-frame rescale makes a decaying average look as if it never
+decays.
 
-**The lags are view state, and flexible.** Some shots have much faster dynamics, and +-10 us then
-shows a structure long gone. They are a span (+- the largest lag) and a number of panels, or lags
-typed in. The default span comes from the pixel's own data: the lags the centroid track's slope was
-fitted on, widened by a quarter on each side; the deck's lags when the track did not fit. The lags
-offered stop at the bank's window: a shot that needs a longer one has its own parameter set.
+The lags are view state: a span (± the largest lag) and a number of panels, or lags typed in. The
+default span is the lags the centroid track's slope was fitted on, widened by a quarter on each
+side, and the deck's lags when the track did not fit. They stop at the bank's window.
 
-Each row keeps **one colour scale across its lags**, because a per-frame rescale makes a decaying
-average look as if it never decays.
-
-**The zero-lag panel carries the trajectories.** Each track's whole path in R and Z, over every lag
-of the bank (``overlays.path_traces``), goes on the panel at tau = 0, or on the one nearest it when
-the lags shown leave 0 out (the earlier of two equally near), and on its own field's row: the maximum
-and the centroid on the conditional average, the 2DCC on the cross-correlation. They are read off
-``method_fields``, and a strip without it is drawn without them.
+The panel nearest τ = 0 also carries each track's whole trajectory in R and Z
+(``overlays.path_traces``), on its own field's row. They are read off ``method_fields``, and a
+strip without it is drawn without them.
 """
 
 import re
-from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 import plotly.graph_objects as go
@@ -39,48 +31,25 @@ from fusion_ui.views.figures import (
 from fusion_ui.views.geometry import grid_axes, pitch
 from fusion_ui.views.overlays import Legend, contours, frame_trace, overlay_traces
 
-#: The deck's lags (``twodca_manuscript.datasets.cmod.SPEC.lags``), in frames: the fallback when the
-#: centroid track did not fit, so there is nothing of the pixel's own to take a span from.
+#: The lags of the group's deck, in frames: the span when the centroid track did not fit, so the
+#: pixel has no span of its own.
 DECK_FRAMES = 20
 #: The fitted lags are widened by this fraction of their width on each side.
 FIT_MARGIN = 0.25
 DEFAULT_PANELS = 5
 MAX_PANELS = 9
 
-#: The rows: a field, and the tracks that are read off it.
-ROWS = (("cond_av", ("max", "com")), ("cross_corr", ("2dcc",)))
-
-
-@dataclass(frozen=True)
-class LagChoice:
-    """Which lags the strip shows, and where they came from."""
-
-    indices: tuple  # into the bank's lag axis, ascending
-    source: str  # "fit", "deck", "span" or "typed"
-    span_us: Optional[float] = (
-        None  # +- the largest lag, in microseconds; None for typed lags
-    )
-    dropped: tuple = ()  # typed lags (us) outside the bank's window
-    error: Optional[str] = None  # why typed lags could not be used
+#: The rows: the fields that have tracks, and the tracks read off each.
+ROWS = tuple((name, keys) for name, keys in pixel.FIELD_TRACKS.items() if keys)
 
 
 def parse_lags(text):
     """Lags in microseconds out of free text: ``"-6, -3  0; 3 6"`` -> ``[-6.0, -3.0, 0.0, 3.0, 6.0]``.
 
-    Raises ``ValueError`` naming the part it could not read.
+    Raises ``ValueError`` on a part it cannot read.
     """
     cleaned = text.replace("−", "-").replace("µs", " ").replace("us", " ")
-    values = []
-    for token in re.split(r"[,;\s]+", cleaned.strip()):
-        if not token:
-            continue
-        try:
-            values.append(float(token))
-        except ValueError:
-            raise ValueError(
-                f"cannot read {token!r} as a lag in microseconds"
-            ) from None
-    return values
+    return [float(token) for token in re.split(r"[,;\s]+", cleaned.strip()) if token]
 
 
 def _step(time):
@@ -91,10 +60,9 @@ def default_span_us(bundle):
     """``(span, source)``: +- the largest lag of the strip when the span is not set, in microseconds.
 
     The lags the centroid track's slope was fitted on (``fit_com``), widened by a quarter of their
-    width on each side; the deck's +-20 frames when that track did not fit. A track fitted when it
-    has a velocity and at least two lags behind it: one lag is no slope, and its width is nothing
-    to take a span from. Never beyond the bank's window, never narrower than two lags, rounded up
-    to a whole lag.
+    width on each side (source ``"fit"``); the deck's ``DECK_FRAMES`` lags when that track has no
+    velocity or fewer than two fitted lags (``"deck"``). Never beyond the bank's window, never
+    narrower than two lags, rounded up to a whole lag.
     """
     time = pixel.lags(bundle)
     step = _step(time)
@@ -116,41 +84,38 @@ def default_span_us(bundle):
 def _spread(time, span_us, n):
     """``n`` lags from ``-span`` to ``+span`` microseconds, snapped to the lag axis, without repeats."""
     targets = np.linspace(-span_us, span_us, int(n)) * 1e-6
-    return tuple(sorted({int(np.argmin(np.abs(time - t))) for t in targets}))
+    return sorted({int(np.argmin(np.abs(time - t))) for t in targets})
 
 
 def choose_lags(bundle, n=DEFAULT_PANELS, span_us=None, typed=""):
-    """The :class:`LagChoice` for these view settings.
+    """``(indices, source)``: the lags the strip shows, ascending indices into the bank's lag axis.
 
-    Typed lags win when there are any inside the bank's window; otherwise ``span_us``, and
-    otherwise the pixel's own default span. All in microseconds; lags snap to the bank's lag axis.
+    Typed lags win when any can be read and is inside the bank's window (``"typed"``); otherwise
+    ``span_us`` (``"span"``), and otherwise the pixel's own default span. All in microseconds; lags
+    snap to the bank's lag axis.
     """
     time = pixel.lags(bundle)
     window = float(np.max(np.abs(time)))
-    error, dropped = None, ()
-    if typed and typed.strip():
-        try:
-            asked = parse_lags(typed)
-        except ValueError as problem:
-            asked, error = [], str(problem)
-        inside = [t for t in asked if abs(t) * 1e-6 <= window + _step(time) / 2]
-        dropped = tuple(t for t in asked if t not in inside)
-        if inside:
-            indices = sorted({int(np.argmin(np.abs(time - t * 1e-6))) for t in inside})
-            return LagChoice(tuple(indices), "typed", None, dropped, error)
-        error = error or "none of the typed lags is inside the bank's window"
+    try:
+        asked = parse_lags(typed or "")
+    except ValueError:
+        asked = []
+    inside = [t for t in asked if abs(t) * 1e-6 <= window + _step(time) / 2]
+    if inside:
+        indices = sorted({int(np.argmin(np.abs(time - t * 1e-6))) for t in inside})
+        return indices, "typed"
     if span_us is None:
         span_us, source = default_span_us(bundle)
     else:
         span_us, source = min(float(span_us), window * 1e6), "span"
-    return LagChoice(_spread(time, span_us, n), source, span_us, dropped, error)
+    return _spread(time, span_us, n), source
 
 
 def zero_lag_column(time):
-    """Index of the lag nearest zero among ``time`` (the strip's lags, ascending); the earlier of two equally near.
+    """Index of the lag nearest zero among ``time`` (ascending); the earlier of two equally near.
 
-    "Equally near" is to a part in 10^9, so that rounding in a lag axis that is symmetric to the eye
-    (-3 us and +3 us a hair apart) does not decide which panel carries the trajectories.
+    "Equally near" is to a part in 10^9, so that rounding in a symmetric lag axis does not decide
+    which panel carries the trajectories.
     """
     distance = np.abs(np.asarray(time, dtype=float))
     return int(
@@ -159,11 +124,7 @@ def zero_lag_column(time):
 
 
 def _height(columns):
-    """Figure height in pixels for ``columns`` panels per row, so that they fill a page-wide figure.
-
-    A panel is as wide as the figure allows and a little taller than wide (the array is), so the
-    height follows the number of columns: few lags make big panels and a tall figure.
-    """
+    """Figure height in pixels for ``columns`` panels per row: few lags make big panels and a tall figure."""
     panel = 0.85 * 1000 / columns
     return int(min(900, max(430, 2 * (1.1 * panel + 75) + 100)))
 
@@ -177,8 +138,7 @@ def lag_strip(bundle, n=DEFAULT_PANELS, span_us=None, lags=""):
     if why:
         return message_figure(why)
     time = pixel.lags(bundle)
-    choice = choose_lags(bundle, n, span_us, lags)
-    indices = list(choice.indices)
+    indices, source = choose_lags(bundle, n, span_us, lags)
     x, y = bundle.pixel
     R, Z = bundle.grid
     x_axis, y_axis = grid_axes(R, Z)
@@ -254,8 +214,6 @@ def lag_strip(bundle, n=DEFAULT_PANELS, span_us=None, lags=""):
         height=_height(columns),
         margin=dict(l=70, r=10, t=30, b=70),
         legend=dict(orientation="h", x=0.0, y=-0.01, yanchor="top"),
-        meta=dict(
-            lags=[float(time[i]) for i in indices], source=choice.source, levels=levels
-        ),
+        meta=dict(lags=[float(time[i]) for i in indices], source=source, levels=levels),
     )
     return go.Figure(data=traces, layout=go.Layout(**layout))

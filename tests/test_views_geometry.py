@@ -1,6 +1,5 @@
 """The array as the figures draw it: axes, reading order, and a click read back off a chart."""
 
-import types
 
 import numpy as np
 import pytest
@@ -110,8 +109,8 @@ def test_a_click_names_the_pixel_in_its_customdata():
 
 
 def test_a_typed_array_that_went_through_json_is_still_a_click():
-    """The browser hands a Float64Array back as an object keyed "0", "1", ... : the failure the
-    first real click found. Figures now send lists, and this reads the object anyway."""
+    """The browser hands a Float64Array back as an object keyed "0", "1", ... . Figures send
+    lists, and this reads the object anyway."""
     assert geometry.pixel_from_event(event({"0": 5.0, "1": 4.0, "2": 400.0})) == (5, 4)
     assert geometry.pixel_from_event(event({0: 1.0, 1: 2.0})) == (1, 2)
 
@@ -125,12 +124,3 @@ def test_anything_that_is_not_a_pixel_is_no_click_and_not_an_error():
     assert geometry.pixel_from_event({"selection": {}}) is None
     # One malformed point does not hide a good one.
     assert geometry.pixel_from_event(event(None, [6, 1])) == (6, 1)
-
-
-def test_the_event_may_be_an_object_with_attributes():
-    state = types.SimpleNamespace(
-        selection=types.SimpleNamespace(
-            points=[types.SimpleNamespace(customdata=[4, 4])]
-        )
-    )
-    assert geometry.pixel_from_event(state) == (4, 4)

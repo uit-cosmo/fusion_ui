@@ -1,28 +1,19 @@
-"""Blob velocity from time-delay estimation on the raw record.
+"""Blob velocity from time-delay estimation on the record, the estimator of
+the group's PPCF 2026 paper.
 
-Ported from ``density_scan/utils.py:get_tde_velocities``: at the reference
-pixel, find the nearest usable neighbour in each of the four directions
-(radial-in, radial-out, poloidal-up, poloidal-down), estimate the time delay
-to each with a cross-conditional-average, and solve the resulting system for
-a radial and poloidal velocity. "Usable" means the neighbour is not dead and
-its cross-correlation with the reference peaks at a lag of at least
-``ccf_min_lag`` samples -- a neighbour with no measurable delay is skipped
-rather than silently reported as zero.
+At the reference pixel, find the nearest usable neighbour in each of the four
+directions (radial in and out, poloidal up and down), estimate the time delay
+to each with a cross-conditional average, and solve for a radial and a
+poloidal velocity. A neighbour is usable when it is not dead and its
+cross-correlation with the reference peaks at a lag of at least
+``ccf_min_lag`` samples: one with no measurable delay is skipped, not reported
+as zero.
 
-Unlike every other phase-03 spec, this one is **not chained**: it conditions
-on nothing and is estimated once over the whole record rather than from a
-2DCA average, so ``compute(ds, params)`` takes two arguments, there is no
-``requires``, and it is a sibling of ``spectra.py`` rather than of
-``velocity_contour.py``.
-
-``velocity_estimation.EstimationOptions``, ``CAOptions`` and
-``NeighbourOptions`` all carry ``@dataclass`` but declare their own
-``__init__``, so ``dataclasses.fields()`` on any of them is empty -- exactly
-the trap ``fusion_ui.core.params_ui`` guards against (verified directly:
-``fields(EstimationOptions()) == ()``, and likewise for the other two). None
-of them may ever be a params field; ``TdeVelocityParams`` below carries only
-the handful of settings ``density_scan`` actually varies, and the upstream
-objects are built fresh inside ``compute``.
+``velocity_estimation``'s ``EstimationOptions``, ``CAOptions`` and
+``NeighbourOptions`` carry ``@dataclass`` but declare their own ``__init__``,
+so ``dataclasses.fields()`` on them is empty and they would hash to nothing.
+None of them may be a params field: ``TdeVelocityParams`` carries the settings
+and ``compute`` builds the upstream objects from them.
 """
 
 from dataclasses import dataclass
@@ -37,18 +28,16 @@ from velocity_estimation.two_dim_velocity_estimates import _find_neighbors
 from fusion_ui.core import loader, registry
 
 #: R and Z are stored in centimetres, so a velocity off this grid is cm/s. The
-#: group reports m/s -- convert once, here, exactly as velocity_contour.py and
-#: fwhm_sizes.py do. (This is also, concretely, upstream's own ``/ 100``.)
+#: group reports m/s.
 CM = 100.0
-
-#: The C-Mod APD camera's dead-pixel mask is 9 pixels wide (x) by 10 tall (y): the
-#: hand-made 1160616 one, held by ``experimental_database`` (moved there from
-#: fusion_scripts' ``density_scan/dead_pixel_mask.py``). It is applied to any shot
-#: whose array has that shape, whatever the run day (a quirk kept as it was).
 
 
 def _dead_pixel_mask():
-    """The mask as a ``(y, x)`` boolean array, as ``experimental_database`` builds it (y = 0 the bottom row)."""
+    """The hand-made 1160616 mask of ``experimental_database`` as a ``(y, x)``
+    boolean array, 10 tall by 9 wide.
+
+    It is applied to any shot whose array has that shape, whatever the run day.
+    """
     from experimental_database import hand_made_dead_pixel_mask
 
     return np.asarray(hand_made_dead_pixel_mask(1160616).values, dtype=bool)
@@ -83,7 +72,7 @@ class TdeVelocityParams:
         sample.
     mask_dead_pixels: Apply the hardcoded APD dead-pixel mask -- only takes
         effect when the opened array is actually the 9x10 grid it was built
-        for; see the module docstring on shape mismatch.
+        for.
     """
 
     refx: int = 6
@@ -109,39 +98,15 @@ def choices(ds, path, chosen):
     return None
 
 
-def _image_variable(ds):
-    """Alias for :func:`fusion_ui.core.loader.image_variable`, kept for
-    backwards compatibility."""
-    return loader.image_variable(ds)
-
-
-def _neighbours_used(refx, refy, interface, neighbour_options):
-    """Which of the four candidate neighbours the estimator actually kept.
-
-    ``estimate_velocities_for_pixel`` runs this same search internally but
-    does not hand back which pixels it settled on. Re-deriving it once more,
-    cheaply, is what lets the render show honestly what the velocity is (or
-    is not) built from, rather than just trusting the number.
-    """
-    horizontal, vertical = _find_neighbors(refx, refy, interface, neighbour_options)
-    return list(horizontal), list(vertical)
-
-
 def compute(ds, params):
-    """The time-delay velocity at one pixel, averaged over the whole record.
-
-    Not chained: unlike every other phase-03 spec, the input here really is
-    the raw (or preprocessed) frames, not a conditional average -- this
-    estimator conditions on nothing itself and reads the whole record.
-    """
-    _image_variable(ds)  # raises KeyError if this genuinely is not imaging data
+    """The time-delay velocity at one pixel, over the whole of ``ds``."""
+    loader.image_variable(ds)  # raises KeyError if this is not imaging data
     ny, nx = ds.sizes["y"], ds.sizes["x"]
 
     mask_grid = _dead_pixel_mask()
     mask_matches_shape = mask_grid.shape == (ny, nx)
-    apply_mask = bool(params.mask_dead_pixels) and mask_matches_shape
     mask = None
-    if apply_mask:
+    if params.mask_dead_pixels and mask_matches_shape:
         mask = xr.DataArray(
             mask_grid,
             dims=["y", "x"],
@@ -175,31 +140,25 @@ def compute(ds, params):
         confidence, events, is_dead = pixel.confidence, pixel.events, pixel.is_dead
         r_ref, z_ref = float(pixel.r_pos), float(pixel.z_pos)
     except ValueError:
-        # Upstream's own "nothing to estimate here" signal, caught exactly as
-        # density_scan's get_tde_velocities catches it, and returned as NaN.
-        #
-        # Narrower than it looks: a pixel with no usable neighbour does NOT
-        # raise -- estimate_velocities_for_pixel returns PixelData(vx=nan)
-        # for that. The only ValueError in this chain comes from
-        # get_2d_velocities_from_time_delays, when the two-equation system is
-        # fully degenerate (its common denominator vanishes). Deliberately the
-        # only exception caught: a KeyError from a malformed dataset, or
-        # anything else, must still fail loudly.
+        # Upstream raises ValueError only when the two-equation system is
+        # degenerate (get_2d_velocities_from_time_delays); a pixel with no
+        # usable neighbour comes back as NaN without raising. Nothing else is
+        # caught: a malformed dataset must still fail loudly.
         estimate_failed = True
         vx = vy = float("nan")
         confidence, events, is_dead = float("nan"), 0, False
         r_ref = float(ds["R"].isel(x=refx, y=refy))
         z_ref = float(ds["Z"].isel(x=refx, y=refy))
 
-    horizontal, vertical = _neighbours_used(refx, refy, interface, eo.neighbour_options)
+    # The estimator does not say which neighbours it settled on: run its
+    # search once more, to draw them.
+    horizontal, vertical = _find_neighbors(refx, refy, interface, eo.neighbour_options)
     used_grid = np.zeros((ny, nx), dtype="int8")
-    for used_x, used_y in horizontal + vertical:
+    for used_x, used_y in list(horizontal) + list(vertical):
         if 0 <= used_y < ny and 0 <= used_x < nx:
             used_grid[used_y, used_x] = 1
 
-    # int8, not bool: netCDF has no boolean type, and storing what actually
-    # comes back off a round trip is what makes the render trustworthy after
-    # a cache hit, not just on the first, in-memory pass.
+    # int8, not bool: netCDF has no boolean type.
     dead_grid = (
         np.asarray(mask.values, dtype="int8")
         if mask is not None
@@ -217,10 +176,8 @@ def compute(ds, params):
             "mask_applied": int(mask is not None),
             "mask_shape_mismatch": int(bool(params.mask_dead_pixels) and not mask_matches_shape),
             "neighbours_used": (("y", "x"), used_grid),
-            # Kept per axis, not just as a total: both the 3-point and the
-            # naive path pair one horizontal neighbour with one vertical one,
-            # so an axis with none is the whole reason there is no velocity --
-            # and a total that is merely non-zero cannot say which axis it is.
+            # Per axis: every estimate pairs one horizontal neighbour with one
+            # vertical one, so an axis with none is why there is no velocity.
             "n_horizontal": len(horizontal),
             "n_vertical": len(vertical),
             "dead_pixels": (("y", "x"), dead_grid),
@@ -236,16 +193,8 @@ def compute(ds, params):
     )
 
 
-# ---------------------------------------------------------------------------
-
-
 def _reason(result):
-    """Why there is no arrow, or ``None`` when there is one.
-
-    A velocity is one number and looks equally plausible whatever it is --
-    the whole point of drawing on the pixel grid is to make a bad estimate
-    visibly bad, and a missing one visibly explained rather than a blank plot.
-    """
+    """Why there is no estimate, or ``None`` when there is one."""
     if np.isfinite(float(result["vx"])):
         return None
     if bool(result["estimate_failed"]):
@@ -254,11 +203,6 @@ def _reason(result):
         return "the reference pixel is marked dead"
     horizontal, vertical = int(result["n_horizontal"]), int(result["n_vertical"])
     if not horizontal or not vertical:
-        # Both the 3-point and the naive path pair one neighbour from each
-        # axis, so one empty list means no estimate at all -- not a partial
-        # one. Purely radial motion hits this at the default ccf_min_lag=1:
-        # the poloidal neighbour's cross-correlation peaks at exactly lag 0
-        # and is rejected as unmeasurable.
         missing = "poloidal (Z)" if not vertical else "radial (R)"
         return (
             f"no {missing} neighbour satisfied ccf_min_lag -- every estimate "
@@ -326,14 +270,11 @@ def render(result, params, target):
     )
 
     reason = _reason(result)
-    # speed == 0 is reachable (the naive 1-point path with both delays at 0):
-    # the estimate exists, but has no direction to draw, and normalising by it
-    # would place the arrow head at NaN.
+    # speed == 0 is reachable (the naive path with both delays at 0): an
+    # estimate with no direction to draw.
     if reason is None and speed > 0:
-        # The arrow's length is fixed (a third of the grid's larger extent)
-        # and only its direction carries the estimate -- the title carries
-        # the actual numbers. A literal cm/s-scaled displacement would either
-        # vanish or run off the plot depending on the shot.
+        # The arrow has a fixed length and carries only the direction; the
+        # numbers are in the title.
         extent = max(
             float(r_grid.max() - r_grid.min()), float(z_grid.max() - z_grid.min())
         )
@@ -366,10 +307,10 @@ def render(result, params, target):
         )
 
     if bool(result["mask_shape_mismatch"]):
+        mask_ny, mask_nx = _dead_pixel_mask().shape
         figure.add_annotation(
             text=(
-                f"dead-pixel mask not applied: mask is "
-                f"{_dead_pixel_mask().shape[1]}x{_dead_pixel_mask().shape[0]} "
+                f"dead-pixel mask not applied: mask is {mask_nx}x{mask_ny} "
                 f"(x, y), this array is {r_grid.shape[1]}x{r_grid.shape[0]}"
             ),
             xref="paper",
@@ -397,8 +338,7 @@ def render(result, params, target):
 
 
 def scalars(result):
-    """``vx_tde`` / ``vy_tde``, the two names density_scan reports for this
-    estimator, written at the reference pixel."""
+    """``vx_tde`` and ``vy_tde`` in m/s, written at the reference pixel."""
     x, y = int(result["refx"]), int(result["refy"])
     return {
         (x, y, "vx_tde"): float(result["vx"]),

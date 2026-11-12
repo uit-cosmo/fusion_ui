@@ -1,20 +1,11 @@
 """Pure builders for the Fields page, and the two lists the page is made from.
 
-``fusion_ui/pages/5_fields.py`` draws nothing itself. It loads the three products of a shot into a
-:class:`~fusion_ui.views.bundle.Bundle`, then walks :data:`SHOT_VIEWS` (what is drawn for the whole
-array) and :data:`PIXEL_VIEWS` (what is drawn once a pixel is chosen). Each entry is a
-:class:`~fusion_ui.views.base.View`: the products it reads, the controls it asks for and a pure
-builder.
+``pages/5_fields.py`` loads the three products of a shot into a ``Bundle`` and walks ``SHOT_VIEWS``
+(drawn for the whole array) and ``PIXEL_VIEWS`` (drawn once a pixel is chosen). A new figure is a
+builder ``build(bundle, **controls)`` in this package, with a test, and one entry in a list.
 
-**To add a figure**, write a builder ``build(bundle, **controls) -> Figure | DataFrame | str |
-list`` in this package, with a test, and add one entry to the list it belongs in. The page does not
-change. A figure that reads a new per-pixel product (one chained to ``pixel_averages``) adds its key
-to ``products.KEYS`` and names it in ``reads``; the page then offers the command that fills it until
-it is computed.
-
-No builder calls Streamlit, the store, the database or the filesystem, so every one is a function of
-loaded datasets and can be tested on a synthetic blob. ``products`` is the one module that reads, and
-only the ledger: it never writes.
+No builder calls Streamlit, the store, the database or the filesystem. ``products`` is the one
+module that reads, and only the ledger.
 """
 
 import numpy as np
@@ -149,7 +140,6 @@ PIXEL_VIEWS = [
         key="lag_strip",
         title="The average at a few lags",
         reads=("pixel_averages",),
-        optional=("method_fields",),
         build=lag_strip.lag_strip,
         controls=_strip_controls,
         caption=(
@@ -166,7 +156,6 @@ PIXEL_VIEWS = [
         key="frame",
         title="One frame",
         reads=("pixel_averages",),
-        optional=("method_fields",),
         build=_frame_build,
         controls=_frame_controls,
     ),
@@ -187,7 +176,6 @@ PIXEL_VIEWS = [
         key="numbers",
         title="Numbers",
         reads=("method_fields",),
-        optional=("blob_parameters",),
         build=numbers.numbers,
     ),
 ]

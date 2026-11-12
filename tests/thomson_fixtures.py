@@ -1,21 +1,18 @@
-"""A synthetic Thomson scattering file in the layout of ``thomson_scattering_<shot>.nc``, as fusion_scripts writes it.
+"""A synthetic Thomson scattering file in the layout of ``thomson_scattering_<shot>.nc``.
 
-The reference for the layout is the module docstring of ``tools/mfe/get_thomson_scattering.py`` in fusion_scripts, which
-``build_dataset`` there follows: the raw points of the edge and the core system by ``(time, <sys>_channel)`` over the
-whole shot, with a 0 where a system measured nothing (and junk errors there), ``<sys>_rho_pol`` and ``<sys>_R_mid`` of
-each point, the stored fit on a ``rho_pol`` grid, three shot-level scalars, and the attributes. It is written as
-netCDF3 (64-bit offset) through scipy, as the real files are, so that the single-shot page reads it the way it reads them.
+The raw points of the edge and the core system by ``(time, <sys>_channel)`` over the whole shot, with a 0 where a
+system measured nothing (and junk errors there), ``<sys>_rho_pol`` and ``<sys>_R_mid`` of each point, the stored fit
+on a ``rho_pol`` grid, three shot-level scalars, and the attributes. Written as netCDF3 (64-bit offset) through scipy,
+as the real files are.
 
-Nothing here is a measurement: the profiles are tanh pedestals, the points are those profiles plus the planted
-irregularities a real file has (zeros with junk errors, a pulse only one system recorded, a pulse outside the EFIT time
-base). Each option plants or leaves out one thing, so a test can say what it is about.
+Nothing here is a measurement: the profiles are tanh pedestals, with the irregularities a real file has. Each option
+plants or leaves out one thing, so a test can say what it is about.
 
-A file is made with C-Mod_Analysis d6a6466 by default, as the files were until 2026-10-12. ``commit="24e1499"`` makes
-one the way GitHub's head makes them: ANALYSIS, its run_db.py's settings with ``force_to_zero`` on, a ``fit_note`` that
-says so, the separatrix code's attributes, and a ``fit_rho_shift``. With a ``shift`` the fit was moved: it was made on
-the points as EFIT maps them and then moved, with its grid, by the shift, so that its T_e at ρ_pol 1 is ``Te_sep_fit``;
-the raw points stay where EFIT puts them, as in the real files. Without one, the separatrix finder failed and the fit
-was not moved.
+The real files come from two versions of C-Mod_Analysis. ``commit="d6a6466"``, the default, never moves its fit and
+writes no ``fit_rho_shift``. ``commit="24e1499"`` writes one, with ``force_to_zero`` on, a ``fit_note`` that says so,
+and the separatrix code's attributes. With a ``shift`` the fit was made on the points as EFIT maps them and then
+moved, with its grid, so that its T_e at ρ_pol 1 is ``Te_sep_fit``; the raw points stay where EFIT puts them. Without
+one, the separatrix finder failed and the fit was not moved.
 """
 
 import json
@@ -30,8 +27,7 @@ SHOT = 1160616027
 WINDOW = (1.0, 1.4)
 PULSE = 0.02
 
-#: The two ends of the ``fit_check`` attribute, as ``tools/mfe/get_thomson_scattering.py`` writes them: run_db.py's own
-#: description of its test, then ``passed`` or ``failed: <reasons>``.
+#: The two ends of the ``fit_check`` attribute: the description of the test, then ``passed`` or ``failed: <reasons>``.
 CHECK_TEXT = (
     "run_db.py's own test of a fit, which it flags and keeps: Te above 100 eV at the grid's outer end, or Te below "
     "0.5 keV or ne below 0.5e20 m^-3 on axis, means 'something must have silently failed'"
@@ -47,9 +43,8 @@ CAVEAT = (
     "(jwhughes@psfc.mit.edu)."
 )
 
-#: ``fit_note`` as ``tools/mfe/get_thomson_scattering.py`` writes it: what the fit's pre-filter drops, what ``fit_reg``
-#: names, and then a sentence on this file's window, which says the fit's core is an extrapolation when no core T_e
-#: inside rho_pol 0.2 is 1 keV or more.
+#: ``fit_note``: what the fit's pre-filter drops, what ``fit_reg`` names, and then a sentence on this file's window,
+#: which says the fit's core is an extrapolation when no core T_e inside rho_pol 0.2 is 1 keV or more.
 FIT_NOTE = (
     "The fit is C-Mod_Analysis' edge fit: edge and core TS together, after cmod_tools.prefit_filter, which among other "
     "cuts drops core Te below 1 keV and ne below 0.5e20 m^-3 inside rho_pol 0.2, and Te below 100 eV inside rho_pol "
@@ -70,9 +65,8 @@ FIT_SETTINGS = {
     "num_mc": 5,
 }
 
-#: C-Mod_Analysis 24e1499, GitHub's head, and what a file made with it says that a d6a6466 one does not, in the words
-#: ``tools/mfe/get_thomson_scattering.py`` writes: its run_db.py's settings, the sentence ``fit_note`` gains when
-#: ``force_to_zero`` is on, and the code outside the repository that looks for the separatrix.
+#: What a file made with C-Mod_Analysis 24e1499 says that a d6a6466 one does not: its settings, the sentence
+#: ``fit_note`` gains when ``force_to_zero`` is on, and the code that looks for the separatrix.
 HEAD = "24e1499f83d398c2bf96bcf2a5d499f68bcf0460"
 FIT_SETTINGS_24E1499 = dict(FIT_SETTINGS, force_to_zero=True, lambdaq_type="profile", sub_type="log_linear")
 FORCE_TO_ZERO_NOTE = (
@@ -81,17 +75,11 @@ FORCE_TO_ZERO_NOTE = (
 )
 SEPARATRIX_CODE = "/home/someone/pysepest_kc/pysepest"
 SEPARATRIX_CODE_SHA256 = json.dumps({"__init__.py": "0" * 64, "finder.py": "1" * 64})
-SEPARATRIX_CODE_NOTE = (
-    "power_balance.find_separatrix, which get_cmod_kin_profs runs with lambdaq_type 'profile', finds the separatrix "
-    "with code power_balance imports from /home/someone (it appends that to sys.path): outside C-Mod_Analysis' "
-    "repository, in another user's home on mfe, so no C-Mod_Analysis commit pins it. These are the 2 files of it that "
-    "were loaded, with the sha256 of each."
-)
-#: The fixture's moved fit: by this much in ρ_pol, a little more than 1160616017's +0.0071.
+#: The fixture's moved fit: by this much in ρ_pol.
 SHIFT = 0.01
 
-#: The two global attributes the script's later versions write (J12h), in the form agreed for them: whether the edge
-#: points the fit was made on are the file's, and what failed when mapping the points did.
+#: Two attributes only newer files have: whether the edge points the fit was made on are the file's, and what failed
+#: when mapping the points did.
 POINTS_DIFFER = "differ: the fit's own edge points are not this file's, by up to 0.0145 in rho_pol"
 MAPPING_FAILURE = (
     "mapping failed: R_mid of the edge and core points at every pulse, data_access._getRmidSpline with ANALYSIS: "
@@ -100,7 +88,7 @@ MAPPING_FAILURE = (
 
 
 def fit_separatrix(shift, te_sep=None):
-    """``fit_separatrix`` as the script writes it, for a fit moved by ``shift`` to ``te_sep``, or for none found."""
+    """The ``fit_separatrix`` attribute of a fit moved by ``shift`` to ``te_sep``, or of one whose finder failed."""
     how = "power_balance.find_separatrix (lambdaq_type 'profile', sub_type 'log_linear')"
     if te_sep is None:
         return (
@@ -162,23 +150,16 @@ def thomson_dataset(
 ):
     """The dataset of one file, over a shot of 2 s.
 
-    ``edge`` and ``core`` say which systems the file holds, ``fit`` whether the fit worked (``fit_status`` then reads
-    ``"ok"``, else ``"failed: ..."``) and ``pe`` whether it stores a pressure fit. ``check`` is the ``fit_check``
-    attribute. ``zeros`` plants readings of 0 with junk errors, which a real file has wherever a system measured nothing;
+    ``edge`` and ``core`` say which systems the file holds, ``fit`` whether the fit worked and ``pe`` whether it stores
+    a pressure fit. ``check`` is the ``fit_check`` attribute. ``zeros`` plants readings of 0 with junk errors;
     ``unmapped`` plants pulses with no ρ_pol, outside the EFIT time base. ``efit=False`` is a shot whose EFIT tree could
-    not be opened: no point has a ρ_pol or an R_mid, and there is no ``R_mid_sep``. ``fit_r_mid=False`` leaves the
-    fit's ``fit_R_mid`` out. ``extrapolation`` makes ``fit_note`` call the fit's core an extrapolation, as the files
-    do where no core T_e inside rho_pol 0.2 reaches 1 keV. ``runaway`` makes the fit's outer end run away, as the fits
-    that fail run_db.py's outer-end check do (1091216034's n_e reaches 1.3e23 m^-3, 1110201014's T_e 51 keV): the fit
-    leaves the profile at rho_pol 1 and is 1000 times it at 1.1, with the points unchanged.
+    not be opened: no point has a ρ_pol or an R_mid, and there is no ``R_mid_sep``. ``fit_r_mid=False`` leaves
+    ``fit_R_mid`` out. ``extrapolation`` makes ``fit_note`` call the fit's core an extrapolation. ``runaway`` makes the
+    fit's outer end run away, as real fits do: it leaves the profile at rho_pol 1 and is 1000 times it at 1.1.
 
-    ``commit="24e1499"`` makes the file as C-Mod_Analysis 24e1499 does (module docstring), and ``shift`` is then how far
-    its fit was moved in ρ_pol: 0 for a fit that was not, whose separatrix finder failed. A d6a6466 file cannot be moved.
-
-    The script's later versions add two global attributes, which ``points_check`` and ``mapping_failure`` set when given:
-    ``fit_points_check`` (``equal``, or a sentence beginning ``differ:``) and ``mapping_failure`` (a sentence beginning
-    ``mapping failed:``). ``failed`` plants the failure itself: ``(system, coordinate)`` pairs, such as
-    ``("edge", "R_mid")``, whose values are NaN at every pulse.
+    ``commit`` and ``shift`` are in the module docstring. ``points_check`` and ``mapping_failure`` set the attributes
+    ``fit_points_check`` and ``mapping_failure``. ``failed`` plants the failure itself: ``(system, coordinate)`` pairs,
+    such as ``("edge", "R_mid")``, whose values are NaN at every pulse.
     """
     if commit not in ("d6a6466", "24e1499"):
         raise ValueError(f"commit is d6a6466 or 24e1499, not {commit!r}")
@@ -299,7 +280,6 @@ def thomson_dataset(
         attrs["fit_separatrix"] = fit_separatrix(shift, te_sep_fit)
         attrs["separatrix_code"] = SEPARATRIX_CODE
         attrs["separatrix_code_sha256"] = SEPARATRIX_CODE_SHA256
-        attrs["separatrix_code_note"] = SEPARATRIX_CODE_NOTE
     if points_check is not None:
         attrs["fit_points_check"] = points_check
     if mapping_failure is not None:
