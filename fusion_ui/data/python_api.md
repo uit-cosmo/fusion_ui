@@ -20,8 +20,11 @@ df = api.table()                               # pandas, one row per stored shot
 ```
 
 - Pixels are `(x, y)`: x the R index, y the Z index, as everywhere in the app.
-- Every blob parameter and velocity carries its `long_name` and `units`; `R` and `Z` are in metres;
-  `dead` marks the pixels the dead-pixel mask removed.
+- `api.blob_parameters` returns the whole stored file: the six numbers the app shows (`nevents`, `area`,
+  `lr`, `lz`, `taud`, `lam`), each with its `long_name` and `units`, and seven the app does not show:
+  `level`, a fraction, and `lx_c`, `ly_c`, `lx_f`, `ly_f` in m and `theta_c`, `theta_f` in rad. The
+  Quantities tab says what each is, under *blob_parameters*.
+- Velocities are in m/s and `R` and `Z` in metres; `dead` marks the pixels the dead-pixel mask removed.
 - `settings=` reads a parameter set other than the default, given as the fields that differ, e.g.
   `settings={"averages": {"window": 30}}`.
 - A shot that is not stored raises `api.NotStored`, whose message is the `fusion-ui precompute` command
