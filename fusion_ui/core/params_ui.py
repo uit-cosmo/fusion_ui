@@ -1,38 +1,27 @@
 """Parameter dataclasses: the canonical form, the cache key, and the widgets.
 
-Every analysis declares its parameters as a dataclass -- often one that embeds
-``imaging_methods`` classes directly, so the form and the analysis can never
-disagree about what a knob is called. This module turns such a tree into three
-things:
+Every analysis declares its parameters as a dataclass, often one that embeds
+``imaging_methods`` classes directly. One walk over that tree gives
 
-* :func:`canonical` -- a nested dict of JSON-safe scalars, coerced **by
-  annotation**, which is what gets hashed;
-* :func:`hash_params` -- the sha1 that keys ``param_sets`` and ``runs``;
-* :func:`form` -- the Streamlit widget panel, walked from the same fields.
+* :func:`canonical`, a nested dict of JSON-safe scalars, and :func:`hash_params`,
+  the sha1 of it that keys ``param_sets`` and ``runs``;
+* :func:`form`, the Streamlit widget panel,
 
-One walk produces all three, so the form and the key cannot drift apart.
+so the form and the key cannot drift apart. :func:`from_dict`,
+:func:`from_canonical` and :func:`with_values` go the other way.
 
-Why the coercion is not optional
---------------------------------
+Every leaf is coerced **by its annotation**, and anything unrecognised raises,
+because the upstream defaults do not match their own annotations and a cache key
+that disagrees with itself fails silently:
 
-The upstream defaults do not match their own annotations, and a cache key that
-silently disagrees with itself is the failure mode that makes the whole tool
-untrustworthy. So every leaf is forced through its declared type and anything
-unrecognised raises rather than guessing:
-
-``size_penalty: float = 5``
-    An ``int`` under a ``float`` annotation. ``json.dumps`` writes ``5``, but a
-    number input returns ``5.0`` -- two hashes for one parameter set.
-``radius: int = 1000``
-    ``imaging_methods.run_norm_ds`` does a strict ``isinstance(radius, int)``.
-    A JSON round-trip yields ``1000.0`` and hard-fails at compute time.
-``size_max: float = None``
-    The annotation lies; it is really ``float | None``, and ``0.0`` is *not*
-    the same as "use the full grid extent".
-``velocity_estimation.EstimationOptions``
-    Carries ``@dataclass`` but declares its own ``__init__``, so it has zero
-    fields: ``asdict`` returns ``{}``. Walking one would produce an empty,
-    colliding hash with no error at all -- hence the explicit guard.
+* ``size_penalty: float = 5`` is an int; a number input returns ``5.0``, which
+  would be a second hash for the same parameter set;
+* ``size_max: float = None`` means "use the full grid extent", which ``0.0``
+  does not;
+* JSON has one number type, so an ``int`` comes back as ``1000.0`` and a strict
+  ``isinstance(radius, int)`` downstream refuses it;
+* ``velocity_estimation``'s option classes carry ``@dataclass`` but declare their
+  own ``__init__``, so they have no fields and would hash as ``{}``.
 """
 
 import copy
@@ -41,21 +30,14 @@ import hashlib
 import json
 import math
 import typing
-from enum import Enum
 
 # ---------------------------------------------------------------------------
-# Field metadata that upstream does not carry
-#
-# imaging_methods has no ``field(metadata=...)`` anywhere: the allowed values
-# for its string fields exist only in prose, and seven of the twenty-one leaves
-# have no docstring at all. Rather than patch a dependency, the knowledge we
-# need for a usable form lives here, keyed by (dataclass name, field name).
+# Field metadata that the params classes do not carry, keyed by
+# (dataclass name, field name)
 # ---------------------------------------------------------------------------
 
-#: ``str`` fields that are really enumerations -> a selectbox instead of a
-#: free-text input. ``window_type`` is resolved with ``getattr(scipy.signal.
-#: windows, name)``; ``estimator`` is validated at runtime by
-#: ``get_averaged_velocity_from_position``, which raises on anything else.
+#: ``str`` fields that are really enumerations: a selectbox, not a text input.
+#: A spec adds its own (``raw.py``, ``thomson_profiles.py``).
 CHOICES = {
     ("PositionFilterParams", "window_type"): (
         "hann",
@@ -69,126 +51,70 @@ CHOICES = {
     ("PdfParams", "estimator"): ("histogram", "kde"),
 }
 
-#: Fields annotated ``float`` (or ``int``) whose ``None`` means "work it out" --
-#: they get a "default" checkbox next to the number input, because ``0.0`` is a
-#: different instruction entirely.
+#: Number fields whose ``None`` means "work it out": they get an "automatic"
+#: checkbox beside the number input, because ``0.0`` is another instruction.
 OPTIONAL = {
     ("GaussFitParams", "size_max"),
     ("TdeVelocityParams", "max_threshold"),
     ("PsdParams", "cutoff"),
 }
 
-#: Help text, by dotted path from the top of whichever tree is being walked.
-#: Takes precedence over the docstring parse below.
+#: Help text for fields whose class docstring has none. Takes precedence over
+#: the docstring.
 HELP = {
-    "preprocessing.radius": "Window length of the running normalisation, in samples.",
-    "two_dca.refx": "X index of the reference pixel (0 .. nx-1).",
-    "two_dca.refy": "Y index of the reference pixel (0 .. ny-1).",
-    "taud_estimation.cutoff": "Frequency cutoff for the PSD fit, in rad/s.",
-    "taud_estimation.nperseg": (
+    ("TaudEstimationParams", "cutoff"): "Frequency cutoff for the PSD fit, in rad/s.",
+    ("TaudEstimationParams", "nperseg"): (
         "Welch segment length, in samples. Sets the lowest frequency that can "
         "be estimated; for run-normalised data, start at the normalisation "
         "window length."
     ),
-    "position_filter.window_size": "Length of the smoothing filter on the position signal.",
-    # PositionFilterParams and ContouringParams carry no docstring at all, so
-    # without these five entries the busiest panel in the app is unlabelled.
-    "position_filter.window_type": (
+    ("PositionFilterParams", "window_size"): (
+        "Length of the smoothing filter on the position signal."
+    ),
+    ("PositionFilterParams", "window_type"): (
         "Shape of the smoothing window, resolved with scipy.signal.windows."
     ),
-    "position_filter.mask_distance": (
+    ("PositionFilterParams", "mask_distance"): (
         "How far the tracked structure may drift from the reference pixel and "
         "still count, in pixel widths."
     ),
-    "position_filter.mask_signal_factor": (
+    ("PositionFilterParams", "mask_signal_factor"): (
         "Only track while the field's spatial maximum is at least this "
         "fraction of its largest value -- it is what keeps the tail of a "
         "decaying average out of the velocity."
     ),
-    "position_filter.require_within_boundaries": (
+    ("PositionFilterParams", "require_within_boundaries"): (
         "Drop times where the contour touches the edge of the array. Worth "
         "switching on for a structure comparable in size to the field of view, "
         "where a clipped contour's centroid follows the edge and not the blob."
     ),
-    "contouring.threshold_factor": (
-        "Contour level, as a fraction of the maximum amplitude over the whole "
-        "event. 0.3 is what the APD analyses use; 0.5 is the synthetic default."
-    ),
-    # velocity_2dca_tde.TdeParams has no upstream docstring at all -- it is
-    # this app's own wrapper around a bare pair of arguments upstream never
-    # grouped into a class.
-    "tde.gauss_convolve": (
-        "Smooth each pixel's lag trace with a Gaussian before locating its "
-        "maximum. Off by default, matching upstream."
-    ),
-    "tde.sigma": (
-        "Standard deviation of that smoothing Gaussian, in samples. Only "
-        "used when gauss_convolve is on."
-    ),
-    "cross_corr.mask_signal_factor": (
-        "Mask signal factor for the cross-correlation track only. The 2D "
-        "cross-correlation sits on a pedestal well above zero rather than "
-        "decaying to it like the conditional average does, so this fraction-"
-        "of-max floor needs its own value to bind at all."
-    ),
 }
-
-# The decorrelation products (``method_fields``, ``blob_parameters``) nest the same imaging_methods
-# classes one level down, under ``tracking`` and ``blobs``, and the paths above start at the top of
-# the tree being walked: the same knobs, with the same words, under their longer names.
-HELP.update(
-    {
-        f"tracking.{path}": text
-        for path, text in list(HELP.items())
-        if path.startswith("position_filter.")
-    }
-)
-HELP.update(
-    {
-        f"blobs.{path}": text
-        for path, text in list(HELP.items())
-        if path.startswith("taud_estimation.")
-    }
-)
 
 
 # ---------------------------------------------------------------------------
 # Annotations
 # ---------------------------------------------------------------------------
 
-_NONE = type(None)
-
 
 def _hints(cls):
-    """``{field name: annotation}`` for ``cls``, resolving string annotations.
-
-    ``imaging_methods`` does not use ``from __future__ import annotations``, so
-    ``fields(cls)[i].type`` is already the live class -- but a params class
-    written later might, and a string annotation would sail straight past every
-    ``is`` check below.
-    """
-    try:
-        return typing.get_type_hints(cls)
-    except Exception:  # noqa: BLE001 - a forward reference we cannot resolve
-        return {f.name: f.type for f in dataclasses.fields(cls)}
+    """``{field name: annotation}`` for ``cls``, with string annotations resolved."""
+    return typing.get_type_hints(cls)
 
 
 def _unwrap_optional(annotation):
-    """``(inner, optional)`` -- ``Optional[T]`` and ``T | None`` both give T."""
+    """``T`` for ``Optional[T]`` and ``T | None``; anything else as it is."""
     if typing.get_origin(annotation) is typing.Union:
-        args = [a for a in typing.get_args(annotation) if a is not _NONE]
+        args = [a for a in typing.get_args(annotation) if a is not type(None)]
         if len(args) == 1:
-            return args[0], True
-    return annotation, False
+            return args[0]
+    return annotation
 
 
 def _dataclass_fields(annotation):
     """The fields of ``annotation`` if it is a dataclass, else ``None``.
 
-    Raises on a dataclass with no fields: ``velocity_estimation``'s options
-    classes look like dataclasses but declare their own ``__init__``, so
-    ``fields()`` is empty and both the form and the hash would come out blank
-    without complaint.
+    Raises on a dataclass with no fields, which would give a blank form and an
+    empty, colliding hash without complaint.
     """
     if not (isinstance(annotation, type) and dataclasses.is_dataclass(annotation)):
         return None
@@ -202,8 +128,23 @@ def _dataclass_fields(annotation):
     return fields
 
 
+def _annotated_fields(cls):
+    """``[(field name, annotation with Optional removed)]`` for dataclass ``cls``."""
+    hints = _hints(cls)
+    return [(f.name, _unwrap_optional(hints[f.name])) for f in _dataclass_fields(cls)]
+
+
 def _type_name(cls):
     return f"{cls.__module__}.{cls.__qualname__}"
+
+
+def _join(prefix, name):
+    return f"{prefix}.{name}" if prefix else name
+
+
+def _check_instance(params):
+    if isinstance(params, type) or not dataclasses.is_dataclass(params):
+        raise TypeError(f"expected a dataclass instance, got {params!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -213,27 +154,17 @@ def _type_name(cls):
 
 def _leaf(annotation, value, path):
     """One field's JSON-safe value, coerced by its declared type."""
-    annotation, _ = _unwrap_optional(annotation)
-
-    if _dataclass_fields(annotation) is not None:
-        if value is None:
-            return None
+    nested = _dataclass_fields(annotation) is not None
+    # ``None`` is meaningful whatever the annotation claims.
+    if value is None:
+        return None
+    if nested:
         if not dataclasses.is_dataclass(value):
             raise TypeError(f"{path}: expected {annotation.__name__}, got {value!r}")
         return _walk(value, path)
 
-    # ``None`` is meaningful whatever the annotation claims -- see size_max.
-    if value is None:
-        return None
-
-    if isinstance(annotation, type) and issubclass(annotation, Enum):
-        member = annotation(value) if not isinstance(value, annotation) else value
-        return member.name
-    if isinstance(value, Enum):
-        return value.name
-
-    # bool before int: bool is a subclass of int, so the order matters and a
-    # True landing in an int field is a mistake, not a 1.
+    # bool before int: bool is a subclass of int, and a True landing in an int
+    # field is a mistake, not a 1.
     if annotation is bool:
         if not isinstance(value, bool):
             raise TypeError(f"{path}: expected a bool, got {value!r}")
@@ -262,47 +193,27 @@ def _leaf(annotation, value, path):
 
 
 def _walk(instance, prefix=""):
-    cls = type(instance)
-    # On the instance's own class, not just on the annotation: a field declared
-    # as one dataclass can hold an instance of another, and the empty-fields
-    # trap has to be caught wherever it turns up.
-    fields = _dataclass_fields(cls)
-    hints = _hints(cls)
-    out = {}
-    for field in fields:
-        path = f"{prefix}.{field.name}" if prefix else field.name
-        out[field.name] = _leaf(
-            hints.get(field.name, field.type), getattr(instance, field.name), path
-        )
-    return out
+    # The fields of the instance's own class, not of the annotation: a field
+    # declared as one dataclass can hold an instance of another.
+    return {
+        name: _leaf(annotation, getattr(instance, name), _join(prefix, name))
+        for name, annotation in _annotated_fields(type(instance))
+    }
 
 
 def canonical(params):
     """``{"__type__": ..., "values": {...}}`` for a params dataclass instance.
 
     The class name is recorded because values alone do not identify a parameter
-    set: a subclass such as fusion_scripts' ``SEParameters`` extends ``MethodParameters``, so their
-    defaults share a prefix and would otherwise be indistinguishable.
+    set: a subclass that adds nothing has the same values as its base.
     """
-    if isinstance(params, type) or not dataclasses.is_dataclass(params):
-        raise TypeError(f"expected a dataclass instance, got {params!r}")
+    _check_instance(params)
     return {"__type__": _type_name(type(params)), "values": _walk(params)}
 
 
-def payload(plot_key, params):
-    """What actually gets hashed: the parameters *and* the plot they belong to.
-
-    ``param_sets.hash`` is the primary key while ``plot`` is an ordinary column,
-    so hashing the parameters alone would let two plots with identical defaults
-    -- easy, since several specs use bare ``TwoDcaParams()`` -- collide on that
-    key with conflicting ``plot`` values.
-    """
-    return {"plot": plot_key, "params": canonical(params)}
-
-
 def _dumps(obj, indent=None):
-    # allow_nan=False so a NaN from a widget raises here rather than being
-    # written as a bare ``NaN`` literal that is not valid JSON.
+    # allow_nan=False so a NaN raises here rather than being written as a bare
+    # ``NaN`` literal, which is not valid JSON.
     return json.dumps(
         obj,
         sort_keys=True,
@@ -313,27 +224,29 @@ def _dumps(obj, indent=None):
 
 
 def hash_params(plot_key, params):
-    """``(sha1_hex, params_json)`` for one plot's parameter set."""
-    body = payload(plot_key, params)
+    """``(sha1_hex, params_json)`` for one plot's parameter set.
+
+    The plot key is hashed with the parameters: ``param_sets.hash`` is the
+    primary key and ``plot`` an ordinary column, so two plots with the same
+    parameter class and values would otherwise collide on it.
+    """
+    body = {"plot": plot_key, "params": canonical(params)}
     return hashlib.sha1(_dumps(body).encode("utf-8")).hexdigest(), _dumps(
         body, indent=2
     )
 
 
 # ---------------------------------------------------------------------------
-# The inverse
+# The inverse, for parameters this app stored
 # ---------------------------------------------------------------------------
 
 
 def _rebuild(annotation, value, path):
-    annotation, _ = _unwrap_optional(annotation)
-
-    if _dataclass_fields(annotation) is not None:
-        return None if value is None else from_dict(annotation, value)
+    nested = _dataclass_fields(annotation) is not None
     if value is None:
         return None
-    if isinstance(annotation, type) and issubclass(annotation, Enum):
-        return annotation[value]
+    if nested:
+        return from_dict(annotation, value, path)
     if annotation is bool:
         return bool(value)
     if annotation is int:
@@ -351,48 +264,32 @@ def _rebuild(annotation, value, path):
 def from_dict(params_cls, values, prefix=""):
     """Rebuild a params instance from :func:`canonical`'s ``values`` dict.
 
-    Coercion by annotation matters as much on the way in as on the way out: JSON
-    has one number type, so ``radius`` comes back as ``1000.0`` and trips
-    ``run_norm_ds``'s ``isinstance(radius, int)`` check at compute time.
+    Coerced by annotation, since JSON gives an ``int`` field back as a float. A
+    field ``values`` does not name keeps its default, and a name the class does
+    not have is ignored, so a set stored by another version of the class still
+    reads.
     """
-    hints = _hints(params_cls)
-    kwargs = {}
-    for field in dataclasses.fields(params_cls):
-        if field.name not in values:
-            continue
-        path = f"{prefix}.{field.name}" if prefix else field.name
-        kwargs[field.name] = _rebuild(
-            hints.get(field.name, field.type), values[field.name], path
-        )
-    return params_cls(**kwargs)
+    return params_cls(
+        **{
+            name: _rebuild(annotation, values[name], _join(prefix, name))
+            for name, annotation in _annotated_fields(params_cls)
+            if name in values
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
 # The strict inverse, for parameters a person wrote down
 #
-# from_dict reads back what this app wrote itself, so it coerces freely. A
-# parameter file passed to `fusion-ui precompute --params-json` may have been
-# typed by hand, and there the lenient rules mislead: bool("false") is True,
-# float("2.5") turns a string into a number, and a misspelt field is silently
-# dropped. These raise instead, naming the dotted path.
+# A parameter file passed to `fusion-ui precompute --params-json` may have been
+# typed by hand, and there from_dict's rules mislead: bool("false") is True,
+# float("2.5") turns a string into a number, and a misspelt field is dropped.
+# These raise instead, naming the dotted path.
 # ---------------------------------------------------------------------------
 
 
 def _strict_leaf(annotation, value, path):
-    """One leaf of a hand-written parameter set, checked against its annotation.
-
-    ``None`` is accepted anywhere, as :func:`_leaf` writes it anywhere (see
-    ``size_max``).
-    """
-    if value is None:
-        return None
-    if isinstance(annotation, type) and issubclass(annotation, Enum):
-        if not isinstance(value, str) or value not in annotation.__members__:
-            raise ValueError(
-                f"{path}: expected one of {sorted(annotation.__members__)}, "
-                f"got {value!r}"
-            )
-        return annotation[value]
+    """One leaf of a hand-written parameter set, checked against its annotation."""
     if annotation is bool:
         if not isinstance(value, bool):
             raise ValueError(f"{path}: expected true or false, got {value!r}")
@@ -426,34 +323,32 @@ def _strict_tree(params_cls, values, prefix, base):
     where = prefix or "the top level"
     if not isinstance(values, dict):
         raise ValueError(f"{where}: expected an object of fields, got {values!r}")
-    fields = {f.name: f for f in _dataclass_fields(params_cls)}
-    unknown = sorted(set(values) - set(fields))
+    annotations = dict(_annotated_fields(params_cls))
+    unknown = sorted(set(values) - set(annotations))
     if unknown:
         raise ValueError(
             f"{where}: {params_cls.__name__} has no field "
             + ", ".join(repr(name) for name in unknown)
-            + f" (it has {', '.join(fields)})"
+            + f" (it has {', '.join(annotations)})"
         )
     if base is None:
-        missing = [name for name in fields if name not in values]
+        missing = [name for name in annotations if name not in values]
         if missing:
             raise ValueError(
                 f"{where}: {params_cls.__name__} is missing "
                 + ", ".join(repr(name) for name in missing)
             )
-    hints = _hints(params_cls)
     kwargs = {}
     for name, value in values.items():
-        path = f"{prefix}.{name}" if prefix else name
-        annotation, _ = _unwrap_optional(hints.get(name, fields[name].type))
-        if _dataclass_fields(annotation) is None:
-            kwargs[name] = _strict_leaf(annotation, value, path)
-        elif value is None:
+        path = _join(prefix, name)
+        annotation = annotations[name]
+        nested = _dataclass_fields(annotation) is not None
+        if value is None:
             kwargs[name] = None
+        elif not nested:
+            kwargs[name] = _strict_leaf(annotation, value, path)
         else:
             current = None if base is None else getattr(base, name)
-            if current is not None and not dataclasses.is_dataclass(current):
-                current = None
             kwargs[name] = _strict_tree(annotation, value, path, current)
     if base is None:
         return params_cls(**kwargs)
@@ -461,20 +356,14 @@ def _strict_tree(params_cls, values, prefix, base):
 
 
 def from_canonical(params_cls, canonical_form, plot_key=None):
-    """The ``params_cls`` instance a canonical form describes: the inverse of
-    :func:`canonical`, strictly.
+    """The ``params_cls`` instance a canonical form describes, strictly.
 
     ``canonical_form`` is what :func:`canonical` returns (``{"__type__",
-    "values"}``) or the payload :func:`hash_params` hashes and
-    ``param_sets.params_json`` stores (``{"plot", "params"}``), as a dict or
-    as its JSON text. It is the complete parameter set, so it must name
-    ``params_cls`` as its ``__type__``, name ``plot_key`` as its plot when one
-    is given, and give every field at every level and no other. Each leaf is
-    checked as ``_strict_leaf`` checks it.
-
-    What comes back hashes as the parameters it describes: ``hash_params`` of
-    it is what the store records for them, so a result computed from it is the
-    one a page asking for the same parameters finds.
+    "values"}``) or what ``param_sets.params_json`` stores (``{"plot",
+    "params"}``), as a dict or as its JSON text. It must name ``params_cls`` as
+    its ``__type__``, ``plot_key`` as its plot when one is given, and every
+    field at every level and no other. What comes back hashes to the key the
+    store records for those parameters.
     """
     form = canonical_form
     if isinstance(form, (str, bytes)):
@@ -482,8 +371,7 @@ def from_canonical(params_cls, canonical_form, plot_key=None):
     if not isinstance(form, dict):
         raise ValueError(f"expected a canonical parameter set, got {form!r}")
     if "plot" in form or "params" in form:
-        unknown = sorted(set(form) - {"plot", "params"})
-        if unknown or "params" not in form:
+        if "params" not in form or set(form) - {"plot", "params"}:
             raise ValueError(
                 "a stored parameter set has exactly the keys 'plot' and 'params', "
                 f"not {sorted(form)}"
@@ -512,17 +400,13 @@ def with_values(params, values):
     """A copy of ``params`` with the fields named in ``values`` replaced.
 
     ``values`` is part of a canonical ``values`` tree, e.g. ``{"averages":
-    {"window": 30}}``: what a person writes to change a few knobs and keep the
-    rest. Checked as strictly as :func:`from_canonical` checks a whole set,
-    except that a field may be left out to keep its value -- a name the class
-    does not have still raises, so a typo cannot be dropped silently. A nested
+    {"window": 30}}``. Checked as strictly as :func:`from_canonical` checks a
+    whole set, except that a field may be left out to keep its value. A nested
     field whose value is ``None`` has nothing to keep, so a change to it must
     give all of its fields. ``params`` itself is not modified.
     """
-    if isinstance(params, type) or not dataclasses.is_dataclass(params):
-        raise TypeError(f"expected a dataclass instance, got {params!r}")
-    # A deep copy first, so that the fields left alone are not shared with
-    # the caller's instance either.
+    _check_instance(params)
+    # A deep copy, so the fields left alone are not shared with the caller's.
     return _strict_tree(type(params), values, "", copy.deepcopy(params))
 
 
@@ -531,15 +415,15 @@ def with_values(params, values):
 # ---------------------------------------------------------------------------
 
 
-#: ``name`` or ``name1, name2`` optionally followed by ``(type)``, then a colon.
-#: The shape imaging_methods uses in its class docstrings -- loosely: some
-#: entries name three fields at once, and seven of the twenty-one leaves have no
-#: entry at all, which is why HELP above exists.
 def _docstring_help(cls):
-    text = cls.__doc__ or ""
+    """``{field name: text}`` from the entries of ``cls``'s docstring.
+
+    An entry is ``name:`` or ``name1, name2:``, each name optionally followed by
+    ``(type)``, and runs until a blank line.
+    """
     names = {f.name for f in dataclasses.fields(cls)}
     out, current = {}, []
-    for raw in text.splitlines():
+    for raw in (cls.__doc__ or "").splitlines():
         line = raw.strip().lstrip("-").strip()
         head, sep, tail = line.partition(":")
         candidates = [
@@ -557,19 +441,14 @@ def _docstring_help(cls):
     return out
 
 
-def _help_for(cls, field_name, path):
-    if path in HELP:
-        return HELP[path]
-    return _docstring_help(cls).get(field_name) or None
-
-
-def help_for(cls, field_name, path):
-    """The help text the form shows for field ``field_name`` of ``cls`` at dotted ``path``, or ``None``.
-
-    :data:`HELP` first, then the class docstring. The Documentation page's settings table quotes the same
-    words, so a setting reads alike in the form and on that page.
-    """
-    return _help_for(cls, field_name, path)
+def help_for(cls, field_name, path=None):
+    """The help text of field ``field_name`` of ``cls``, or ``None``: :data:`HELP`
+    first, then the class docstring. ``path`` is not used."""
+    return (
+        HELP.get((cls.__name__, field_name))
+        or _docstring_help(cls).get(field_name)
+        or None
+    )
 
 
 def _label(name):
@@ -582,12 +461,8 @@ def _label(name):
 
 
 def _choices_for(cls, field_name, path, spec, ds, chosen):
-    """Allowed values for a ``str`` field, dynamic first.
-
-    A probe's quantities are a property of the file that was opened, not of any
-    annotation, so a spec may answer for its own fields before the static table
-    is consulted.
-    """
+    """Allowed values for a ``str`` field: the spec's own answer for the opened
+    file first, then the static table."""
     if spec is not None and spec.choices is not None and ds is not None:
         dynamic = spec.choices(ds, path, chosen)
         if dynamic is not None:
@@ -598,32 +473,30 @@ def _choices_for(cls, field_name, path, spec, ds, chosen):
 def _seed(state, key, value):
     """Put a widget's starting value in session state, then let the key own it.
 
-    Passing both ``value=`` and ``key=`` makes Streamlit warn and makes which
-    one wins version-dependent; seeding once and passing only ``key`` does not.
+    Passing both ``value=`` and ``key=`` makes Streamlit warn; seeding once and
+    passing only ``key`` does not.
     """
     if key not in state:
         state[key] = value
-    return state[key]
 
 
 def _scalar_widget(
     container, state, key, annotation, current, label, help_text, choices
 ):
-    import streamlit as st  # noqa: F401 - imported for the session-state type only
-
     if annotation is bool:
         _seed(state, key, bool(current))
         return container.checkbox(label, key=key, help=help_text)
 
-    if annotation is str or choices:
-        options = list(choices) if choices else None
-        if options is not None:
-            if key in state and state[key] not in options:
-                # The file changed under a remembered choice -- an ASP shot with
-                # a different set of quantities. Fall back rather than raise.
-                del state[key]
-            _seed(state, key, current if current in options else options[0])
-            return container.selectbox(label, options, key=key, help=help_text)
+    if choices:
+        options = list(choices)
+        if key in state and state[key] not in options:
+            # The file changed under a remembered choice (another shot's
+            # quantities): fall back rather than raise.
+            del state[key]
+        _seed(state, key, current if current in options else options[0])
+        return container.selectbox(label, options, key=key, help=help_text)
+
+    if annotation is str:
         _seed(state, key, "" if current is None else str(current))
         return container.text_input(label, key=key, help=help_text)
 
@@ -632,41 +505,34 @@ def _scalar_widget(
         return int(container.number_input(label, step=1, key=key, help=help_text))
 
     _seed(state, key, float(current or 0.0))
-    # "%g" rather than Streamlit's default two decimals: these values span
-    # 1e6 (a frequency cutoff) to 2e-5 (a duration time), and %.2f renders
-    # both as an unusable 0.00.
+    # "%g", not Streamlit's two decimals: the values span 1e6 (a frequency
+    # cutoff) to 2e-5 (a duration time), and %.2f renders the latter as 0.00.
     return float(container.number_input(label, format="%g", key=key, help=help_text))
 
 
-def _optional_widget(container, state, key, annotation, current, label, help_text):
-    """A number input with an "automatic" toggle, for a field whose ``None``
-    means "work it out" -- ``size_max`` being the one that exists today. A plain
-    number input would turn that into ``0.0``, which is a different instruction."""
+def _optional_widget(container, state, key, annotation, current, name, help_text):
+    """A number input with an "automatic" checkbox, for an :data:`OPTIONAL` field."""
     auto_key = f"{key}.__auto__"
     _seed(state, auto_key, current is None)
-    auto = container.checkbox(
-        f"{_label(label)}: automatic", key=auto_key, help=help_text
-    )
+    auto = container.checkbox(f"{_label(name)}: automatic", key=auto_key, help=help_text)
     value = _scalar_widget(
-        container, state, key, annotation, current or 0.0, label, None, None
+        container, state, key, annotation, current or 0.0, name, None, None
     )
     return None if auto else value
 
 
 def _fields(cls, defaults, prefix, key_prefix, container, state, spec, ds, chosen):
-    hints = _hints(cls)
     values = {}
-    for field in _dataclass_fields(cls):
-        annotation, _ = _unwrap_optional(hints.get(field.name, field.type))
-        path = f"{prefix}.{field.name}" if prefix else field.name
-        current = getattr(defaults, field.name, None)
-        help_text = _help_for(cls, field.name, path)
+    for name, annotation in _annotated_fields(cls):
+        path = _join(prefix, name)
+        current = getattr(defaults, name, None)
+        help_text = help_for(cls, name)
 
         if _dataclass_fields(annotation) is not None:
-            group = container.expander(_label(field.name).title(), expanded=not prefix)
+            group = container.expander(_label(name).title(), expanded=not prefix)
             if help_text:
                 group.caption(help_text)
-            values[field.name] = _fields(
+            values[name] = _fields(
                 annotation,
                 current if current is not None else annotation(),
                 path,
@@ -680,9 +546,9 @@ def _fields(cls, defaults, prefix, key_prefix, container, state, spec, ds, chose
             continue
 
         key = f"{key_prefix}.{path}"
-        if (cls.__name__, field.name) in OPTIONAL:
+        if (cls.__name__, name) in OPTIONAL:
             value = _optional_widget(
-                container, state, key, annotation, current, field.name, help_text
+                container, state, key, annotation, current, name, help_text
             )
         else:
             value = _scalar_widget(
@@ -691,30 +557,27 @@ def _fields(cls, defaults, prefix, key_prefix, container, state, spec, ds, chose
                 key,
                 annotation,
                 current,
-                _label(field.name),
+                _label(name),
                 help_text,
-                _choices_for(cls, field.name, path, spec, ds, chosen),
+                _choices_for(cls, name, path, spec, ds, chosen),
             )
-        values[field.name] = value
+        values[name] = value
         chosen[path] = value
     return cls(**values)
 
 
-def form(params_cls, key_prefix, defaults=None, container=None, spec=None, ds=None):
-    """Draw the widget panel for ``params_cls`` and return a filled instance.
+def form(params_cls, key_prefix, container, spec=None, ds=None):
+    """Draw the widget panel for ``params_cls`` in ``container`` and return a
+    filled instance.
 
     Widgets are keyed by ``key_prefix`` plus the dotted field path, so two specs
     on one page cannot collide and a parameter survives switching shots.
     """
     import streamlit as st
 
-    if container is None:
-        container = st.sidebar
-    if defaults is None:
-        defaults = params_cls()
     return _fields(
         params_cls,
-        defaults,
+        params_cls(),
         "",
         key_prefix,
         container,
@@ -726,69 +589,44 @@ def form(params_cls, key_prefix, defaults=None, container=None, spec=None, ds=No
 
 
 def seed_session_state(state, key_prefix, params, prefix=""):
-    """Put a params instance's leaves into ``state`` under the widget keys.
-
-    :func:`form` walks the same tree and reads each leaf back out of ``state``
-    keyed by ``key_prefix`` plus the dotted field path, so seeding those keys is
-    what lets the multi-shot view open the single-shot view on exactly the
-    parameters that produced a stored result. Mirrors ``_fields``' key scheme,
-    including the ``.__auto__`` toggle for :data:`OPTIONAL` fields.
-    """
+    """Put a params instance's leaves into ``state`` under the keys :func:`form`
+    reads, so the form opens on exactly these parameters."""
     cls = type(params)
-    hints = _hints(cls)
-    for field in _dataclass_fields(cls):
-        annotation, _ = _unwrap_optional(hints.get(field.name, field.type))
-        path = f"{prefix}.{field.name}" if prefix else field.name
-        value = getattr(params, field.name)
+    for name, annotation in _annotated_fields(cls):
+        path = _join(prefix, name)
+        value = getattr(params, name)
         if _dataclass_fields(annotation) is not None:
-            if value is None:
-                continue
-            seed_session_state(state, key_prefix, value, path)
+            if value is not None:
+                seed_session_state(state, key_prefix, value, path)
             continue
         key = f"{key_prefix}.{path}"
-        if (cls.__name__, field.name) in OPTIONAL:
+        if (cls.__name__, name) in OPTIONAL:
             state[f"{key}.__auto__"] = value is None
             state[key] = 0.0 if value is None else value
         else:
             state[key] = value
 
 
-def panel(spec, target, ds=None, container=None):
-    """``(params, ready)`` -- the parameter panel for one spec on one target.
+def panel(spec, target, ds=None):
+    """``(params, ready)``: the sidebar parameter panel for one spec on one target.
 
-    A live spec's widgets sit loose in the sidebar and take effect on the next
-    rerun: they are cheap and interactive, and waiting for a button would make
-    a frame slider useless.
-
-    A cached spec's widgets go inside ``st.form``, so nothing is committed until
-    Compute is pressed -- a nudged slider must not be able to start a
-    four-minute analysis. ``ready`` is ``False`` until it has been pressed for
-    this target; the parameters themselves persist across targets, so moving to
-    the next shot is one click rather than a re-entry of every value.
-
-    A batch-only spec is never computed from a page, so its button reads
-    **Show**: it only commits the form, and the page looks the result up.
+    A live spec's widgets take effect on the next rerun. A cached spec's go
+    inside ``st.form``, so a nudged slider cannot start an analysis: ``ready``
+    is ``False`` until the button has been pressed for this target. The
+    parameters persist across targets. A batch-only spec is never computed from
+    a page, so its button reads **Show**.
     """
     import streamlit as st
 
-    if container is None:
-        container = st.sidebar
     key_prefix = f"params.{spec.key}"
-
     if not spec.cached:
-        return (
-            form(spec.params, key_prefix, container=container, spec=spec, ds=ds),
-            True,
-        )
+        return form(spec.params, key_prefix, st.sidebar, spec=spec, ds=ds), True
 
     ready_key = f"ready.{spec.key}.{target.key}"
-    # NOTE: `container.form(...)` is used as a context manager only -- its
-    # `__enter__` returns None in this Streamlit version, so widgets go through
-    # `st.*` inside the block and are routed into the form by Streamlit's
-    # context stack (passing the sidebar container itself would place them
-    # outside the form).
-    with container.form(f"form.{spec.key}"):
-        params = form(spec.params, key_prefix, container=st, spec=spec, ds=ds)
+    # The form is entered as a context manager and the widgets go through
+    # `st`: passing the sidebar itself would place them outside the form.
+    with st.sidebar.form(f"form.{spec.key}"):
+        params = form(spec.params, key_prefix, st, spec=spec, ds=ds)
         label = "Show" if spec.batch_only else "Compute"
         if st.form_submit_button(label, use_container_width=True):
             st.session_state[ready_key] = True

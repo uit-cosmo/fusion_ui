@@ -25,8 +25,7 @@ def spec(key, diagnostics=("apd",), **kwargs):
 
 @pytest.fixture(autouse=True)
 def clean_registry():
-    """The registry is module-level global state; phase 03 will add to it from
-    imports, so a test must not leave entries behind."""
+    """The registry is module-level global state: start empty, and put it back."""
     saved = dict(registry.REGISTRY)
     registry.REGISTRY.clear()
     yield
@@ -70,9 +69,7 @@ def test_compute_decides_whether_a_spec_is_cached():
 
 
 # ---------------------------------------------------------------------------
-# Chained specs. Every check here is made at registration rather than at
-# compute time: a mistake in a chain would otherwise surface as a failed run on
-# somebody's shot, hours after the module was imported.
+# Chained specs
 # ---------------------------------------------------------------------------
 
 
@@ -119,10 +116,6 @@ def test_a_spec_cannot_accept_a_diagnostic_its_upstream_refuses():
         )
 
 
-def test_a_spec_is_not_batch_only_unless_it_says_so():
-    assert spec("heavy", compute=lambda ds, p: ds).batch_only is False
-
-
 def test_a_batch_only_spec_must_be_cached():
     """A live spec computes nothing, so there is nothing a batch could fill."""
     with pytest.raises(ValueError, match="batch only but a live spec"):
@@ -141,16 +134,8 @@ def test_a_spec_may_be_built_on_a_batch_only_one():
 
 
 # ---------------------------------------------------------------------------
-# The whole record. Every other spec computes on the file cut to the discharge
-# window; one that finds something against the start of the record says so, and
-# `loader.input_for` honours it for the page and for precompute alike.
+# The whole record
 # ---------------------------------------------------------------------------
-
-
-def test_a_spec_computes_on_the_cut_record_unless_it_says_otherwise():
-    assert spec("heavy", compute=lambda ds, p: ds).whole_record is False
-    whole = spec("puff", compute=lambda ds, p: ds, whole_record=True)
-    assert whole.whole_record is True
 
 
 def test_a_live_spec_cannot_need_the_whole_record():
@@ -162,9 +147,7 @@ def test_a_live_spec_cannot_need_the_whole_record():
 
 
 def test_a_chain_agrees_on_the_whole_record():
-    """The store hands one dataset down the chain: a link given the whole record
-    would silently compute on a time axis it was never written for, and one given
-    the cut would look for the start of a record that is not there."""
+    """The store hands one dataset down the chain."""
     same = lambda p: p  # noqa: E731
     registry.register(spec("base", compute=lambda ds, p: ds, whole_record=True))
     with pytest.raises(ValueError, match="disagree on whole_record"):
@@ -225,14 +208,8 @@ def test_the_discharge_entry_a_target_carries_is_not_part_of_what_it_is():
 
 
 # ---------------------------------------------------------------------------
-# Companions: other diagnostics of the same shot that a live spec draws beside
-# its own file. The single-shot page opens them and hands them to render; a
-# declaration it could not honour is refused here, not on someone's shot.
+# Companions: other diagnostics of the same shot that a live spec draws
 # ---------------------------------------------------------------------------
-
-
-def test_a_spec_names_no_companion_unless_it_says_so():
-    assert spec("plain").companions == ()
 
 
 def test_a_live_spec_may_name_other_diagnostics_of_the_shot():

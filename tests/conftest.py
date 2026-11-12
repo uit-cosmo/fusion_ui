@@ -1,8 +1,6 @@
-"""Fixtures: a throwaway data tree and discharge descriptor.
+"""Fixtures: a throwaway data tree, a discharge descriptor and tiny netCDF files.
 
-Everything here is empty files and a handful of JSON entries. No test touches
-the real data tree — a single APD file is ~425 MB, and the collection is tens
-of terabytes.
+No test touches the real data tree.
 """
 
 import json
@@ -12,14 +10,13 @@ import pytest
 
 from fusion_ui.core import db
 
-#: ``sys.modules['__main__']`` as the session starts: pytest's own. Read here, at
-#: import, before any test or fixture can have replaced it. See
-#: ``keep_the_main_module``.
+#: ``sys.modules['__main__']`` as the session starts, before any test can have
+#: replaced it. See ``keep_the_main_module``.
 MAIN = sys.modules["__main__"]
 
-# Mirrors the real descriptor's shapes: a fully curated shot, one where f_GW has
-# to be derived from I_p and n̄_e, one with nothing but a shot number, and an
-# exact duplicate entry (the real file has nine of them).
+# The real descriptor's shapes: a fully curated shot, one where f_GW has to be
+# derived from I_p and n̄_e, one with nothing but a shot number, and an exact
+# duplicate entry.
 DISCHARGES = [
     {
         "shot_number": 1160616027,
@@ -63,8 +60,7 @@ DISCHARGES = [
     },
 ]
 
-# 1150618021 is deliberately absent from DISCHARGES: files on disk, nobody has
-# curated it yet. It must still show up in the browser, flagged.
+# 1150618021 is absent from DISCHARGES: files on disk that nobody has curated.
 FILES = {
     "apd": [
         "apd_1160616027.nc",
@@ -91,11 +87,9 @@ ENV_VARS = (
 
 @pytest.fixture(autouse=True)
 def isolate_environment(monkeypatch):
-    """Keep the developer's own ``.env`` out of the suite.
-
-    ``fusion_ui.config`` loads the repository's ``.env`` into ``os.environ`` at
-    import time, which would otherwise point these tests at the real data tree.
-    """
+    """Keep the developer's own ``.env`` out of the suite: ``fusion_ui.config``
+    loads it into ``os.environ`` at import, which would point the tests at the
+    real data tree."""
     for name in ENV_VARS:
         monkeypatch.delenv(name, raising=False)
 
@@ -105,23 +99,13 @@ def keep_the_main_module():
     """Give every test, and take back from it, the ``__main__`` the session
     started with.
 
-    Streamlit's script runner installs the script it runs as
-    ``sys.modules['__main__']`` and never puts the old one back, so every
-    ``AppTest`` run leaves it replaced: by the page for ``from_file``, by a
-    generated script for ``from_function``. ``precompute``'s pool starts its
-    workers with ``spawn``, and a spawned child runs its parent's ``__main__``
-    again from the file it came from (``multiprocessing.spawn``,
-    ``init_main_from_path``). A page run again in the child has been harmless,
-    only slow. The generated script ends in ``function(*__args, **__kwargs)``,
-    names AppTest puts in the running module and not in the file, so the child
-    dies with ``NameError: name '__args' is not defined`` and every target of
-    the fill comes back broken.
-
-    Without this, which test breaks depends on which test ran before it. The
-    suite passed in its usual order only because a ``from_file`` test came
-    between the ``from_function`` ones and the pool's; another pair of files
-    could fail (``tests/test_main_module.py`` is the regression test). pytest's
-    own ``__main__`` is left alone by a spawned child.
+    Every ``AppTest`` run leaves ``sys.modules['__main__']`` replaced by the
+    script it ran. ``precompute``'s pool spawns its workers, and a spawned child
+    runs its parent's ``__main__`` again from its file. The script that
+    ``AppTest.from_function`` generates only runs under AppTest, so the child
+    dies with a ``NameError`` and every target of the fill comes back broken,
+    depending on which test ran before. ``tests/test_main_module.py`` is the
+    regression test.
     """
     sys.modules["__main__"] = MAIN
     yield
@@ -154,20 +138,14 @@ def conn(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Real (tiny) netCDF fixtures -- for loader/probes/single-shot-page tests,
-# which actually open a file rather than just stat it. Small enough (a few
-# hundred samples, not 583k) to write and read in milliseconds.
+# Real, tiny netCDF files, for the tests that open a file
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
 def apd_dataset_path(tmp_path):
-    """A tiny APD-shaped dataset: ``frames`` on ``(y, x, time)``, plus R/Z.
-
-    Carries a flat EFIT boundary (``rlcfs``/``zlcfs``/``efit_time``) at R = 87
-    cm, like every real APD file does, so the magnetic-coordinate labels have
-    something to read.
-    """
+    """A tiny APD-shaped dataset: ``frames`` on ``(y, x, time)``, R/Z, and a
+    flat EFIT boundary (``rlcfs``/``zlcfs``/``efit_time``) at R = 87 cm."""
     import numpy as np
     import xarray as xr
 
@@ -246,17 +224,13 @@ def asp_dataset_path(tmp_path):
 
 @pytest.fixture
 def blob_dataset_path(tmp_path):
-    """An APD-shaped dataset with blobs of a *known* velocity crossing it.
+    """An APD-shaped dataset with blobs of a known velocity crossing it.
 
     Twenty identical Gaussians propagate radially at 400 m/s across a 9x9 grid,
     each crossing the centre pixel at a known time, on a small noise floor. The
-    amplitudes are already in standard deviations, as run-normalised data is,
-    so ``find_events_and_2dca``'s threshold means what it says.
-
-    Random data cannot test a blob analysis: it produces no events, or events
-    with no velocity to recover. With a planted velocity the whole chain --
-    conditional average, contour, track, mask, reduction -- can be checked
-    against an answer known in advance.
+    amplitudes are in standard deviations, as run-normalised data is, so an
+    event threshold means what it says, and an analysis can be checked against
+    an answer known in advance.
     """
     import numpy as np
     import xarray as xr

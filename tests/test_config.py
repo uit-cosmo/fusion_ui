@@ -1,6 +1,7 @@
-"""The .env conventions, which fusion_ui shares with fusion_scripts."""
+"""The .env conventions: a dotenv file fills the environment, the shell wins."""
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -32,6 +33,19 @@ def test_shell_environment_wins_over_dotenv(monkeypatch, tmp_path):
 
 def test_missing_dotenv_is_not_an_error(tmp_path):
     config._load_dotenv(tmp_path / "nothing-here")
+
+
+def test_dotenv_is_looked_for_where_asked_then_upwards_then_beside_the_checkout(
+    monkeypatch, tmp_path
+):
+    work = tmp_path / "a" / "b"
+    work.mkdir(parents=True)
+    monkeypatch.chdir(work)
+    monkeypatch.setenv("FUSION_UI_DOTENV", str(tmp_path / "explicit.env"))
+    paths = config._dotenv_paths()
+    assert paths[:3] == [tmp_path / "explicit.env", work / ".env", work.parent / ".env"]
+    assert tmp_path / ".env" in paths
+    assert paths[-1] == Path(config.__file__).resolve().parent.parent / ".env"
 
 
 def test_expands_user(monkeypatch):
