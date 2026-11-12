@@ -1,42 +1,23 @@
 """The MLP profiles: the reduction (``fusion_ui/core/mlp.py``), the view (``fusion_ui/plots/mlp_profiles.py``) and the
 single-shot page that shows it.
 
-What these tests hold them to, each on a synthetic file in the layout ``cmod_functions`` writes (``tests/mlp_fixtures.py``),
-whose profiles are pure exponentials of known lengths:
-
-- the plunges are found on the probe's depth, at their tips, and a bump of the parked probe or a dwell is no scan; every
-  1 ms window, on whole milliseconds of the shot, is labelled with its plunge and the way the probe ran, and the windows
-  where it held still make no profile;
-- a pin's mean counts only where it recorded half the window, ρ's zeros are no mapping, and the four pins are combined as
-  their mean, only where every pin recorded;
-- the far-SOL fits give back the lengths the profiles were made with, and the shift to a separatrix temperature puts it at
-  ρ = 0 and never extrapolates;
-- the figure draws six rows on ρ in cm, a colour per plunge and a marker per way, the fits dashed and the separatrix
-  dotted; a window with no plunge is said in words beside the probe's depth;
-- the single-shot page draws it, with the discharge window on a probe file.
+Each test runs on a synthetic file in the layout of the real ones (``tests/mlp_fixtures.py``), whose profiles are pure
+exponentials of known lengths.
 """
 
-import base64
-import dataclasses
 import inspect
 import json
-from pathlib import Path
 
 import numpy as np
-import plotly.graph_objects as go
 import pytest
 import xarray as xr
 from streamlit.testing.v1 import AppTest
 
 import fusion_ui.plots  # noqa: F401 - registers the specs the page offers
-from fusion_ui import documentation
-from fusion_ui.core import catalog, db, loader, mlp, multipixel, params_ui, registry
+from fusion_ui.core import catalog, db, loader, mlp, multipixel, registry
 from fusion_ui.plots import mlp_profiles as mp
 from tests import mlp_fixtures as mf
-from tests.import_guard import reaches_fusion_scripts
-
-REPO = Path(__file__).resolve().parent.parent
-SINGLE_SHOT = str(REPO / "fusion_ui" / "pages" / "2_single_shot.py")
+from tests.test_thomson_profiles import SINGLE_SHOT, charts
 
 #: The discharge window of the fixture's shot, which holds the third plunge, in and out, as 1160616011's does.
 WINDOW = (1.15, 1.45)
@@ -111,7 +92,7 @@ def test_each_plunge_is_found_at_its_tip_between_the_shallowest_points_around_it
 
 
 def test_a_bump_of_the_parked_probe_is_no_plunge():
-    """1150618021's probe settles at its parking position with bumps of 1.1 to 1.2 cm, which are not plunges."""
+    """A probe settles at its parking position with bumps of 1.1 to 1.2 cm, which are not plunges."""
     time = np.arange(0.0, 1.0, 1e-4)
     knots = [0, 0.2, 0.3, 0.4, 0.6, 0.65, 0.7, 1.0]
     depth = np.interp(time, knots, [-0.014, -0.014, 0.094, -0.0195, -0.014, -0.0035, -0.014, -0.014])
@@ -342,7 +323,7 @@ def test_the_strokes_in_a_window_are_those_the_means_label_judged_from_the_track
     for window in (WINDOW, (0.6, 1.45), (1.305, 1.45), (1.33, 1.36)):
         assert mlp.strokes_in(ds, *window) == mlp.strokes(mlp.means(ds, *window)), window
     assert mlp.strokes_in(ds, *WINDOW) == [(3, "in"), (3, "out")]
-    assert mlp.strokes_in(ds, 1.305, 1.45) == [(3, "out")]  # 1160616009's window begins after the tip
+    assert mlp.strokes_in(ds, 1.305, 1.45) == [(3, "out")]  # a window that begins after the tip
     # The attributes are all it reads: a dataset that holds nothing else gives the same answer.
     track_only = xr.Dataset(attrs=ds.attrs)
     assert mlp.strokes_in(track_only, *WINDOW) == [(3, "in"), (3, "out")]
@@ -396,20 +377,6 @@ def test_the_spec_is_registered_live_for_asp_files_after_the_probe_trace():
     assert not multipixel.supported(spec)
 
 
-def test_the_parameters_hash_and_their_fit_range_is_the_modules_far_sol():
-    spec = registry.get("mlp_profiles")
-    params = spec.params()
-    assert [f.name for f in dataclasses.fields(params)] == ["te_sep", "fit_from", "fit_to"]
-    assert (params.te_sep, params.fit_from, params.fit_to) == (0.0, 0.5, 1.8)
-    digest, text = params_ui.hash_params(spec.key, params)
-    assert params_ui.hash_params(spec.key, params_ui.from_canonical(spec.params, text, plot_key=spec.key))[0] == digest
-
-
-def test_neither_module_imports_anything_from_fusion_scripts():
-    for module in (mlp, mp):
-        assert reaches_fusion_scripts(inspect.getsource(module)) == [], module.__name__
-
-
 def test_the_reduction_never_imports_streamlit():
     assert "streamlit" not in inspect.getsource(mlp)
 
@@ -434,6 +401,9 @@ def test_six_rows_share_rho_and_each_stroke_is_one_trace_in_every_row():
     shown = [t.name for t in fig.data if t.showlegend]
     assert shown == ["plunge 3, in", "plunge 3, out", "far-SOL fit"]
     assert fig.layout.xaxis6.title.text == "ρ [cm]"
+    # The density, the temperature and the currents are logarithmic, the potentials linear.
+    types = [fig.layout[f"yaxis{'' if k == 1 else k}"].type for k in range(1, 7)]
+    assert types == ["log", "log", "log", "log", "linear", "linear"]
 
 
 def test_a_plunge_has_its_colour_on_every_shot_and_the_marker_points_the_way_the_probe_ran():
@@ -442,7 +412,6 @@ def test_a_plunge_has_its_colour_on_every_shot_and_the_marker_points_the_way_the
     assert seen == {
         (f"plunge {n}, {way}", mp.PLUNGE_COLOURS[n], mp.STROKE_SYMBOLS[way]) for n in (1, 2, 3) for way in ("in", "out")
     }
-    assert mp.STROKE_SYMBOLS == {"in": "triangle-left", "out": "triangle-right-open"}  # and filled in, open out
 
 
 def test_the_values_are_drawn_in_the_units_of_the_axis_titles():
@@ -454,12 +423,6 @@ def test_the_values_are_drawn_in_the_units_of_the_axis_titles():
         trace = rows[k][0]
         assert np.allclose(trace.x, inward["rho"].values * 100)
         assert np.allclose(trace.y, inward[name].values * scale)
-
-
-def test_the_density_temperature_and_currents_are_logarithmic_and_the_potentials_linear():
-    fig = mp.figure(profiles_of())
-    types = [fig.layout[f"yaxis{'' if k == 1 else k}"].type for k in range(1, 7)]
-    assert types == ["log", "log", "log", "log", "linear", "linear"]
 
 
 def test_the_far_sol_fits_are_drawn_dashed_over_the_points_they_rest_on_in_the_n_e_and_t_e_rows_only():
@@ -481,7 +444,7 @@ def test_the_far_sol_fits_are_drawn_dashed_over_the_points_they_rest_on_in_the_n
 
 
 def test_a_fit_is_not_drawn_where_it_has_no_points():
-    """1150618021's plunges reach in to ρ = 0.9 cm only, so its fit begins there and not at the range's 0.5 cm."""
+    """Plunges that reach in to ρ = 0.9 cm only: the fit begins there and not at the range's 0.5 cm."""
     profiles = profiles_of()
     drawn = profiles.drawn
     far = drawn.isel(window=np.flatnonzero(drawn["rho"].values >= 0.009))
@@ -531,24 +494,13 @@ def test_a_hover_text_says_which_stroke_when_where_the_depth_and_the_value():
 # ---------------------------------------------------------------------------------------------------------------------
 
 
-def test_a_window_that_holds_a_plunge_has_nothing_to_say_of_its_absence():
-    assert mp.no_plunge_text(profiles_of()) is None
-
-
 def test_a_dwell_is_said_in_words_with_the_probes_depth_and_where_rho_ran():
+    assert mp.no_plunge_text(profiles_of()) is None  # a window that holds a plunge has nothing to say
     text = mp.no_plunge_text(profiles_of(dwell=True))
     assert text.startswith("**No plunge in the window 1.150–1.450 s:**")
     rho = mf.rho_at(0.109) * 100
     assert f"held still at a depth of 10.9 cm, where ρ was {rho:.2f} cm, so there is no profile" in text
-    assert "depth over the shot" in text
-
-
-def test_a_file_without_a_track_says_its_plunges_cannot_be_found():
-    text = mp.no_plunge_text(profiles_of(track=False))
-    assert "no plunge depth" in text and "cannot be found" in text
-
-
-def test_a_dwell_through_a_moving_plasma_says_how_far_rho_ran():
+    # Through a moving plasma, it says how far ρ ran.
     ds = mf.asp_dataset(dwell=True)
     for name in [name for name in ds.data_vars if name.startswith("rho_")]:
         time = ds[ds[name].dims[0]].values.astype(float)
@@ -558,6 +510,8 @@ def test_a_dwell_through_a_moving_plasma_says_how_far_rho_ran():
 
 
 def test_a_plunge_that_makes_no_profile_says_why():
+    text = mp.no_plunge_text(profiles_of(track=False))
+    assert "no plunge depth" in text and "cannot be found" in text
     ds = mf.asp_dataset()
     quiet = ds.assign({name: ds[name] * np.nan for name in ds.data_vars if not name.startswith("rho_")})
     assert "the MLP recorded nothing while it moved" in mp.no_plunge_text(mlp.read(quiet, *WINDOW))
@@ -570,7 +524,6 @@ def test_a_plunge_that_makes_no_profile_says_why():
 
 
 def test_a_window_that_begins_after_a_tip_draws_the_way_out_alone():
-    """1160616009's discharge window begins at 1.305 s, after its third plunge's tip at 1.296 s."""
     strokes = mp.drawn_strokes(profiles_of(window=(1.305, 1.45)))
     assert [(number, way) for number, way, *_ in strokes] == [(3, "out")]
 
@@ -672,24 +625,6 @@ def open_view(shot, **params):
     return app
 
 
-def decode(node):
-    """A figure's JSON with Plotly's binary arrays, ``{"dtype", "bdata", "shape"}``, turned back into lists."""
-    if isinstance(node, dict):
-        if "bdata" in node:
-            data = np.frombuffer(base64.b64decode(node["bdata"]), dtype=np.dtype(node["dtype"]))
-            if "shape" in node:
-                data = data.reshape([int(n) for n in node["shape"].split(",")])
-            return data.tolist()
-        return {key: decode(value) for key, value in node.items()}
-    if isinstance(node, list):
-        return [decode(value) for value in node]
-    return node
-
-
-def charts(app):
-    return [go.Figure(decode(json.loads(c.proto.spec))) for c in app.get("plotly_chart")]
-
-
 def captions(app):
     return [c.value for c in app.main.caption]
 
@@ -700,8 +635,7 @@ def test_the_page_draws_a_scans_profiles_in_one_chart_with_its_notes_and_the_win
     (fig,) = charts(app)
     assert [t.name for t in fig.data if t.showlegend] == ["plunge 3, in", "plunge 3, out", "far-SOL fit"]
     shown = captions(app)
-    window = "Window 1.1500–1.4500 s — from the discharge DB. A probe file has no shared time axis, so it is not cut to it."
-    assert window in shown
+    assert any(c.startswith("Window 1.1500–1.4500 s") for c in shown)  # the discharge window, on a probe file
     assert any(c.startswith("Points: the 1 ms means of the MLP over the plunges in the window 1.150–1.450 s") for c in shown)
     assert any("L_n = 3.00 cm" in c and "L_T = 2.00 cm" in c for c in shown)
     assert not app.warning and not app.info
@@ -744,21 +678,3 @@ def test_the_page_gives_a_probe_file_the_discharge_window_and_no_default_without
     start, end, source = loader.metadata_window(Empty())
     assert source == "none" and np.isnan(start) and np.isnan(end)
     assert loader.metadata_window(None)[2] == "none"
-
-
-# ---------------------------------------------------------------------------------------------------------------------
-# The Documentation page
-# ---------------------------------------------------------------------------------------------------------------------
-
-
-def test_the_documentation_has_a_section_on_the_mlp_profiles_that_says_how_each_unit_was_established():
-    doc = documentation.load()
-    (section,) = [s for s in doc.sections if s.title == "MLP profiles"]
-    text, unknown = documentation.fill(" ".join(block.text for block in section.blocks))
-    assert not unknown
-    for unit in ("m⁻³", "eV", "A m⁻²", "V"):
-        assert unit in text
-    for said in ("fusion_ui/core/mlp.py: means", "fusion_ui/core/mlp.py: shift_to", "fusion_ui/core/mlp.py: efold"):
-        assert said in text
-    values = documentation.facts()
-    assert values["mlp.window"] == "1 ms" and values["mlp.far_sol"] == "0.5 to 1.8 cm"

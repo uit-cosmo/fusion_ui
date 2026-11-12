@@ -1,85 +1,27 @@
 """The Thomson scattering profiles view: n_e, T_e and p_e against ρ_pol or R_mid.
 
-A *live* spec: nothing is computed and nothing is cached. ``thomson_scattering_<shot>.nc`` is a few hundred kilobytes
-that already hold the measurements and the fit, and this view only draws them. The file is made by fusion_scripts'
-``tools/get_thomson_scattering.py`` (the module docstring of ``tools/mfe/get_thomson_scattering.py`` is the reference
-for the layout); nothing here imports from fusion_scripts, the view reads the file and nothing else.
+A live spec: ``thomson_scattering_<shot>.nc`` already holds the measurements and the fit, and this view only draws
+them. What matters about the file (netCDF3, ``time`` in seconds):
 
-What the file holds, and what this view reads of it (netCDF3, ``time`` in seconds)
-    ``<sys>_ne``, ``<sys>_Te`` and their ``_err``, by ``(time, <sys>_channel)``, for the edge and the core system
-        The tree's values over the whole shot, in SI units with T_e in eV. **A 0 is no measurement**: n_e and T_e
-        are almost always 0 together, and the errors there are junk, so only the points with n_e > 0 are drawn.
-    ``<sys>_rho_pol`` and ``<sys>_R_mid``, by ``(time, <sys>_channel)``
-        Where each point is: ρ_pol = √ψ_N and the outboard midplane radius of the same flux surface, from the EFIT tree
-        the attribute ``efit_tree`` names, at the point's own pulse. NaN outside the EFIT time base.
-    ``<sys>_R``, ``<sys>_Z`` by channel
-        Where the channel looks, for the hover text.
-    ``rho_pol`` and, on it, ``fit_ne``, ``fit_Te``, ``fit_pe`` and ``fit_R_mid``
-        The fit over the discharge window, as ``get_cmod_kin_profs`` makes it. **Only where the fit worked**: a file
-        whose fit failed holds the raw points and says why in ``fit_status``.
-    ``R_mid_sep``, ``Te_sep_2pm``, ``lambda_q_2pm``
-        Shot-level numbers, when they could be computed. The first is the separatrix on the R_mid axis.
-    attributes
-        ``window_t_start`` and ``window_t_end`` (the fit's window), ``fit_status``, ``fit_check`` (run_db.py's own test
-        of whether the fit silently failed), ``fit_note``, ``fit_settings`` and ``caveat``, among others.
-    ``fit_rho_shift``, ``Te_sep_fit``, and the attributes ``fit_separatrix`` and ``separatrix_code``
-        Only in a file made with C-Mod_Analysis 24e1499, whose fit looks for the separatrix in its own T_e profile and,
-        where it finds one, moves itself, and its own copy of the points, by ``fit_rho_shift`` in ρ_pol, so that its
-        T_e is ``Te_sep_fit`` at ρ_pol 1: ``rho_pol`` is then the moved grid. The raw points stay as EFIT maps them,
-        and ``fit_rho_shift`` is 0 where the fit was not moved. ``separatrix_code`` is the folder of the code that
-        looks, which is outside C-Mod_Analysis. A file made with d6a6466 has none of them.
-    the attributes ``fit_points_check`` and ``mapping_failure``
-        Only in a file made by the script's later versions. ``fit_points_check`` says whether the edge points the fit
-        was made on are the file's: ``equal``, or a sentence beginning ``differ:``. ``mapping_failure``, there only
-        where mapping the points failed, is a sentence beginning ``mapping failed:`` that says which system and
-        coordinate, at which pulses, and the error; the points' ρ_pol or R_mid are NaN where it failed.
+- ``<sys>_ne``, ``<sys>_Te`` and their ``_err`` by ``(time, <sys>_channel)`` for the edge and the core system, with
+  ``<sys>_rho_pol`` and ``<sys>_R_mid`` of each point from EFIT at its own pulse (NaN outside the EFIT time base).
+  **A 0 is no measurement**, and its error is junk: only the points with n_e > 0 are drawn.
+- ``rho_pol`` and, on it, ``fit_ne``, ``fit_Te``, ``fit_pe`` and ``fit_R_mid``: the fit over the discharge window,
+  only where it worked. It is drawn over its whole range and without a band (its stored errors are 20% of the fit by
+  construction, and ``fit_pe_err`` is no error of p_e).
+- ``fit_rho_shift``: how far the fit, and its own copy of the points, were moved in ρ_pol so that its T_e is
+  ``Te_sep_fit`` at ρ_pol 1. Where it is not 0 the points are drawn moved with the fit, where the fit saw them
+  (:meth:`Points.on`), and the separatrix is the fit's (:func:`separatrix`). A file without it draws every point
+  where EFIT puts it.
 
-What is drawn
-    One row each for n_e, T_e and p_e, on one shared axis, ρ_pol or R_mid (a choice): the edge and core points in the
-    page's window, told apart by marker and colour, with the tree's ±1σ bars; the stored fit, over its whole range
-    and **without a band**; and the separatrix. The file holds no p_e of the measurements, so its points are e·n_e·T_e,
-    with the errors propagated, beside the fit's own ``fit_pe``. A band around the fit is left out on purpose (the
-    user, 2026-10-09): with ``frac_err`` the fit's n_e and T_e errors are 20% of the fit by construction, and
-    ``fit_pe_err`` adds a density to a temperature, so it is no error of p_e.
+A row's range is set by the points, not by the fit (:func:`y_limits`), so a fit that runs away leaves through the top.
+The warnings (:func:`warning`, :func:`points_warning`) and the lines under the figure (:func:`notes`) quote what the
+file says of its own fit.
 
-    **A fit moved to a separatrix takes its points with it.** Where ``fit_rho_shift`` is not 0, the points are drawn
-    where the fit saw them: at their ρ_pol plus the shift, and on R_mid at the fit's own R_mid of that ρ_pol
-    (``fit_R_mid``, interpolated). The separatrix is the fit's ρ_pol 1, and its R_mid there, and a caption says by how
-    much they were moved and to which T_e,sep, quoting ``fit_separatrix``. Every other file, a d6a6466 one among them,
-    draws each point at its own pulse's ρ_pol and R_mid, as EFIT puts it. A fit whose outer side fictitious points
-    hold (``force_to_zero``) gets a caption that says so, and that the p_e fit is not held. A file whose
-    ``fit_points_check`` is anything but ``equal`` gets a warning above the figure, quoting it: the points drawn may
-    then not be where the fit saw them. A point with no place on the axis drawn is left out and counted, with the
-    file's ``mapping_failure`` quoted where it has one.
+On request the Mirror Langmuir Probe's profiles are drawn over these (:func:`overlay`), from the shot's ASP file,
+which the spec names as a companion. The probe's data are read only while the overlay is on.
 
-    **A row's range is set by the points, not by the fit** (:func:`y_limits`, the rule of the paper's PDF of the density
-    scan, ported): it opens on ``[0, top]``, and a fit that runs away leaves through the top instead of squashing the
-    points flat against zero. Autoscale returns to that range, and the points above it are counted in the row's corner.
-    The points are judged where they are drawn, moved or not.
-
-    A fit that does not pass ``fit_check`` gets a warning above the figure that quotes it, and **anything but the
-    outcome** ``passed`` **is warned about**: a verdict spelt another way, an outcome nobody wrote a rule for, an empty
-    attribute. Its advice follows the clause that failed: the temperature on axis says the core is an extrapolation,
-    the temperature at the grid's outer end that the outer end is not credible. A ``fit_note`` that calls the core an
-    extrapolation gets a caption of its own, passed or not. The diagnostician's caveat is under every figure.
-
-The Mirror Langmuir Probe's profiles, on request
-    The spec names the ASP file as a companion (``companions=("asp",)``), so the single-shot page hands it the shot's
-    ASP file beside its own, opened lazily: nothing but its attributes is read until this view reads something. Where
-    the probe plunges within the page's window, which :func:`fusion_ui.core.mlp.strokes_in` judges from its depth in
-    the attributes alone, the sidebar offers the MLP's profiles, with the discharge DB's ``mlp_mode`` beside the offer
-    as a hint; where it does not, the sidebar says why. **The probe's data are read only while the overlay is on**
-    (:func:`overlay`), with the reduction of the MLP profiles plot (:func:`fusion_ui.core.mlp.read`): the 1 ms means of
-    the four pins combined, over the strokes in the window. They are drawn on the n_e, T_e and p_e rows (p_e =
-    e·n_e·T_e), placed by ρ, the probe's distance to the separatrix mapped to the outboard midplane, in metres: on R_mid
-    at the separatrix drawn plus ρ, and on ρ_pol at the ρ_pol of that R_mid through the fit's own ``fit_R_mid``. **Not
-    moved by default**, so that both sets are on EFIT's mapping; the sidebar offers the move of the MLP profiles plot
-    to the file's ``Te_sep_2pm``, or ``Te_sep_fit`` where it has one. A caption says how the points were placed. Each
-    row's range stays the one the Thomson scattering points set, and the MLP points above it are counted in the row's
-    corner. **Without the overlay, the view is drawn exactly as it was without the companion.**
-
-Everything but :func:`render` is pure: it takes an opened file, or what :func:`read` made of one, and returns data, a
-figure or text, so each can be tested without Streamlit.
+Everything but :func:`render` and :func:`mlp_controls` is pure.
 """
 
 import json
@@ -98,37 +40,31 @@ SYSTEMS = ("edge", "core")
 #: One electron-volt in joules: n_e [m^-3] times T_e [eV] times this is p_e [Pa].
 ELEMENTARY_CHARGE = 1.602176634e-19
 
-#: The scalars the file may hold, read for the separatrix, the captions and the "about this file" list. ``Te_sep_fit``
-#: is only in a file whose fit was moved to a separatrix it found (C-Mod_Analysis 24e1499).
+#: The scalars the file may hold. ``Te_sep_fit`` is only in a file whose fit was moved to a separatrix it found.
 SCALARS = ("R_mid_sep", "Te_sep_2pm", "Te_sep_fit", "lambda_q_2pm")
 
-#: The caveat of the C-Mod_Analysis README on the Thomson scattering data, in the words ``get_thomson_scattering.py``
-#: writes into every file's ``caveat``. A file that lacks the attribute is shown under this one: it is never left
-#: out of the caption.
+#: The caveat shown under a file that has no ``caveat`` attribute of its own: it is never left out.
 CAVEAT = (
     "From the C-Mod_Analysis README: it is highly recommended to talk with the diagnostician who collected the data "
     "before using it in a public forum. The Thomson scattering data were collected by Jerry Hughes "
     "(jwhughes@psfc.mit.edu)."
 )
 
-#: How each system is drawn. Colour and marker both say which it is, so that the distinction survives a colour-blind
-#: reader and a greyscale print; the three colours (with the fit's) are the data-viz palette's first three slots, in
-#: the steps that clear 3:1 on a light and on a dark page alike.
+#: How each system is drawn: colour and marker both say which it is. ``bar`` is the colour of its error bars.
 LOOKS = {
-    "edge": dict(label="edge TS", colour="#2a78d6", symbol="circle"),
-    "core": dict(label="core TS", colour="#d95926", symbol="diamond"),
+    "edge": dict(label="edge TS", colour="#2a78d6", bar="rgba(42,120,214,0.45)", symbol="circle"),
+    "core": dict(label="core TS", colour="#d95926", bar="rgba(217,89,38,0.45)", symbol="diamond"),
 }
 FIT_COLOUR = "#199e70"
 SEPARATRIX_COLOUR = "#898781"
 
-#: The two things the profiles can be drawn against: the option, its axis title and what the hover calls it.
+#: The two axes: the option, its axis title and what the hover calls it.
 AXES = {
     "rho_pol": ("ρ<sub>pol</sub>", "ρ_pol"),
     "R_mid": ("R<sub>mid</sub> [m]", "R_mid"),
 }
 
-#: The three rows: the file's name for it, how the hover reads it, the axis title, the factor from SI to what is drawn,
-#: and its unit.
+#: The three rows: the file's name, the hover's name, the axis title, the factor from SI to what is drawn, the unit.
 QUANTITIES = (
     ("ne", "n_e", "n<sub>e</sub> [10<sup>20</sup> m<sup>-3</sup>]", 1e-20, "10²⁰ m⁻³"),
     ("Te", "T_e", "T<sub>e</sub> [eV]", 1.0, "eV"),
@@ -154,16 +90,12 @@ params_ui.CHOICES[("ThomsonProfilesParams", "axis")] = tuple(AXES)
 # ---------------------------------------------------------------------------
 
 
-@dataclass(eq=False)  # arrays do not compare as a whole: identity, not a generated __eq__ that raises
+@dataclass(eq=False)  # arrays do not compare as a whole
 class Points:
-    """One system's measurements in the window: every channel of every pulse that read something.
+    """One system's measurements in the window, one entry per kept point (n_e > 0), in pulse order.
 
-    ``pulses`` and ``readings`` count what the window held, ``time`` and the arrays after it what is drawn: a reading of
-    0 is no measurement, so it is counted and not kept. Every array has one entry per kept point, in pulse order.
-
-    ``rho_pol`` and ``R_mid`` are where EFIT puts each point at its own pulse, as the file holds them. A fit that was
-    moved to a separatrix took its own copy of the points with it, and :meth:`on` says where they are drawn: at
-    ``rho_pol`` plus ``rho_shift``, and on R_mid at ``R_mid_moved``, the fit's own R_mid of that ρ_pol.
+    ``pulses`` and ``readings`` count what the window held. ``rho_pol`` and ``R_mid`` are where EFIT puts each point;
+    :meth:`on` says where it is drawn.
     """
 
     system: str
@@ -179,11 +111,8 @@ class Points:
     ne_err: np.ndarray  # NaN where the tree's error is missing, or is not positive
     Te: np.ndarray  # eV, NaN where it reads 0 though n_e does not
     Te_err: np.ndarray
-    #: How far the fit moved the points in ρ_pol (the file's ``fit_rho_shift``): 0 where it did not move them.
-    rho_shift: float = 0.0
-    #: Where the moved points are on the R_mid axis, in metres: the fit's own R_mid of their moved ρ_pol, NaN where it does
-    #: not reach. ``None`` for points that were not moved.
-    R_mid_moved: Optional[np.ndarray] = None
+    rho_shift: float = 0.0  # how far the fit moved the points in ρ_pol (``fit_rho_shift``)
+    R_mid_moved: Optional[np.ndarray] = None  # m, the fit's own R_mid of the moved ρ_pol; None for points not moved
 
     @property
     def drawn(self):
@@ -191,7 +120,6 @@ class Points:
 
     @property
     def moved(self):
-        """Whether these points are drawn moved with the fit, away from where EFIT puts them."""
         return bool(self.rho_shift)
 
     def pe(self):
@@ -199,7 +127,7 @@ class Points:
         return ELEMENTARY_CHARGE * self.ne * self.Te
 
     def pe_err(self):
-        """The error of :meth:`pe`, ``e·sqrt((T_e σ_n)² + (n_e σ_T)²)``: NaN where either error is."""
+        """The propagated error of :meth:`pe`: NaN where either error is."""
         return ELEMENTARY_CHARGE * np.hypot(self.Te * self.ne_err, self.ne * self.Te_err)
 
     def series(self, quantity):
@@ -211,8 +139,8 @@ class Points:
         return self.pe(), self.pe_err()
 
     def on(self, axis):
-        """Where the points are drawn on ``axis``: ρ_pol, or R_mid in metres. Points the fit moved are where the fit saw
-        them, all others where EFIT puts them."""
+        """Where the points are drawn on ``axis``: where EFIT puts them, or, moved with the fit, where the fit saw them
+        (ρ_pol plus the shift, and the fit's own R_mid of that)."""
         if not self.moved:
             return self.rho_pol if axis == "rho_pol" else self.R_mid
         if axis == "rho_pol":
@@ -222,11 +150,8 @@ class Points:
 
 @dataclass(eq=False)
 class Fit:
-    """The stored fit: one profile for the whole window, on a ρ_pol grid.
-
-    ``pe`` and ``R_mid`` are ``None`` where the file lacks them, and then there is no pressure fit, or nothing to draw
-    the fit against on the R_mid axis.
-    """
+    """The stored fit: one profile for the whole window, on a ρ_pol grid. ``pe`` and ``R_mid`` are ``None`` where the
+    file lacks them."""
 
     rho_pol: np.ndarray
     ne: np.ndarray  # m^-3
@@ -234,14 +159,11 @@ class Fit:
     pe: Optional[np.ndarray]  # Pa
     R_mid: Optional[np.ndarray]  # m, at the window's middle time
     window: Optional[tuple]  # (start, end) in seconds, the window the fit was made over
-    #: How far C-Mod_Analysis moved the fit, and its own copy of the points, in ρ_pol (the file's ``fit_rho_shift``), so
-    #: that its T_e is the separatrix T_e it found at ρ_pol 1: ``rho_pol`` is then the moved grid. 0 where it did not
-    #: move it, and ``None`` in a file whose code never moves its fit (C-Mod_Analysis d6a6466).
+    #: The file's ``fit_rho_shift``: ``rho_pol`` is then the moved grid. ``None`` in a file without one.
     rho_shift: Optional[float] = None
 
     @property
     def moved(self):
-        """Whether the fit was moved to a separatrix: a shift that is a number, and not 0."""
         return self.rho_shift is not None and bool(np.isfinite(self.rho_shift)) and self.rho_shift != 0.0
 
     def on(self, axis):
@@ -251,8 +173,7 @@ class Fit:
         return {"ne": self.ne, "Te": self.Te, "pe": self.pe}[quantity]
 
     def R_mid_of(self, rho_pol):
-        """The fit's own R_mid of ``rho_pol`` on its axis (``fit_R_mid``, interpolated), in metres: NaN outside its grid,
-        and everywhere when the file has no ``fit_R_mid``."""
+        """The fit's own R_mid of ``rho_pol`` (``fit_R_mid``, interpolated): NaN outside its grid or without one."""
         rho_pol = np.asarray(rho_pol, dtype=float)
         if self.R_mid is None:
             return np.full(rho_pol.shape, np.nan)
@@ -263,15 +184,11 @@ class Fit:
 class Profiles:
     """What a Thomson scattering file says, cut to the window it was opened over."""
 
-    #: ``{"edge": Points, "core": Points}``, whichever the file holds.
-    points: dict
+    points: dict  # {"edge": Points, "core": Points}, whichever the file holds
     fit: Optional[Fit]
-    #: Laser pulses in the window, as the file's ``time`` axis has them.
-    pulses: int
-    #: Those of :data:`SCALARS` the file holds.
-    scalars: dict
-    #: The file's attributes, as plain Python: text for text.
-    attrs: dict
+    pulses: int  # laser pulses in the window
+    scalars: dict  # those of SCALARS the file holds
+    attrs: dict  # the file's attributes, as plain Python
 
     def has(self, quantity, axis):
         """Whether the row of ``quantity`` has anything to draw on ``axis``: a point with a place on it, or the fit."""
@@ -283,8 +200,7 @@ class Profiles:
 
 
 def _plain(value):
-    """An attribute as text, a number or a list: what a netCDF3 file's attributes arrive as, bytes and numpy
-    scalars included."""
+    """An attribute as text, a number or a list, whatever netCDF3 hands back."""
     if isinstance(value, bytes):
         return value.decode(errors="replace")
     if isinstance(value, np.generic):
@@ -295,7 +211,7 @@ def _plain(value):
 
 
 def _grid(ds, name, channel):
-    """``ds[name]`` as a ``(time, channel)`` float array, or ``None`` when the file lacks it or it is shaped otherwise."""
+    """``ds[name]`` as a ``(time, channel)`` float array, or ``None``."""
     if name not in ds:
         return None
     array = ds[name]
@@ -353,14 +269,8 @@ def _points(ds, system):
     )
 
 
-def _window(attrs):
-    """The fit's ``(start, end)`` from ``window_t_start`` and ``window_t_end``, or ``None``: a window as the single-shot
-    page reads a preprocessed file's (:func:`fusion_ui.core.loader.as_window`)."""
-    return loader.as_window([attrs.get("window_t_start"), attrs.get("window_t_end")])
-
-
 def _fit(ds, attrs):
-    """The stored fit, or ``None`` for a file whose fit failed (it then has no ``fit_ne``, and no ``rho_pol``)."""
+    """The stored fit, or ``None`` for a file whose fit failed."""
     if "rho_pol" not in ds or "fit_ne" not in ds or "fit_Te" not in ds:
         return None
 
@@ -376,25 +286,14 @@ def _fit(ds, attrs):
         Te=on_grid("fit_Te"),
         pe=on_grid("fit_pe"),
         R_mid=on_grid("fit_R_mid"),
-        window=_window(attrs),
+        window=loader.as_window([attrs.get("window_t_start"), attrs.get("window_t_end")]),
         rho_shift=float(shift.values) if shift is not None and shift.ndim == 0 else None,
     )
 
 
-def _move(points, fit):
-    """Draw ``points`` where the moved ``fit`` saw them: C-Mod_Analysis moved its own copy of them with it, by its shift
-    in ρ_pol, and on the R_mid axis they go to the fit's own R_mid of their moved ρ_pol."""
-    points.rho_shift = float(fit.rho_shift)
-    points.R_mid_moved = fit.R_mid_of(points.rho_pol + points.rho_shift)
-
-
 def read(ds):
-    """The :class:`Profiles` of an open Thomson scattering file, cut to whatever window ``ds`` was sliced to.
-
-    Everything is optional but one of the systems' points or the fit: a file that holds only the core, or only the
-    edge, or whose fit failed, draws what it has. Where the fit was moved to a separatrix, the points are moved with it
-    (:class:`Points`).
-    """
+    """The :class:`Profiles` of an open Thomson scattering file, over whatever window ``ds`` was cut to. Either system
+    and the fit are optional. Where the fit was moved to a separatrix, the points are moved with it."""
     attrs = {name: _plain(value) for name, value in ds.attrs.items()}
     fit = _fit(ds, attrs)
     points = {}
@@ -402,7 +301,8 @@ def read(ds):
         found = _points(ds, system)
         if found is not None:
             if fit is not None and fit.moved:
-                _move(found, fit)
+                found.rho_shift = float(fit.rho_shift)
+                found.R_mid_moved = fit.R_mid_of(found.rho_pol + found.rho_shift)
             points[system] = found
     return Profiles(
         points=points,
@@ -417,12 +317,11 @@ def read(ds):
 # What there is to say about it
 # ---------------------------------------------------------------------------
 
-#: ``fit_check`` is the rule's description, a colon, then the outcome, ``passed`` or ``failed: <reasons>``. The description
-#: ends in a quote ("... must have silently failed'"), so the last quote and colon are where the outcome begins.
+#: ``fit_check`` is the rule's description, a colon, then the outcome, ``passed`` or ``failed: <reasons>``. The
+#: description ends in a quote, so the last quote and colon are where the outcome begins.
 _OUTCOME_AFTER = "': "
 
-#: What a failed check says of the fit, by the clause of run_db.py's test that failed, as its reasons name it: a
-#: temperature or density too low "on axis", or a temperature too high at the grid's outer end ("rho_pol 1.10").
+#: What a failed check says of the fit, by the clause its reasons name.
 CHECK_MEANING = (
     (
         "on axis",
@@ -439,52 +338,29 @@ CHECK_UNRECOGNISED = "It may have failed silently: read the points, not the curv
 
 
 def check_outcome(text):
-    """What a ``fit_check`` attribute records of run_db.py's own test: ``"passed"``, ``"failed: <reasons>"`` as the
-    file writes it, or whatever else it says.
-
-    ``""`` for no attribute, an empty one and ``"no fit"``, the words of a file that has none. A file with a fit has
-    one of the first two, so for it ``""`` means that no outcome was recorded.
-    """
+    """The outcome a ``fit_check`` attribute records: ``"passed"``, ``"failed: <reasons>"``, or whatever else follows
+    the description. ``""`` for no attribute, an empty one and ``"no fit"``."""
     text = "" if text is None else str(text).strip()
     if text in ("", "no fit"):
         return ""
     return text.rsplit(_OUTCOME_AFTER, 1)[-1].strip()
 
 
-def check_failed(profiles):
-    """Whether the fit that is drawn did not pass its check.
-
-    **Anything but the outcome** ``passed`` **counts**: a verdict spelt another way ("FAILED: ..."), an outcome this page
-    does not know, an empty or missing attribute. A check that cannot be read must not pass for one that was.
-    """
-    return profiles.fit is not None and check_outcome(profiles.attrs.get("fit_check")) != "passed"
-
-
-def check_meaning(outcome):
-    """What a failed check says of the fit, in sentences of advice: one for each clause that failed, or that it may have
-    failed silently when the outcome is not a verdict ``failed: <reasons>`` that names one.
-
-    Only the reasons of a verdict are read for clauses: the rule's description, which a file may record without an
-    outcome, says "on axis" too.
-    """
-    reasons = outcome if outcome.lower().startswith("failed") else ""
-    said = [text for clause, text in CHECK_MEANING if clause in reasons]
-    return " ".join(said) or CHECK_UNRECOGNISED
-
-
 def warning(profiles):
-    """The warning above the figure of a fit that did not pass ``fit_check`` (:func:`check_failed`), quoting it, or ``None``.
+    """The warning above the figure of a fit that did not pass ``fit_check``, quoting it, or ``None``.
 
-    What it advises follows the clause that failed (:func:`check_meaning`): a core that is an extrapolation, or an outer
-    end that is not credible. A fit whose outcome is empty, or is not one this page knows, is warned about too.
+    Anything but the outcome ``passed`` is warned about, an empty or unreadable one too: a check that cannot be read
+    must not pass for one that was. The advice follows the clauses a ``failed`` verdict names; the description alone
+    says "on axis" too, so only a verdict's reasons are read for them.
     """
-    if not check_failed(profiles):
-        return None
     check = profiles.attrs.get("fit_check")
     outcome = check_outcome(check)
-    verb = "fails" if outcome.lower().startswith("failed") else "does not pass"
+    if profiles.fit is None or outcome == "passed":
+        return None
+    failed = outcome.lower().startswith("failed")
+    advice = " ".join(text for clause, text in CHECK_MEANING if failed and clause in outcome) or CHECK_UNRECOGNISED
     said = f"“{outcome}”" if outcome else "the file records no result"
-    text = f"**This fit {verb} run_db.py's own check: {said}.** {check_meaning(outcome)}\n\n"
+    text = f"**This fit {'fails' if failed else 'does not pass'} run_db.py's own check: {said}.** {advice}\n\n"
     if check is None:
         return text + "The file has no `fit_check`."
     if not str(check).strip():
@@ -493,13 +369,10 @@ def warning(profiles):
 
 
 def points_warning(profiles):
-    """The warning above the figure when the file does not say that the fit's own points are its own, or ``None``.
+    """The warning above the figure when ``fit_points_check`` does not begin with ``equal``, quoting it, or ``None``.
 
-    A file made by the script's later versions records in ``fit_points_check`` whether the edge points
-    ``get_cmod_kin_profs`` fitted are this file's, as EFIT maps them and moved by any ``fit_rho_shift``: ``equal``, or a
-    sentence beginning ``differ:`` that says by how much. **Anything that does not begin with** ``equal`` **is warned
-    about**, quoting it, since the points drawn may then not be where the fit saw them. A file without the attribute,
-    every older one among them, and a file with no fit get none.
+    The attribute says whether the edge points the fit was made on are this file's. A file without the attribute, or
+    without a fit, gets no warning.
     """
     if profiles.fit is None or "fit_points_check" not in profiles.attrs:
         return None
@@ -514,24 +387,20 @@ def points_warning(profiles):
 
 
 def _sentences(text, word):
-    """The sentences of ``text`` that hold ``word``, joined, or ``""``: the attributes write whole sentences."""
+    """The sentences of ``text`` that hold ``word``, joined, or ``""``."""
     sentences = re.split(r"(?<=\.)\s+", str(text or ""))
     return " ".join(sentence for sentence in sentences if word in sentence)
 
 
 def extrapolation(attrs):
-    """The sentence of ``fit_note`` that calls the fit's core an extrapolation, or ``""`` when it does not.
-
-    The file says so when it finds no core T_e of 1 keV or more inside ρ_pol 0.2: the fit's pre-filter drops the lower
-    ones, so the fit has none to rest on there, whether or not its check passed.
-    """
+    """The sentence of ``fit_note`` that calls the fit's core an extrapolation, or ``""``. The file says so when the
+    fit had no core T_e to rest on, whether or not its check passed."""
     return _sentences(attrs.get("fit_note"), "extrapolation")
 
 
 def move_note(profiles):
-    """The caption of a fit moved to a separatrix, or ``""`` for any other: by how much the fit and the points were
-    moved, to which T_e,sep, and the file's own ``fit_separatrix``, quoted. Where the points are on the axis drawn is the
-    axis's own line (:func:`notes`)."""
+    """The caption of a fit moved to a separatrix, or ``""``: by how much, to which T_e,sep, and the file's own
+    ``fit_separatrix``, quoted."""
     fit = profiles.fit
     if fit is None or not fit.moved:
         return ""
@@ -553,11 +422,7 @@ def move_note(profiles):
 
 def held_note(attrs):
     """The caption of a fit whose outer side fictitious points hold (``force_to_zero`` in ``fit_settings``), quoting what
-    ``fit_note`` says of them, or ``""`` for any other fit.
-
-    C-Mod_Analysis 24e1499's ``run_db.py`` sets it: before each fit it adds fictitious T_e and n_e points beyond the
-    separatrix, which hold the n_e and T_e fits there but not the p_e fit.
-    """
+    ``fit_note`` says of them, or ``""``."""
     if _settings(attrs).get("force_to_zero") is not True:
         return ""
     text = (
@@ -582,14 +447,9 @@ def _settings(attrs):
 def separatrix(profiles, axis):
     """Where the separatrix is on ``axis``, or ``None`` when the file cannot say.
 
-    ρ_pol = 1 by definition. On the R_mid axis it is the file's ``R_mid_sep``, the separatrix's outboard midplane radius
-    at the window's middle time, which the fit's own R_mid reaches at ρ_pol = 1 as well; the fit's is used when the
-    file holds no scalar.
-
-    A fit moved to a separatrix is drawn on its own axis, so the separatrix is its ρ_pol = 1, and on R_mid its own R_mid
-    there (``fit_R_mid``, interpolated), where its T_e is the T_e,sep it was moved to. ``fit_R_mid`` maps the moved
-    ρ_pol through EFIT, so that is ``R_mid_sep`` as well, to the grid's interpolation, and ``R_mid_sep`` stands in when
-    the fit's R_mid does not reach ρ_pol 1.
+    ρ_pol = 1 by definition. On R_mid it is the file's ``R_mid_sep``, else the fit's own R_mid at ρ_pol 1. For a fit
+    moved to a separatrix the order is the other way round: the fit is drawn on its own axis, so its own R_mid at its
+    ρ_pol 1 comes first, where its T_e is the T_e,sep it was moved to.
     """
     if axis == "rho_pol":
         return 1.0
@@ -622,16 +482,11 @@ def _differs(window, target):
 
 
 def notes(profiles, target, axis):
-    """The lines under the figure, as markdown, one paragraph each: the points, the fit, the axis, the caveat.
+    """The lines under the figure, as markdown, one paragraph each: the points, the fit (with what the file says of
+    its core, its move and its fictitious points), the axis, the caveat.
 
-    A fit that was moved to a separatrix adds a line on the move (:func:`move_note`), and one whose outer side
-    fictitious points hold a line on them (:func:`held_note`), both after the fit's.
-
-    The points with no place on ``axis`` are counted with what the file says of why: no EFIT tree could be opened, its
-    ``mapping_failure`` (quoted), or else a pulse outside the EFIT time base. Points moved with the fit have a place on
-    R_mid only where the fit's own R_mid reaches: those beyond its grid, and those where it is NaN, are counted apart.
-
-    ``target`` supplies the page's window; ``None`` leaves out whatever depends on it.
+    The points with no place on ``axis`` are counted, with what the file says of why. ``target`` supplies the page's
+    window; ``None`` leaves out whatever depends on it.
     """
     attrs = profiles.attrs
     lines = []
@@ -715,7 +570,6 @@ def notes(profiles, target, axis):
         else:
             text += " No band is drawn around it."
         lines.append(text)
-        # Whether or not the check passed: a core with no T_e of 1 keV or more has none for the fit to rest on.
         core = extrapolation(attrs)
         if core:
             lines.append(
@@ -775,20 +629,17 @@ ABOUT = (
     "cmod_analysis_commit",
     "cmod_analysis_local_changes",
     "two_point_model",
+    "fit_separatrix",
+    "separatrix_code",
 )
 
-#: What the list quotes after those of a file made by code that looks for the separatrix in its own fit (C-Mod_Analysis
-#: 24e1499), which no other file has: what that code found and did, and where it is.
-SEPARATRIX_ABOUT = ("fit_separatrix", "separatrix_code")
-
-#: The file's numbers the list gives, with the unit and the factor each is shown in: the separatrix T_e of the fit beside
-#: the two-point model's.
+#: The file's numbers the list gives, with the unit and the factor each is shown in.
 NUMBERS = (("Te_sep_2pm", "eV", 1.0), ("Te_sep_fit", "eV", 1.0), ("lambda_q_2pm", "mm", 1e3), ("R_mid_sep", "m", 1.0))
 
 
 def separatrix_code(attrs):
     """What the "about" list says of the code that looked for the separatrix: its folder, that no commit pins it, and
-    that the file keeps the sha256 of each of its files that were loaded (``separatrix_code_sha256``)."""
+    whether the file keeps the sha256 of its files (``separatrix_code_sha256``)."""
     try:
         files = json.loads(attrs.get("separatrix_code_sha256") or "")
     except (TypeError, ValueError):
@@ -802,13 +653,13 @@ def separatrix_code(attrs):
 
 
 def about(profiles):
-    """``[(attribute, text), …]``: what the file says of how it was made, in its own words, for the expander, then its
-    numbers. The separatrix code is said in the list's words (:func:`separatrix_code`)."""
-    rows = [(name, str(profiles.attrs[name])) for name in ABOUT if profiles.attrs.get(name) not in (None, "")]
-    for name in SEPARATRIX_ABOUT:
-        if profiles.attrs.get(name) not in (None, ""):
-            text = separatrix_code(profiles.attrs) if name == "separatrix_code" else str(profiles.attrs[name])
-            rows.append((name, text))
+    """``[(name, text), …]`` for the expander: what the file says of how it was made, then its numbers."""
+    attrs = profiles.attrs
+    rows = [
+        (name, separatrix_code(attrs) if name == "separatrix_code" else str(attrs[name]))
+        for name in ABOUT
+        if attrs.get(name) not in (None, "")
+    ]
     for name, unit, scale in NUMBERS:
         if name in profiles.scalars:
             rows.append((name, f"{profiles.scalars[name] * scale:.4g} {unit}"))
@@ -823,34 +674,18 @@ def about(profiles):
 # The range of a row
 # ---------------------------------------------------------------------------
 
-#: How the top of a row is set, and how far a fit may stray from the points beside it before it stops counting. **This is
-#: the rule of the paper's PDF of the density scan, ported**: ``pool``, ``plausible`` and ``y_limits`` of fusion_scripts'
-#: ``density_scan/thomson_profiles.py`` (J12c), with the constants it names the same way, so that the page and the PDF
-#: draw the same range. It is not imported, since nothing here imports from fusion_scripts: a change to the rule is made
-#: in both. The PDF's ``EDGE_PERCENTILE`` is not ported, because the page has no row zoomed on the edge.
-#:
-#: ``WELL_MEASURED``
-#:     A point is measured to better than 2σ when its error is under this fraction of its value.
-#: ``MIN_WELL``
-#:     Only the well-measured points set the scale, unless fewer than this many are: then all of them do.
-#: ``WHOLE_PERCENTILE``
-#:     The percentile of those points that sets the scale, so that a stray point does not.
-#: ``NEAREST``, ``FIT_FACTOR``
-#:     A sample of the fit counts only where it is within ``FIT_FACTOR`` times the median of the ``NEAREST`` points
-#:     nearest to it on the axis drawn.
-#: ``MARGIN``
-#:     The top is this many times what sets it.
+#: The rule that sets the top of a row (:func:`y_limits`).
+#: A point is well measured when its error is under ``WELL_MEASURED`` of its value (better than 2σ). Only those set
+#: the scale, by their ``WHOLE_PERCENTILE`` percentile, unless fewer than ``MIN_WELL`` are: then all the points do.
+#: A sample of the fit counts only where it is within ``FIT_FACTOR`` times the median of the ``NEAREST`` points nearest
+#: to it on the axis drawn. The top is ``MARGIN`` times what sets it.
 WELL_MEASURED, MIN_WELL, WHOLE_PERCENTILE = 0.5, 5, 98
 NEAREST, FIT_FACTOR, MARGIN = 10, 3.0, 1.1
 
 
 def pool(profiles, quantity, axis, scale=1.0):
-    """All the points of the row of ``quantity`` on ``axis``, edge and core together: ``(x, value, error)``.
-
-    Those the figure draws: a point with a place on ``axis`` and a value. The values and errors are in the row's own unit,
-    the SI ones times ``scale``, and ``error`` is NaN where the tree gives none (:class:`Points`). Empty arrays when
-    there is no such point.
-    """
+    """``(x, value, error)`` of the points the row of ``quantity`` draws on ``axis``, edge and core together, in the
+    row's own unit (SI times ``scale``)."""
     parts = []
     for system in SYSTEMS:
         found = profiles.points.get(system)
@@ -866,8 +701,8 @@ def pool(profiles, quantity, axis, scale=1.0):
 
 
 def plausible(fit_x, fit, x, value):
-    """Which samples of a fit stay within ``FIT_FACTOR`` times the median of the ``NEAREST`` points nearest to them on the
-    axis: a fit is held to the data beside it, wherever the data are. All of them when there are no points."""
+    """Which samples of a fit stay within ``FIT_FACTOR`` times the median of the ``NEAREST`` points nearest to them on
+    the axis. All of them when there are no points."""
     if not x.size:
         return np.ones(fit.shape, dtype=bool)
     k = min(NEAREST, x.size)
@@ -876,15 +711,13 @@ def plausible(fit_x, fit, x, value):
 
 
 def y_limits(profiles, quantity, axis, scale=1.0):
-    """``(0.0, top)`` of the row of ``quantity`` on ``axis``, in the row's own unit (the SI values times ``scale``), or
-    ``None`` when nothing in the row is above zero.
+    """``(0.0, top)`` of the row of ``quantity`` on ``axis``, in the row's own unit, or ``None`` when nothing in the
+    row is above zero.
 
-    ``top`` is ``MARGIN`` times the larger of two things. One is the ``WHOLE_PERCENTILE`` percentile of the points
-    measured to better than 2σ (error under ``WELL_MEASURED`` of the value), or of all of them when fewer than
-    ``MIN_WELL`` are. The other is the largest value of the fit where :func:`plausible` says it stays near the points, or
-    of the whole fit when the row has none. So a fit that runs away leaves through the top instead of rescaling the row,
-    and the points and the fit are judged on ``axis``: the same rule gives another top on R_mid than on ρ_pol, where the
-    points beside a sample of the fit are other points. The bottom is zero, as n_e, T_e and p_e are not negative.
+    ``top`` is ``MARGIN`` times the larger of the percentile of the well-measured points and the largest value of the
+    fit where it stays near the points (:func:`plausible`). So a fit that runs away leaves through the top instead of
+    squashing the points against zero. Both are judged on ``axis``, where the points beside a sample of the fit can be
+    other points than on the other axis.
     """
     x, value, error = pool(profiles, quantity, axis, scale)
     values = []
@@ -903,7 +736,7 @@ def y_limits(profiles, quantity, axis, scale=1.0):
 
 
 def points_above(profiles, quantity, axis, top, scale=1.0):
-    """How many of the row's drawn points lie above ``top``, which its range leaves out: the ones the row says it counts."""
+    """How many of the row's drawn points lie above ``top``."""
     value = pool(profiles, quantity, axis, scale)[1]
     return int((value > top).sum())
 
@@ -912,19 +745,15 @@ def points_above(profiles, quantity, axis, top, scale=1.0):
 # The Mirror Langmuir Probe's profiles, drawn over the Thomson scattering ones
 # ---------------------------------------------------------------------------
 
-#: The diagnostic whose file the spec draws beside its own (:attr:`fusion_ui.core.registry.PlotSpec.companions`).
+#: The diagnostic whose file the spec draws beside its own.
 COMPANION = "asp"
 
-#: How the MLP's points are drawn: the data-viz palette's fourth slot, yellow, in the step that clears 3:1 on a dark page
-#: (2.99:1 on a light one, which the legend and the hover text relieve), with the markers of the MLP profiles plot, which
-#: no Thomson scattering system uses: a triangle pointing the way the probe ran, filled on the way in and open on the
-#: way out. Against the edge points and the fit, among which it is drawn, the colour clears the palette's checks for a
-#: scatter; it is near the core's orange, but the two never meet: the core system reaches no further out than ρ_pol 0.9,
-#: and the probe no further in than about a centimetre inside the separatrix.
+#: How the MLP's points are drawn, with the markers of the MLP profiles plot: a triangle pointing the way the probe
+#: ran, filled on the way in and open on the way out. The colour is near the core's, but the two never meet: the core
+#: system reaches no further out than ρ_pol 0.9.
 MLP_LOOK = dict(label="MLP", colour="#c98500", symbols={"in": "triangle-left", "out": "triangle-right-open"})
 
-#: What the MLP's profile can be moved to, by the file's own name for the temperature (:func:`separatrix_choices`): not at
-#: all, or the separatrix temperature of the two-point model, or the one the fit was moved to.
+#: What the MLP's profile can be moved to, by the file's own name for the temperature.
 MOVES = (
     ("none", "not moved: EFIT's mapping"),
     ("Te_sep_2pm", "the two-point model's"),
@@ -933,9 +762,8 @@ MOVES = (
 
 
 def separatrix_choices(profiles):
-    """``[(name, te_sep, label), …]``: what the MLP's profile can be moved to, as the MLP profiles plot moves it (its
-    ``te_sep``). ``none`` (0 eV, not moved) first, the default; then ``Te_sep_2pm`` and ``Te_sep_fit``, each where the file
-    holds it as a positive number. The label says what each is, with its value."""
+    """``[(name, te_sep, label), …]``: ``none`` (0 eV, not moved) first, then ``Te_sep_2pm`` and ``Te_sep_fit``, each
+    where the file holds it as a positive number."""
     found = [("none", 0.0, MOVES[0][1])]
     for name, said in MOVES[1:]:
         value = profiles.scalars.get(name)
@@ -945,12 +773,10 @@ def separatrix_choices(profiles):
 
 
 def rho_pol_of(fit, r_mid):
-    """The ρ_pol whose R_mid is ``r_mid`` (m), through the fit's own R_mid (``fit_R_mid``) inverted: NaN where it does not
-    reach, and everywhere when the file has no fit or no ``fit_R_mid``.
+    """The ρ_pol whose R_mid is ``r_mid`` (m), through ``fit_R_mid`` inverted: NaN where it does not reach, or without one.
 
-    Only the outermost stretch of the grid over which ``fit_R_mid`` grows is inverted: the separatrix and the SOL, where
-    the probe is. A fit moved inward (a negative ``fit_rho_shift``) has a few samples near the axis where it does not
-    grow, and they cannot be inverted.
+    Only the outermost stretch of the grid over which ``fit_R_mid`` grows is inverted, where the probe is: a fit moved
+    inward has a few samples near the axis where it does not grow.
     """
     r_mid = np.asarray(r_mid, dtype=float)
     found = np.full(r_mid.shape, np.nan)
@@ -972,22 +798,18 @@ def rho_pol_of(fit, r_mid):
     return found
 
 
-@dataclass(eq=False)  # arrays do not compare as a whole
+@dataclass(eq=False)
 class Overlay:
-    """The MLP's profile on the Thomson scattering axes, one entry per point: the combined 1 ms means of the four pins on
-    a stroke in the page's window (``found.drawn``, :func:`fusion_ui.core.mlp.read`).
+    """The MLP's profile on the Thomson scattering axes, one entry per point of ``found.drawn``.
 
-    ``rho`` is the file's ρ plus the move to ``te_sep``, where one was asked for and reached (``found.shift``): the
-    probe's distance to the separatrix at the outboard midplane, in metres. Each point is drawn on R_mid at ``R_mid`` =
-    ``separatrix_R_mid`` + ``rho``, and on ρ_pol at ``rho_pol``, the ρ_pol of that R_mid through the fit's own R_mid
-    (:func:`rho_pol_of`). NaN where it has no place.
+    ``rho`` is the probe's distance to the separatrix at the outboard midplane (m), moved where a move was asked for
+    and reached. A point is drawn on R_mid at ``separatrix_R_mid`` + ``rho`` and on ρ_pol at the ρ_pol of that
+    (:func:`rho_pol_of`): NaN where it has no place.
     """
 
     found: mlp.Profiles
-    #: What the profile was asked to be moved to: ``"none"``, ``"Te_sep_2pm"`` or ``"Te_sep_fit"``, and its value (0 eV for
-    #: none).
-    source: str
-    te_sep: float
+    source: str  # what the profile was asked to be moved to: "none", "Te_sep_2pm" or "Te_sep_fit"
+    te_sep: float  # its value, 0 for none
     time: np.ndarray  # s, the middle of the point's window
     plunge: np.ndarray
     stroke: np.ndarray  # "in" or "out"
@@ -996,8 +818,7 @@ class Overlay:
     Te: np.ndarray  # eV
     R_mid: np.ndarray  # m
     rho_pol: np.ndarray
-    #: The R_mid of ρ = 0, the separatrix the figure draws on its R_mid axis (:func:`separatrix`), or ``None``.
-    separatrix_R_mid: Optional[float]
+    separatrix_R_mid: Optional[float]  # the R_mid of ρ = 0: the separatrix the figure draws, or None
 
     @property
     def size(self):
@@ -1006,29 +827,25 @@ class Overlay:
     @property
     def shift(self):
         """How far the profile was moved, in metres of ρ: 0 where it was not."""
-        return self.found.shift.by if self.te_sep and self.found.shift.ok else 0.0
+        return self.found.shift.by
 
     def on(self, axis):
         return self.rho_pol if axis == "rho_pol" else self.R_mid
 
     def series(self, quantity):
-        """``(values, errors)`` of ``"ne"``, ``"Te"`` or ``"pe"`` in SI units, as :meth:`Points.series` gives them: a 1 ms
-        mean has no error bar, so the errors are NaN."""
+        """``(values, errors)`` as :meth:`Points.series` gives them: a 1 ms mean has no error bar, so the errors are NaN."""
         values = {"ne": self.ne, "Te": self.Te, "pe": ELEMENTARY_CHARGE * self.ne * self.Te}[quantity]
         return values, np.full(values.shape, np.nan)
 
     def has(self, quantity, axis):
-        """Whether a point of ``quantity`` has a place on ``axis``."""
         return bool(np.any(np.isfinite(self.on(axis)) & np.isfinite(self.series(quantity)[0])))
 
 
 def overlay(profiles, asp, t_start, t_end, source="none"):
-    """The MLP's profile from the ASP file ``asp``, over the page's window ``[t_start, t_end]``, placed on the axes of the
-    Thomson scattering ``profiles``: an :class:`Overlay`. **The one place this view reads the probe's data.**
+    """The MLP's profile from the ASP file ``asp`` over ``[t_start, t_end]``, placed on the axes of ``profiles``: the
+    one place this view reads the probe's data. The points are those the MLP profiles plot draws.
 
-    ``source`` names what to move it to (:func:`separatrix_choices`); one the file does not hold moves nothing. The
-    reduction and the move are the MLP profiles plot's (:func:`fusion_ui.core.mlp.read`), so the points are those it
-    draws.
+    ``source`` names what to move it to (:func:`separatrix_choices`); one the file does not hold moves nothing.
     """
     te_sep = {name: value for name, value, _ in separatrix_choices(profiles)}.get(source, 0.0)
     found = mlp.read(asp, t_start, t_end, te_sep)
@@ -1037,8 +854,7 @@ def overlay(profiles, asp, t_start, t_end, source="none"):
     def values(name):
         return np.asarray(drawn[name].values, dtype=float) if name in drawn else np.full(drawn.sizes["window"], np.nan)
 
-    shift = found.shift.by if te_sep and found.shift.ok else 0.0
-    rho = values("rho") + shift
+    rho = values("rho") + found.shift.by
     sep = separatrix(profiles, "R_mid")
     r_mid = rho + sep if sep is not None else np.full(rho.shape, np.nan)
     return Overlay(
@@ -1066,7 +882,7 @@ def _strokes_said(pairs):
 
 
 def mlp_mode_hint(target):
-    """What the discharge DB says of the probe for the shot, as a hint beside the offer: its ``mlp_mode``, quoted."""
+    """The discharge DB's ``mlp_mode`` for the shot, quoted: a hint beside the offer."""
     discharge = getattr(target, "discharge", None)
     if discharge is None:
         return "The shot has no discharge-DB entry."
@@ -1085,15 +901,13 @@ def _held_depth(found_track, t_start, t_end):
 
 
 def offer(asp, target):
-    """``(strokes, text)``: whether the sidebar offers the MLP's profiles, and the words it says beside the offer.
+    """``(strokes, text)``: the strokes the probe runs in the page's window, and the words the sidebar says.
 
-    ``strokes`` is :func:`fusion_ui.core.mlp.strokes_in` over the page's window, judged from the probe's depth in the
-    file's attributes alone, so no variable is read: empty where the probe does not plunge in the window, or the file
-    holds no MLP quantity, and the text then says why. The text ends with the discharge DB's ``mlp_mode``
-    (:func:`mlp_mode_hint`), a hint the judgement does not rest on.
+    Judged from the probe's depth in the file's attributes alone, so no variable is read. With no stroke the text says
+    why. It ends with the discharge DB's ``mlp_mode``, a hint the judgement does not rest on.
     """
     hint = mlp_mode_hint(target)
-    if not mlp.layout(asp):  # the names alone: a probe file of another kind has no MLP quantity to draw
+    if not mlp.layout(asp):
         return [], (
             "No MLP profiles to draw over these: the ASP file holds no MLP quantity (ne, Te, Js, Is, Vp or Vf on a "
             f"pin). {hint}"
@@ -1119,8 +933,7 @@ def offer(asp, target):
 
 
 def overlay_warnings(points):
-    """The warnings above the figure that the overlay calls for: a move to a separatrix temperature that was asked for
-    and not made, and a window with no MLP point to draw. Empty for an overlay drawn as asked."""
+    """The warnings the overlay calls for: a move that was asked for and not made, and a window with no MLP point."""
     said = []
     found = points.found
     if points.te_sep and not found.shift.ok:
@@ -1141,8 +954,7 @@ def overlay_warnings(points):
 
 
 def overlay_notes(points, profiles, axis):
-    """The lines under the figure for the MLP's profile: what its points are, how they were placed on the axes, and how
-    many have no place on ``axis``."""
+    """The lines under the figure for the MLP's profile: what its points are and how they were placed."""
     fit = profiles.fit
     found = points.found
     pins = found.means.sizes.get("pin", 0)
@@ -1220,15 +1032,8 @@ def _mlp_hover(points, quantity, scale, unit, values):
 # ---------------------------------------------------------------------------
 
 
-def _rgba(colour, alpha):
-    """``#rrggbb`` as an ``rgba(...)`` string."""
-    r, g, b = (int(colour[i : i + 2], 16) for i in (1, 3, 5))
-    return f"rgba({r},{g},{b},{alpha})"
-
-
 def _number(value, digits):
-    """``value`` to ``digits`` significant digits, and no exponent below a million: a core T_e of 2140 eV reads ``2140``,
-    not ``2.14e+03``, and its error of 234 reads ``234``, not ``2.3e+02``."""
+    """``value`` to ``digits`` significant digits, with no exponent below a million: 2140, not 2.14e+03."""
     text = f"{value:.{digits}g}"
     if "e" in text and 1 <= abs(value) < 1e6:
         return f"{value:.0f}"
@@ -1260,7 +1065,7 @@ def _hover(points, quantity, scale, unit, values, errors):
 
 
 def _message(text, height=200):
-    """An empty figure that says ``text``: what is drawn when there is nothing to draw."""
+    """An empty figure that says ``text``."""
     fig = go.Figure()
     fig.add_annotation(text=text, x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False, font=dict(size=14))
     fig.update_xaxes(visible=False)
@@ -1274,8 +1079,8 @@ def _fit_label(fit):
 
 
 def _mlp_traces(fig, mlp_points, axis, row, quantity, label, scale, unit, seen):
-    """The MLP's points of one row on ``axis``: a trace for each way the probe ran, both in one legend group, so that a
-    click on either entry hides the MLP in every row. ``seen`` holds the names already in the legend."""
+    """The MLP's points of one row: a trace for each way the probe ran, both in one legend group. ``seen`` holds the
+    names already in the legend."""
     values = mlp_points.series(quantity)[0]
     texts = _mlp_hover(mlp_points, label, scale, unit, values)
     for stroke, symbol in MLP_LOOK["symbols"].items():
@@ -1304,34 +1109,15 @@ def _mlp_traces(fig, mlp_points, axis, row, quantity, label, scale, unit, seen):
 
 
 def figure(profiles, axis="rho_pol", mlp_points=None):
-    """n_e, T_e and p_e on one shared ``axis`` (``"rho_pol"`` or ``"R_mid"``), one row each.
+    """n_e, T_e and p_e on one shared ``axis`` (``"rho_pol"`` or ``"R_mid"``), one row each: the edge and core points
+    with their bars, the stored fit over its whole range, and the separatrix. Only what there is is drawn.
 
-    The edge and core points, with their bars; the stored fit over its whole range, without a band; and the separatrix.
-    Only what there is is drawn: a row with no point to place and no fit is left out, a system with none is left out
-    of the legend, and a file with nothing at all gives a figure that says so. A legend entry appears once, however
-    many rows hold its trace or its line (the separatrix is a line in every row), and hides it in all of them.
+    Every row opens on zero to the top the points set (:func:`y_limits`), and autoscale returns to it: left to
+    autorange, one runaway fit sets the range and leaves the points flat against zero. A row says in its corner how
+    many of its points lie above its top.
 
-    The points are drawn where the fit saw them. C-Mod_Analysis 24e1499 moves its fit, and its own copy of the points,
-    so that the fit's T_e is the separatrix T_e it found at ρ_pol 1 (``fit_rho_shift``, ``Te_sep_fit``); drawn where
-    EFIT puts them, the points would sit beside the fit by that shift, so they are drawn moved with it (:class:`Points`),
-    and the separatrix is the fit's ρ_pol 1 and its R_mid there (:func:`separatrix`). Every other file, among them all
-    those of d6a6466, which never moves its fit, draws each point where EFIT puts it at its own pulse.
-
-    Every row runs from zero, as n_e, T_e and p_e are not negative, to a top that **the points set and a fit that runs
-    away cannot** (:func:`y_limits`, the rule of the density scan's PDF). The top is 1.1 times the larger of the 98th
-    percentile of the row's points measured to better than 2σ (all of them when fewer than 5 are) and the fit's largest
-    value where it stays within 3 times the median of the 10 points nearest it on the axis drawn, so a runaway fit
-    leaves through the top instead of squashing the points against zero. That is why the range is not left to
-    autorange: one such fit (1091216034's n_e reaches 1.3e23 m⁻³, 1110201014's T_e 51 keV) set the range and left the
-    points flat against zero. The rows open on that range, and autoscale (a double-click, the modebar) returns to it. A
-    row says how many of its points lie above its top ("▲ 3 points above") in its corner, and says nothing when none
-    does. Error bars are not part of the rule, as in the PDF, so a bar can leave through the top as well. A bar that
-    reaches below zero ends at the axis.
-
-    ``mlp_points``, an :class:`Overlay`, draws the Mirror Langmuir Probe's profile over these on its own place on
-    ``axis``, in yellow, a triangle pointing the way the probe ran. It does not move a row's range, which the Thomson
-    scattering points set: those of its points above the top are counted in the row's corner as well ("▲ 2 MLP points
-    above"). Without it, the figure is what it always was.
+    ``mlp_points``, an :class:`Overlay`, draws the probe's profile over these. It does not move a row's range; its
+    points above the top are counted in the corner as well.
     """
     if axis not in AXES:
         raise ValueError(f"axis is one of {', '.join(AXES)}, not {axis!r}")
@@ -1375,7 +1161,7 @@ def figure(profiles, axis="rho_pol", mlp_points=None):
                         visible=True,
                         thickness=1,
                         width=0,
-                        color=_rgba(look["colour"], 0.45),
+                        color=look["bar"],
                     ),
                     hovertext=_hover(found, label, scale, unit, values, errors),
                     hoverinfo="text",
@@ -1415,13 +1201,11 @@ def figure(profiles, axis="rho_pol", mlp_points=None):
             )
         limits = y_limits(profiles, name, axis, scale)
         if limits is None:
-            # Nothing above zero to set a top by. From zero, and no lower: a bar that reaches below zero ends at the axis,
-            # and does not drag the range negative.
+            # Nothing above zero to set a top by: autorange, but from zero.
             fig.update_yaxes(title_text=title, autorangeoptions=dict(minallowed=0), row=row, col=1)
             continue
-        # From zero to the top the points set, which a fit that runs away cannot move. The range is given outright, so the
-        # row opens on it, and as ``autorangeoptions`` too, so that autoscale (a double-click, the modebar) returns to it
-        # and not to the runaway fit: ``minallowed`` and ``maxallowed`` are used exactly as the autorange's ends.
+        # The range is given outright, so the row opens on it, and as ``autorangeoptions`` too, so that autoscale
+        # returns to it and not to a runaway fit.
         bottom, top = limits
         fig.update_yaxes(
             title_text=title,
@@ -1432,12 +1216,12 @@ def figure(profiles, axis="rho_pol", mlp_points=None):
         )
         above = points_above(profiles, name, axis, top, scale)
         said = [f"▲ {above} point{'s' * (above > 1)} above"] if above else []
-        if mlp_points is not None:  # the probe's points do not set the range, but they are not left out silently either
+        if mlp_points is not None:
             values = mlp_points.series(name)[0] * scale
             mlp_above = int((np.isfinite(mlp_points.on(axis)) & (np.nan_to_num(values, nan=-np.inf) > top)).sum())
             if mlp_above:
                 said.append(f"▲ {mlp_above} MLP point{'s' * (mlp_above > 1)} above")
-        if said:  # nothing is left out silently: the points the top leaves out are counted, in the row's corner
+        if said:
             fig.add_annotation(
                 text="<br>".join(said),
                 xref="paper",
@@ -1471,13 +1255,11 @@ def _escape(text):
 
 
 def mlp_controls(asp, profiles, target):
-    """The sidebar's offer of the MLP's profiles, drawn below the plot's parameters: the name of the separatrix
-    temperature to move the profile to (:func:`separatrix_choices`), or ``None`` while the overlay is off or not offered.
+    """The sidebar's offer of the MLP's profiles: the name of the separatrix temperature to move the profile to
+    (:func:`separatrix_choices`), or ``None`` while the overlay is off or not offered.
 
-    Nothing without an ASP file. Where the probe does not plunge in the window, only the words that say why
-    (:func:`offer`); else a toggle with those words under it and, while it is on, the choice of what to move the profile
-    to, which starts at not moving it. Both widgets are view state, keyed off the target as the page's are, so a shot
-    opens with the overlay off.
+    Where the probe does not plunge in the window, only the words that say why. Both widgets are view state, keyed
+    off the target, so a shot opens with the overlay off.
     """
     import streamlit as st
 
@@ -1518,14 +1300,11 @@ def mlp_controls(asp, profiles, target):
 
 
 def render(ds, params, target, companions=None):
-    """The warnings, if the fit fails its check or its own points are not known to be the file's, the figure, the lines
-    under it and what the file says of itself; and, where the probe plunges in the window, the offer of the MLP's
-    profiles over these, in the sidebar.
+    """The warnings, the figure, the lines under it and what the file says of itself, with the offer of the MLP's
+    profiles in the sidebar. Draws into Streamlit and returns ``None``.
 
-    Draws into Streamlit and returns ``None``: the warnings go above the figure, the notes below it, and the MLP's
-    controls below the plot's parameters. ``companions`` is what the single-shot page hands the spec beside its own
-    file: ``{"asp": the shot's ASP file, opened lazily, or None}``. Its data are read only while the overlay is on
-    (:func:`overlay`), and without the overlay the view is what it was without the file.
+    ``companions`` is ``{"asp": the shot's ASP file, opened lazily, or None}``. Its data are read only while the
+    overlay is on.
     """
     import streamlit as st
 

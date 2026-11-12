@@ -1,62 +1,23 @@
-"""The Mirror Langmuir Probe's profiles: its plunges, the paper's 1 ms means, ρ, and the far-SOL e-folding lengths.
+"""The Mirror Langmuir Probe's profiles: its plunges, 1 ms means against ρ, and the far-SOL e-folding lengths.
 
-The reduction behind the "MLP profiles" view (:mod:`fusion_ui.plots.mlp_profiles`), kept apart from the view so that
-another can reuse it rather than copy it: the Thomson scattering view draws the same points on its own axes, from the
-ASP file the single-shot page hands it as a companion, and judges whether the probe plunges in its window from the track
-alone (:func:`strokes_in`). Pure: numpy, scipy and xarray, no Streamlit, no database, and no file but the dataset it is
-handed.
+The reduction behind the MLP profiles view, which the Thomson scattering view reuses for its overlay. It follows
+O E Garcia, J M Losada et al., Plasma Phys. Control. Fusion 68 (2026) 055034, section 3: the time series are cut into
+windows of one millisecond and averaged. Pure: no page, no database, and no file but the dataset it is handed.
 
-The paper it reproduces is O E Garcia, J M Losada et al., "Velocity scaling regimes for blob-like filaments in the
-Alcator C-Mod scrape-off layer", Plasma Phys. Control. Fusion 68 (2026) 055034, section 3: "The resulting measurement
-time series are divided into windows of one millisecond duration, for which the mean value is calculated for the local
-electron density and temperature." Its Fig. 2 draws those means against ρ, and its far-SOL e-folding lengths are
-least-squares exponential fits to them (the caption of the same figure in its reference [63], Garcia et al., Nucl.
-Fusion 66 (2026)).
+What an ASP file holds (``cmod_functions.asp_functions.get_asp_dataset`` writes it):
 
-What an ASP file holds
-    ``cmod_functions.asp_functions.get_asp_dataset`` (uit-cosmo/cmod_functions) writes it from C-Mod's edge tree, and is
-    the reference for the layout.
+- ``<q>_<pin>`` on its own axis ``time_<q>_<pin>``: ``ne``, ``Te``, ``Js``, ``Is``, ``Vp`` and ``Vf`` at each of the
+  four pins, recorded around the plunges only.
+- ``rho_<q>_<pin>`` on ``rho_time_<q>_<pin>``: the pin's distance to the separatrix at 10 kHz over the whole shot.
+  It reads exactly 0 where the tree has no mapping, and such samples are left out.
+- the attributes ``plunge_time`` and ``plunge_depth``: the probe's depth at 10 kHz, growing as the probe goes in.
 
-    ``<q>_<pin>`` on its own axis ``time_<q>_<pin>``
-        The MLP's own values, one sample every 0.3 µs while it records: ``ne`` (the tree's DENSITY_FIT), ``Te``
-        (TE_FIT), ``Js`` (JSAT_FIT), ``Is`` (ISAT_FIT), ``Vp`` (PHI_FIT, the plasma potential) and ``Vf`` (VF_FIT), at
-        each of the four pins of the probe head: p0 to p3, the NE, SW, SE and NW pins by cmod_functions' own note. The
-        MLP records around the plunges only, so an axis has gaps where the probe was parked.
-    ``rho_<q>_<pin>`` on ``rho_time_<q>_<pin>``
-        The tree's RHO of the pin, at 10 kHz over the whole shot, the same for every quantity of one pin: the pin's
-        distance to the separatrix (:data:`UNITS` says how its unit was established). It reads exactly 0 where the
-        tree has no mapping, before and after the plasma, and such samples are left out of a window's mean.
-    the attributes ``plunge_time`` and ``plunge_depth``
-        The probe's depth at 10 kHz, from the tree's PLUNGE node, "in metres and assumed purely horizontal"
-        (cmod_functions). It grows as the probe goes in. Stored as arrays; a file that holds them as text is read too.
+**No variable has a units attribute**: :data:`UNITS` gives each quantity's, with how it was established.
 
-**No variable has a units attribute.** :data:`UNITS` gives each quantity's, with how it was established.
-
-The reduction
-    **Plunges** (:func:`plunges`) are found on the depth: a plunge is a maximum of depth at least :data:`PROMINENCE`
-    deeper than where the probe started from and goes back to, numbered in the order of the shot, and it runs from the
-    shallowest point before it to the shallowest point after it. The probe is moving while its depth changes faster
-    than :data:`MOVING`: inward on the way **in**, outward on the way **out**. Where it holds still, as in a dwell, it
-    is on no stroke, and its data make no profile.
-
-    **1 ms means** (:func:`means`): the shot's clock is cut into windows of :data:`WINDOW`, on whole milliseconds, and
-    every quantity of every pin is averaged over each window that lies wholly inside the page's window, with the pin's ρ
-    at the samples that make the mean. A pin's mean counts only where it recorded at least :data:`MIN_FILL` of the
-    window. Each window is labelled with the plunge it falls in and the stroke the probe was on.
-
-    **The four pins** (:func:`combine`) are combined as the group's own code combines them
-    (``cmod_functions.asp_functions.generate_average_mlp_data``, the mean of the four): one point per window, the mean
-    of the pins' means, where every pin the file holds recorded. They sit on the same flux surface, their ρ agreeing to
-    a tenth of a millimetre, but their n_e differ by about ±13% and their V_f by several volts, two by two, as the
-    pins of a head facing both ways along the field do.
-
-    **The far-SOL e-folding length** (:func:`efold`) of n_e or T_e: a least-squares fit of ``ln y = ln A − ρ/L`` to the
-    combined means between two values of ρ, :data:`FAR_SOL` by default, on ρ as the file holds it.
-
-    **The separatrix** (:func:`shift_to`): the paper moves its profiles so that T_e at ρ = 0 is the separatrix
-    temperature from SOL power balance, which needs what the file does not hold (the power into the SOL, the heat-flux
-    width). Given such a temperature, :func:`shift_to` finds where the combined T_e reaches it and says how far to move
-    ρ; it never extrapolates.
+The steps: :func:`plunges` finds the plunges on the depth; :func:`means` averages every quantity of every pin over
+whole milliseconds and labels each window with its plunge and stroke (in, out, or none while the probe holds still);
+:func:`combine` takes the mean of the pins; :func:`efold` fits the far-SOL e-folding lengths; :func:`shift_to` finds
+how far to move ρ so that T_e is a given separatrix temperature at ρ = 0. :func:`read` runs them over a window.
 """
 
 import re
@@ -72,7 +33,7 @@ WINDOW = 1e-3
 QUANTITIES = ("ne", "Te", "Js", "Is", "Vp", "Vf")
 
 #: The unit of each quantity, in SI, with how it was established: the file holds none. ``rho`` and ``depth`` are the
-#: two lengths. Checked on every sample of every pin of the eight files of 1160616 and of 1150618021 (2026-10-12).
+#: two lengths. Checked on every sample of every pin of the eight files of 1160616 and of 1150618021.
 UNITS = {
     "ne": (
         "m⁻³",
@@ -99,10 +60,8 @@ UNITS = {
 #: The pins of the probe head, by the names cmod_functions gives them for the MLP.
 PIN_NAMES = {0: "NE", 1: "SW", 2: "SE", 3: "NW"}
 
-#: A plunge takes the probe at least this much deeper than where it starts from and goes back to, in metres. The
-#: scans of 1160616 go 3.6 to 4.2 cm deeper than the depth they start from, and 11.8 cm deeper than the parking
-#: position; 1150618021's plunges, 11 cm. The probe settles at its parking position with bumps of 1.1 to 1.2 cm,
-#: which are not plunges.
+#: A plunge takes the probe at least this much deeper than where it starts from and goes back to, in metres. Real
+#: scans go 3.6 cm deeper or more; the probe settles at its parking position with bumps of 1.2 cm, which are not plunges.
 PROMINENCE = 0.02
 
 #: The probe is moving while its depth changes faster than this, in m/s: its strokes run at about 0.5 m/s, and it turns
@@ -112,10 +71,8 @@ MOVING = 0.05
 #: A pin's mean over a window counts only where it recorded at least this fraction of the window's samples.
 MIN_FILL = 0.5
 
-#: The far SOL that the e-folding lengths are fitted over by default, on ρ as the file holds it, in metres: from 0.5 cm,
-#: where the paper puts the break between the steep near SOL and the flatter far SOL, to 1.8 cm, where it says the
-#: field lines meet the limiters (from its equilibrium, the file's axis). The paper's own axis is shifted from the
-#: file's (see the Documentation page), so its far SOL on its own axis is not quite this one.
+#: The far SOL that the e-folding lengths are fitted over by default, on ρ as the file holds it, in metres: from the
+#: paper's break between the near and the far SOL to where it says the field lines meet the limiters.
 FAR_SOL = (0.005, 0.018)
 
 #: A fit needs at least this many points.
@@ -149,8 +106,8 @@ def pins(ds):
 
 
 def _array(value):
-    """An attribute as a float array: an array, a list, or the text of one (``"[0.1 0.2 …]"``). ``None`` when it is
-    not one, or is text that was cut short (``…``) and so does not hold the whole array."""
+    """An attribute as a float array: an array, a list, or the text of one. ``None`` when it is not one, or is text
+    that was cut short (``…``)."""
     if value is None:
         return None
     if isinstance(value, bytes):
@@ -210,11 +167,7 @@ def speed(time, depth):
 
 def plunges(time, depth, prominence=PROMINENCE):
     """Every plunge of the record, in order: each maximum of ``depth`` at least ``prominence`` deeper than the probe's
-    depth on both sides of it, between the plunges before and after it.
-
-    A plateau, as in a dwell, is one maximum: the probe goes in, holds still, and goes out, and the windows at rest are on
-    no stroke (:func:`means`).
-    """
+    depth on both sides of it. A plateau, as in a dwell, is one maximum."""
     from scipy.signal import find_peaks
 
     time, depth = np.asarray(time, dtype=float), np.asarray(depth, dtype=float)
@@ -258,14 +211,11 @@ def _binned(time, values, edges):
 
 
 def _series(ds, name, t_start, t_end):
-    """``(time, values)`` of a 1-D variable on its own axis, within ``[t_start, t_end]``: only the window is read, through
-    the axis' index where it is sorted, as the files' are.
+    """``(time, values)`` of a 1-D variable on its own axis, within ``[t_start, t_end]``: only the window is read.
 
-    A file opened without indexing its axes (:func:`fusion_ui.core.loader.lazily`, as the Thomson scattering view opens
-    one) has the axis read instead, and where it is sorted only the window of the values is read, the samples the index
-    would have chosen: from the first at or after ``t_start`` to the last at or before ``t_end``, compared in the axis'
-    own type, as the index looks a bound up. On an axis of float32, as the ρ companions' are, ``1.15`` is then the
-    sample stored for 1.15, which a comparison in float64 would put a hair below it.
+    A file opened lazily has no index on the axis, so the axis is read and searched instead. The bounds are compared
+    in the axis' own type, as an index would: on a float32 axis ``1.15`` is then the sample stored for 1.15, which a
+    comparison in float64 would put a hair below it.
     """
     variable = ds[name]
     dim = variable.dims[0]
@@ -297,8 +247,8 @@ def _extent(ds, quantities):
 
 
 def _labels(found_track, grid, middle):
-    """``(depth, speed, plunge, stroke, record)`` of each window between ``grid``'s edges, from the probe's track: what
-    :func:`means` returns about the probe, and the plunges of the whole record."""
+    """``(depth, speed, plunge, stroke, record)``: what :func:`means` says of the probe in each window between
+    ``grid``'s edges, and the plunges of the whole record."""
     n = middle.size
     depth, moving = np.full(n, np.nan), np.full(n, np.nan)
     plunge, stroke = np.zeros(n, dtype=int), np.full(n, "", dtype=object)
@@ -349,12 +299,11 @@ def means(ds, t_start=None, t_end=None, window=WINDOW, strokes_only=False):
         ``"in"`` or ``"out"`` while the probe moves faster than :data:`MOVING`, and ``""`` while it holds still or where
         the file has no track.
 
-    With ``strokes_only``, the quantities are read only between the first and the last window on a stroke, and not at
-    all where there is none: a dwell's file is 1.1 GB, and none of it makes a profile.
+    With ``strokes_only``, the quantities are read only between the first and the last window on a stroke: a dwell's
+    file is 1.1 GB, and none of it makes a profile.
 
-    The attributes say what was found: ``t_start`` and ``t_end`` of the windows, ``window``, ``layout`` (the pins of
-    each quantity, :func:`layout`), ``plunges`` (the plunges of the whole record, as ``[number, start, tip, end,
-    depth]`` rows) and ``track`` (whether the file has one).
+    The attributes: ``t_start``, ``t_end``, ``window``, ``layout`` (:func:`layout`), ``plunges`` (those of the whole
+    record, as ``[number, start, tip, end, depth]`` rows) and ``track`` (whether the file has one).
     """
     quantities = layout(ds)
     all_pins = pins(ds)
@@ -472,13 +421,11 @@ def on_strokes(found):
 
 
 def strokes_in(ds, t_start=None, t_end=None, window=WINDOW):
-    """``[(plunge, stroke), …]`` of the strokes the probe runs in the whole windows within ``[t_start, t_end]``, in the
-    order it runs them, judged from its track alone (:func:`track`): **no variable is read**, so it costs nothing on a
-    file opened lazily (:func:`fusion_ui.core.loader.lazily`).
+    """``[(plunge, stroke), …]`` of the strokes the probe runs in the whole windows within ``[t_start, t_end]``, judged
+    from its track alone: **no variable is read**, so it costs nothing on a file opened lazily.
 
-    The windows are labelled as :func:`means` labels them, so a stroke found here is one whose windows the profile is
-    read over. Empty where the probe holds still in the window, as in a dwell, or the file has no track. Over the whole
-    track where either end is ``None`` or not finite.
+    The windows are labelled as :func:`means` labels them. Empty where the probe holds still, or the file has no
+    track. Over the whole track where either end is ``None`` or not finite.
     """
     found_track = track(ds)
     if found_track is None:
@@ -493,8 +440,8 @@ def strokes_in(ds, t_start=None, t_end=None, window=WINDOW):
 
 
 def recording(found):
-    """``(on_strokes, partial)``: how many windows on a stroke any pin recorded in, and in how many of those not every
-    pin did, which the combined means leave out. ``found`` is :func:`means`' pin-by-pin result."""
+    """``(recorded, partial)``: how many windows on a stroke any pin recorded in, and in how many of those not every
+    pin did. ``found`` is :func:`means`' pin-by-pin result."""
     first = next((q for q in QUANTITIES if q in found), None)
     if first is None:
         return 0, 0
@@ -513,9 +460,8 @@ def recording(found):
 class EFold:
     """A least-squares exponential fit ``y = amplitude·exp(−ρ/length)`` over ``lo ≤ ρ ≤ hi`` (m, on the file's ρ).
 
-    ``length`` and ``amplitude`` are NaN where there is no fit, and ``reason`` says why: too few points, or a profile
-    that does not fall off. ``first`` and ``last`` are the smallest and the largest ρ of the points it rests on, which
-    is where a drawing of it should stop.
+    ``length`` and ``amplitude`` are NaN where there is no fit, and ``reason`` says why. ``first`` and ``last`` are the
+    ends of the points it rests on, where a drawing of it should stop.
     """
 
     length: float  # m
@@ -586,10 +532,9 @@ class Shift:
 def shift_to(rho, te, te_sep):
     """Where T_e reaches ``te_sep`` (eV), as a :class:`Shift` that puts it at ρ = 0.
 
-    ``ln T_e`` is fitted linear in ρ over the points within a factor :data:`BAND` of ``te_sep``, and the shift is minus
-    the ρ at which the fit reaches it. It needs :data:`MIN_SIDE` points on each side of ``te_sep`` within the band, so
-    that it interpolates and never extrapolates: a profile that never reaches ``te_sep`` is not shifted, and the reason
-    says so.
+    ``ln T_e`` is fitted linear in ρ over the points within a factor :data:`BAND` of ``te_sep``. It needs
+    :data:`MIN_SIDE` points on each side of ``te_sep``, so that it never extrapolates: a profile that does not reach
+    ``te_sep`` is not shifted, and the reason says so.
     """
     rho, te = np.asarray(rho, dtype=float), np.asarray(te, dtype=float)
     keep = np.isfinite(rho) & np.isfinite(te) & (te > 0)
