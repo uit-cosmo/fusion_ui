@@ -1,14 +1,12 @@
 """``fusion-ui prune``: one plot's results counted, then deleted, and nothing else touched.
 
-The ledger is built the way the app builds it -- ``store.result`` on synthetic specs,
+The ledger is built the way the app builds it, with ``store.result`` on synthetic specs,
 so every blob is a real netCDF under a real hash path and every run has its scalars
-and its parameter set -- and the command is driven through ``cli.main`` on that file.
-Nothing here reads the real ledger or the data tree.
+and its parameter set, and the command is driven through ``cli.main`` on that file.
 
 The last section is ``--scalar``: only the scalars of some names under one plot key,
-counted per name and then deleted, with the runs, the blobs, the other scalars and the
-same names under other plots left as they are. Its ledger is the one the seed's three
-mislabelled names were pruned from: an earlier ``import-results`` wrote all fifteen.
+with the runs, the blobs, the other scalars and the same names under other plots left
+as they are.
 """
 
 import dataclasses
@@ -21,7 +19,7 @@ import pytest
 import xarray as xr
 
 from fusion_ui import cli
-from fusion_ui.core import catalog, params_ui, registry, seed, store
+from fusion_ui.core import catalog, params_ui, registry, store
 
 SHOTS = (1160616027, 1160616028, 1160616029)
 
@@ -37,8 +35,16 @@ class DerivedParams:
     scale: float = 2.0
 
 
-def make_spec(key):
-    """A cached spec that writes a blob and two scalars, one of them at a pixel."""
+def total_and_corner(result):
+    return {
+        "total": float(result["y"].sum()),
+        (3, 4, "corner"): float(result["y"][-1]),
+    }
+
+
+def make_spec(key, scalars=total_and_corner):
+    """A cached spec that writes a blob and, unless told otherwise, two scalars,
+    one of them at a pixel."""
     return registry.PlotSpec(
         key=key,
         label=key,
@@ -48,10 +54,7 @@ def make_spec(key):
         compute=lambda ds, params: xr.Dataset(
             {"y": ("t", np.arange(4.0) * params.gain)}
         ),
-        scalars=lambda result: {
-            "total": float(result["y"].sum()),
-            (3, 4, "corner"): float(result["y"][-1]),
-        },
+        scalars=scalars,
     )
 
 
@@ -196,15 +199,12 @@ def say(capsys):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "still_registered", [True, False], ids=["registered", "no longer registered"]
-)
 def test_a_pruned_plot_goes_whole_and_every_other_plot_is_untouched(
-    conn, cache, database, ledger, registered, capsys, still_registered
+    conn, cache, database, ledger, capsys
 ):
-    if still_registered:
-        registered(ledger.doomed)
-    assert (ledger.doomed.key in registry.REGISTRY) is still_registered
+    # The key is not registered, as the key of a removed spec is not: prune
+    # reads the ledger, never the registry.
+    assert "doomed" not in registry.REGISTRY
     blobs = blobs_of(conn, "doomed")
     assert len(blobs) == 3 and all(os.path.exists(path) for path in blobs)
     others = snapshot(conn, cache, outside="doomed")
@@ -488,19 +488,28 @@ def test_a_connection_without_foreign_keys_is_refused_before_anything_is_deleted
     bare.row_factory = sqlite3.Row
     try:
         assert bare.execute("PRAGMA foreign_keys").fetchone()[0] == 0
-        plan = store.plan_prune(bare, "doomed")
         before = snapshot(conn, cache)
         with pytest.raises(store.PruneError, match="foreign keys off"):
-            store.prune(bare, plan)
+            store.prune(bare, store.plan_prune(bare, "doomed"))
+        scalars = store.plan_prune_scalars(bare, "doomed", ["corner"])
+        with pytest.raises(store.PruneError, match="foreign keys off"):
+            store.prune_scalars(bare, scalars)
     finally:
         bare.close()
     assert snapshot(conn, cache) == before
 
 
-def test_no_cache_directory_configured_stops_the_command(tmp_path, monkeypatch, capsys):
-    monkeypatch.delenv("FUSION_UI_CACHE", raising=False)
-    assert prune(tmp_path / "empty.sqlite", "--plot", "doomed") == 1
+def test_without_a_cache_directory_only_the_scalar_prune_runs(
+    conn, cache, database, ledger, monkeypatch, capsys
+):
+    """The whole-plot prune must tell the cache's blobs from any others; the
+    scalar prune looks at no blob."""
+    monkeypatch.delenv("FUSION_UI_CACHE")
+    assert prune(database, "--plot", "doomed") == 1
     assert "FUSION_UI_CACHE" in say(capsys)[1]
+
+    assert prune(database, "--plot", "doomed", "--scalar", "corner", "--yes") == 0
+    assert "deleted       3 scalar rows (corner 3)" in say(capsys)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -597,222 +606,160 @@ def test_pruning_the_derived_plot_does_not_touch_what_it_was_built_on(
 # --scalar: some names of one plot, counted per name, then deleted
 # ---------------------------------------------------------------------------
 
-#: The fifteen names of the seed's records, all of which an earlier import wrote, and the three the
-#: importer left out.
-SEED_NAMES = list(seed.RECORD_NAMES)
-ELLIPSE = ("lx_f", "ly_f", "theta_f")
-PIXELS = ((6, 6), (6, 5), (4, 6))
-SEED = seed.IMPORT_PLOT
+#: The plot of the example, and two of the scalars it stopped writing:
+#: ``fusion-ui prune --plot blob_parameters --scalar level --scalar lx_c --yes``.
+BLOBS = "blob_parameters"
+RETIRED = ("level", "lx_c")
 
 
-def ellipse_spec(key):
-    """A cached spec with a blob, and the three names (and one more) at one pixel."""
-    return registry.PlotSpec(
-        key=key,
-        label=key,
-        diagnostics=("apd",),
-        params=Params,
-        render=lambda result, params, target: None,
-        compute=lambda ds, params: xr.Dataset({"y": ("t", np.arange(4.0))}),
-        scalars=lambda result: {
-            (6, 6, "lx_f"): 3.3e-3,
-            (6, 6, "ly_f"): 5.8e-3,
-            (6, 6, "theta_f"): 1.1,
-            (6, 6, "lr"): 4.0e-3,
-        },
-    )
-
-
-def seed_run(conn, shot, digest, rows):
-    run = store.record_run(
-        conn,
-        target(shot),
-        SEED,
-        digest,
-        blob_path=None,
-        status="ok",
-        error=None,
-        seconds=None,
-        code_version="imported",
-    )
-    store.write_scalars(conn, run["id"], rows)
-    return run
+def blob_scalars(result):
+    """Seven rows a run: ``level`` at two pixels, one of them a failed fit (a
+    NaN, stored as NULL, which is still a row); ``lx_c`` at two pixels and once
+    at shot level; and two names that stay."""
+    return {
+        (6, 6, "level"): 0.5,
+        (6, 5, "level"): float("nan"),
+        (6, 6, "lx_c"): 3.3e-3,
+        (6, 5, "lx_c"): 3.1e-3,
+        "lx_c": 3.2e-3,
+        (6, 6, "area"): 1.0e-5,
+        (6, 6, "lr"): 4.0e-3,
+    }
 
 
 @pytest.fixture
-def seeded(conn, cache):
-    """The ledger as it stands before the seed's three names are pruned.
-
-    The earlier import, with all fifteen names: two shots, three pixels each, so 45
-    rows a run. ``lx_f`` and ``ly_f`` are at every pixel, one of them a failed fit
-    (a NULL value, which is still a row); ``theta_f`` is at two pixels only, and once
-    at shot level. The three counts therefore differ: 6, 6 and 5, in two runs each.
-    Beside it ``gaussian_sizes``, with the same names at one pixel and a blob, and
-    ``keeper``, which has blobs and none of these names.
-    """
-    digest, _ = store.record_params(
-        conn, SEED, seed.ImportedResults(source="results.json", sha1="0" * 40)
-    )
-    for number, shot in enumerate(SHOTS[:2]):
-        rows = {
-            (x, y, name): float(1000 * number + 10 * x + y + index)
-            for x, y in PIXELS
-            for index, name in enumerate(SEED_NAMES)
-        }
-        rows[(4, 6, "lx_f")] = float("nan")
-        del rows[(4, 6, "theta_f")]
-        if number == 0:
-            rows["theta_f"] = 0.7
-        seed_run(conn, shot, digest, rows)
-    store.result(conn, ellipse_spec("gaussian_sizes"), target(), Params(), ds=None)
+def blobs(conn, cache):
+    """``blob_parameters`` on two shots; ``sizes``, another plot with one of the
+    names; and ``keeper``, which has none of them."""
+    spec = make_spec(BLOBS, blob_scalars)
     for shot in SHOTS[:2]:
+        store.result(conn, spec, target(shot), Params(), ds=None)
         store.result(conn, make_spec("keeper"), target(shot), Params(), ds=None)
-    return SimpleNamespace(digest=digest)
+    sizes = make_spec("sizes", lambda result: {(6, 6, "lx_c"): 3.0e-3, "lr": 4.0e-3})
+    store.result(conn, sizes, target(), Params(), ds=None)
+    return spec
 
 
-def seed_ids(conn):
-    return {
-        row["id"] for row in conn.execute("SELECT id FROM runs WHERE plot = ?", (SEED,))
-    }
+def without(snap, plot_runs, names):
+    """``snap`` less the scalar rows of ``names`` in the runs ``plot_runs``."""
+    kept = [r for r in snap["scalars"] if not (r[0] in plot_runs and r[3] in names)]
+    return {**snap, "scalars": kept}
 
 
-def prune_ellipse(database, *more):
-    flags = [f"--scalar={name}" for name in ELLIPSE]
-    return prune(database, "--plot", SEED, *flags, *more)
+def prune_retired(database, *more):
+    flags = [f"--scalar={name}" for name in RETIRED]
+    return prune(database, "--plot", BLOBS, *flags, *more)
 
 
-# -- the store: counted per name ----------------------------------------------------------------
-
-
-def test_the_counts_per_name_are_right(conn, seeded):
-    plan = store.plan_prune_scalars(conn, SEED, ELLIPSE)
-
-    assert plan.names == ELLIPSE and not plan.empty
-    assert plan.counts == {"lx_f": 6, "ly_f": 6, "theta_f": 5}
-    assert plan.total == 17
-    first, second = sorted(seed_ids(conn))
-    assert plan.rows == {
-        "lx_f": {first: 3, second: 3},
-        "ly_f": {first: 3, second: 3},
-        # Two pixels and the shot-level row in the first run, two pixels in the second.
-        "theta_f": {first: 3, second: 2},
-    }
-    # 89 rows in the seed's two runs, of which these 17 go; the other plots' rows are not its own.
-    assert (
-        count(
-            conn, "SELECT COUNT(*) FROM scalars WHERE run_id IN (?, ?)", first, second
-        )
-        == 89
-    )
-    assert (plan.runs, plan.kept) == (2, 72)
-    assert plan.elsewhere == {"gaussian_sizes": 3}
-
-
-def test_a_name_with_no_rows_counts_as_zero_and_a_repeated_name_once(conn, seeded):
-    plan = store.plan_prune_scalars(conn, SEED, ["lx_f", "nosuch", "lx_f", "theta_x"])
-
-    assert plan.names == ("lx_f", "nosuch", "theta_x")
-    assert plan.counts == {"lx_f": 6, "nosuch": 0, "theta_x": 0}
-    assert plan.total == 6
-    # What the plot does have, to tell a typo from a job already done.
-    assert set(plan.held) == set(SEED_NAMES)
-    assert "nosuch, theta_x: nothing of that name to delete" in "\n".join(plan.lines())
-
-
-def test_a_plot_the_ledger_has_no_run_of_is_empty_and_the_plan_lists_the_plots_it_has(
-    conn, seeded
+def test_the_dry_run_counts_per_name_deletes_nothing_and_exits_1(
+    conn, cache, database, blobs, capsys
 ):
-    plan = store.plan_prune_scalars(conn, "density_scan_imprt", ELLIPSE)
-
-    assert plan.empty and plan.total == 0
-    assert plan.plots == {SEED: 2, "gaussian_sizes": 1, "keeper": 2}
-
-
-def test_no_name_at_all_is_a_mistake_and_not_a_prune(conn, seeded):
-    with pytest.raises(ValueError, match="no scalar name"):
-        store.plan_prune_scalars(conn, SEED, [])
-
-
-def test_counting_deletes_nothing(conn, cache, seeded):
     before = snapshot(conn, cache)
 
-    plan = store.plan_prune_scalars(conn, SEED, ELLIPSE)
-    assert plan.lines()
+    assert prune_retired(database) == 1
 
+    assert snapshot(conn, cache) == before
+    out, err = say(capsys)
+    assert out.splitlines() == [
+        "plot          blob_parameters",
+        "level         4 scalar rows in 2 runs",
+        "lx_c          6 scalar rows in 2 runs",
+        "to delete     10 scalar rows",
+        "stays         all 2 runs of the plot, with their blobs, and its 4 scalar rows"
+        " of other names",
+        "elsewhere     the same names under other plots, not touched: sizes 1",
+    ]
+    assert "Nothing was deleted. Run it again with --yes" in err
+
+
+def test_yes_deletes_those_rows_and_nothing_else_and_asked_again_finds_none(
+    conn, cache, database, blobs, capsys
+):
+    before = snapshot(conn, cache)
+    assert before["blobs"]
+    runs = {r[0] for r in conn.execute("SELECT id FROM runs WHERE plot = ?", (BLOBS,))}
+
+    assert prune_retired(database, "--yes") == 0
+
+    out, err = say(capsys)
+    assert out.splitlines()[-1] == "deleted       10 scalar rows (level 4, lx_c 6)"
+    assert err == ""
+    # Exactly the plot's rows of those names, the NULL and the shot-level one
+    # included. Its runs, blobs, parameter set and other names are as they
+    # were, and so is the same name under the other plot.
+    after = snapshot(conn, cache)
+    assert after == without(before, runs, RETIRED)
+    assert len(before["scalars"]) - len(after["scalars"]) == 10
+    assert count(conn, "SELECT COUNT(*) FROM scalars WHERE name = 'lx_c'") == 1
+
+    # Asked again every count is 0, which is not an error.
+    assert prune_retired(database) == 1  # the dry run's status, whatever it found
+    out, err = say(capsys)
+    assert "lx_c          0 scalar rows in 0 runs" in out
+    assert "to delete     0 scalar rows" in out
+    assert "no rows       level, lx_c: nothing of that name to delete" in out
+    assert "The scalar names this plot has: area, lr" in out
+    assert "None of these names has a row to delete" in err
+
+    assert prune_retired(database, "--yes") == 0
+    out, err = say(capsys)
+    assert "deleted       0 scalar rows (level 0, lx_c 0)" in out
+    assert err == ""
+    assert snapshot(conn, cache) == after
+
+
+def test_a_name_with_no_rows_counts_as_zero_and_a_repeated_name_once(
+    conn, cache, database, blobs, capsys
+):
+    flags = ["--scalar=lx_c", "--scalar=lxc", "--scalar=lx_c"]
+    assert prune(database, "--plot", BLOBS, *flags, "--yes") == 0
+
+    out, err = say(capsys)
+    assert "lxc           0 scalar rows in 0 runs" in out
+    # What the plot does have, to tell a typo from a job already done.
+    assert "lxc: nothing of that name to delete" in out
+    assert "The scalar names this plot has: area, level, lr, lx_c" in out
+    assert "deleted       6 scalar rows (lx_c 6, lxc 0)" in out
+    assert err == ""
+
+
+def test_a_plot_with_no_runs_is_an_error_that_says_which_plots_have_some(
+    conn, cache, database, blobs, capsys
+):
+    before = snapshot(conn, cache)
+
+    assert prune(database, "--plot", "blob_parameter", "--scalar", "lx_c", "--yes") == 1
+
+    out, err = say(capsys)
+    assert out == ""
+    assert "'blob_parameter'" in err and "blob_parameters (2)" in err
+    assert "sizes (1)" in err and "keeper (2)" in err
     assert snapshot(conn, cache) == before
 
 
-# -- the store: deleted --------------------------------------------------------------------------
+def test_no_name_at_all_is_a_mistake_and_not_a_prune(conn, blobs):
+    with pytest.raises(ValueError, match="no scalar name"):
+        store.plan_prune_scalars(conn, BLOBS, [])
 
 
-def test_only_those_names_under_that_plot_go(conn, cache, seeded):
-    before = snapshot(conn, cache)
-    ids = seed_ids(conn)
-    plan = store.plan_prune_scalars(conn, SEED, ELLIPSE)
+def test_a_run_written_after_the_plan_keeps_its_rows(conn, blobs):
+    plan = store.plan_prune_scalars(conn, BLOBS, RETIRED)
+    _, late = store.result(conn, blobs, target(SHOTS[2]), Params(), ds=None)
 
-    report = store.prune_scalars(conn, plan)
+    assert store.prune_scalars(conn, plan).scalars == 10
 
-    assert report.deleted == {"lx_f": 6, "ly_f": 6, "theta_f": 5}
-    assert report.scalars == 17
-    after = snapshot(conn, cache)
-    # Exactly the seed's rows of those three names, a NULL one and a shot-level one included.
-    assert after["scalars"] == [
-        row for row in before["scalars"] if not (row[0] in ids and row[3] in ELLIPSE)
-    ]
-    assert len(before["scalars"]) - len(after["scalars"]) == 17
-    assert {row[3] for row in after["scalars"] if row[0] in ids} == (
-        set(SEED_NAMES) - set(ELLIPSE)
-    )
-    # The same names under another plot are where they were.
-    elsewhere = [
-        row[3] for row in after["scalars"] if row[0] not in ids and row[3] in ELLIPSE
-    ]
-    assert elsewhere == ["lx_f", "ly_f", "theta_f"]
-    # And the runs, the parameter sets and the blobs are untouched.
-    assert after["runs"] == before["runs"]
-    assert after["params"] == before["params"]
-    assert after["blobs"] == before["blobs"] and before["blobs"]
+    assert count(conn, "SELECT COUNT(*) FROM scalars WHERE run_id = ?", late["id"]) == 7
 
 
-def test_the_runs_and_their_blobs_stay_when_a_plots_scalars_go(conn, cache, ledger):
-    """On a plot with blobs: four runs, three of them with a blob and a ``corner``."""
-    before = snapshot(conn, cache)
-    blobs = blobs_of(conn, "doomed")
-    assert len(blobs) == 3 and all(os.path.exists(path) for path in blobs)
-
-    plan = store.plan_prune_scalars(conn, "doomed", ["corner"])
-    assert plan.counts == {"corner": 3} and (plan.runs, plan.kept) == (4, 3)
-    assert plan.elsewhere == {"keeper": 2}
-    store.prune_scalars(conn, plan)
-
-    after = snapshot(conn, cache)
-    assert after["runs"] == before["runs"] and after["params"] == before["params"]
-    assert after["blobs"] == before["blobs"]
-    assert all(os.path.exists(path) for path in blobs)
-    assert count(conn, "SELECT COUNT(*) FROM scalars WHERE name = 'corner'") == 2
-    assert count(conn, "SELECT COUNT(*) FROM scalars WHERE name = 'total'") == 5
-
-
-def test_a_run_written_after_the_plan_keeps_its_rows(conn, seeded):
-    plan = store.plan_prune_scalars(conn, SEED, ELLIPSE)
-    late = seed_run(
-        conn, SHOTS[2], seeded.digest, {(6, 6, "lx_f"): 1.0, (6, 6, "lr"): 2.0}
-    )
-
-    assert store.prune_scalars(conn, plan).scalars == 17
-
-    assert count(conn, "SELECT COUNT(*) FROM scalars WHERE run_id = ?", late["id"]) == 2
-
-
-def test_the_rows_go_in_one_transaction_or_not_at_all(conn, cache, seeded):
-    """``theta_f`` is deleted last: the refusal comes after ``lx_f`` and ``ly_f`` are gone."""
+def test_the_rows_go_in_one_transaction_or_not_at_all(conn, cache, blobs):
+    """``lx_c`` is deleted last: the refusal comes after ``level`` is gone."""
     with conn:
         conn.execute(
-            "CREATE TRIGGER refuse BEFORE DELETE ON scalars WHEN old.name = 'theta_f'"
+            "CREATE TRIGGER refuse BEFORE DELETE ON scalars WHEN old.name = 'lx_c'"
             " BEGIN SELECT RAISE(ABORT, 'refused by the test'); END"
         )
     before = snapshot(conn, cache)
-    plan = store.plan_prune_scalars(conn, SEED, ELLIPSE)
+    plan = store.plan_prune_scalars(conn, BLOBS, RETIRED)
 
     with pytest.raises(store.PruneError, match="refused by the test") as error:
         store.prune_scalars(conn, plan)
@@ -822,188 +769,4 @@ def test_the_rows_go_in_one_transaction_or_not_at_all(conn, cache, seeded):
 
     with conn:
         conn.execute("DROP TRIGGER refuse")
-    assert store.prune_scalars(conn, plan).scalars == 17
-
-
-def test_pruning_scalars_on_a_connection_without_foreign_keys_is_refused(
-    conn, cache, database, seeded
-):
-    bare = sqlite3.connect(database)
-    bare.row_factory = sqlite3.Row
-    try:
-        assert bare.execute("PRAGMA foreign_keys").fetchone()[0] == 0
-        plan = store.plan_prune_scalars(bare, SEED, ELLIPSE)
-        before = snapshot(conn, cache)
-        with pytest.raises(store.PruneError, match="foreign keys off"):
-            store.prune_scalars(bare, plan)
-    finally:
-        bare.close()
-    assert snapshot(conn, cache) == before
-
-
-# -- the command ---------------------------------------------------------------------------------
-
-
-def test_the_dry_run_counts_per_name_deletes_nothing_and_exits_1(
-    conn, cache, database, seeded, capsys
-):
-    before = snapshot(conn, cache)
-
-    assert prune_ellipse(database) == 1
-
-    assert snapshot(conn, cache) == before
-    out, err = say(capsys)
-    assert out.splitlines() == [
-        "plot          density_scan_import",
-        "lx_f          6 scalar rows in 2 runs",
-        "ly_f          6 scalar rows in 2 runs",
-        "theta_f       5 scalar rows in 2 runs",
-        "to delete     17 scalar rows",
-        "stays         all 2 runs of the plot, with their blobs, and its 72 scalar rows"
-        " of other names",
-        "elsewhere     the same names under other plots, not touched: gaussian_sizes 3",
-    ]
-    assert "Nothing was deleted. Run it again with --yes" in err
-
-
-def test_yes_deletes_those_rows_and_nothing_else_and_exits_0(
-    conn, cache, database, seeded, capsys
-):
-    before = snapshot(conn, cache)
-    ids = seed_ids(conn)
-
-    assert prune_ellipse(database, "--yes") == 0
-
-    out, err = say(capsys)
-    assert err == ""
-    assert (
-        out.splitlines()[-1]
-        == "deleted       17 scalar rows (lx_f 6, ly_f 6, theta_f 5)"
-    )
-    after = snapshot(conn, cache)
-    assert after["scalars"] == [
-        row for row in before["scalars"] if not (row[0] in ids and row[3] in ELLIPSE)
-    ]
-    for key in ("runs", "params", "blobs"):
-        assert after[key] == before[key], key
-    assert count(conn, "SELECT COUNT(*) FROM runs WHERE plot = ?", SEED) == 2
-
-
-def test_asked_again_every_count_is_zero_and_that_is_not_an_error(
-    conn, cache, database, seeded, capsys
-):
-    assert prune_ellipse(database, "--yes") == 0
-    say(capsys)
-    before = snapshot(conn, cache)
-
-    assert prune_ellipse(database) == 1  # the dry run's status, whatever it found
-    out, err = say(capsys)
-    assert "lx_f          0 scalar rows in 0 runs" in out
-    assert "to delete     0 scalar rows" in out
-    assert "no rows       lx_f, ly_f, theta_f: nothing of that name to delete" in out
-    assert "area_c, lambda_psd, lr" in out  # what the plot does have
-    assert "None of these names has a row to delete" in err
-
-    assert prune_ellipse(database, "--yes") == 0
-    out, err = say(capsys)
-    assert "deleted       0 scalar rows (lx_f 0, ly_f 0, theta_f 0)" in out
-    assert err == ""
-    assert snapshot(conn, cache) == before
-
-
-def test_a_name_that_has_no_rows_is_reported_as_zero_beside_one_that_has(
-    conn, cache, database, seeded, capsys
-):
-    assert (
-        prune(database, "--plot", SEED, "--scalar", "lx_f", "--scalar", "lxf", "--yes")
-        == 0
-    )
-
-    out, err = say(capsys)
-    assert "lxf           0 scalar rows in 0 runs" in out
-    assert "deleted       6 scalar rows (lx_f 6, lxf 0)" in out
-    assert err == ""
-    left = count(conn, "SELECT COUNT(*) FROM scalars WHERE name = 'lx_f'")
-    assert left == 1  # the one row gaussian_sizes has
-
-
-def test_a_name_given_twice_is_counted_once(conn, cache, database, seeded, capsys):
-    assert (
-        prune(database, "--plot", SEED, "--scalar", "lx_f", "--scalar", "lx_f", "--yes")
-        == 0
-    )
-    assert "deleted       6 scalar rows (lx_f 6)" in say(capsys)[0]
-
-
-def test_a_plot_with_no_runs_is_an_error_that_says_which_plots_have_some(
-    conn, cache, database, seeded, capsys
-):
-    before = snapshot(conn, cache)
-
-    assert (
-        prune(database, "--plot", "density_scan_imprt", "--scalar", "lx_f", "--yes")
-        == 1
-    )
-
-    out, err = say(capsys)
-    assert out == ""
-    assert "'density_scan_imprt'" in err and "density_scan_import (2)" in err
-    assert "gaussian_sizes (1)" in err and "keeper (2)" in err
-    assert snapshot(conn, cache) == before
-
-
-def test_the_scalar_prune_needs_no_result_cache(
-    conn, cache, database, seeded, monkeypatch, capsys
-):
-    """It looks at no blob, so a machine with no ``FUSION_UI_CACHE`` can still do it."""
-    monkeypatch.delenv("FUSION_UI_CACHE")
-    assert prune(database, "--plot", SEED) == 1
-    assert "FUSION_UI_CACHE" in say(capsys)[1]
-
-    assert prune_ellipse(database, "--yes") == 0
-
-    assert "deleted       17 scalar rows" in say(capsys)[0]
-
-
-def test_the_plain_prune_of_the_same_plot_is_as_it_was(
-    conn, cache, database, seeded, capsys
-):
-    """Without ``--scalar`` the whole plot goes: every run, every name, the parameter set."""
-    before = snapshot(conn, cache, outside=SEED)
-
-    assert prune(database, "--plot", SEED) == 1
-    out, err = say(capsys)
-    assert out.splitlines() == [
-        "plot          density_scan_import",
-        "runs          2  (ok 2)",
-        "scalar rows   89",
-        "blob files    0 on disk, 0 listed but already missing",
-        "param sets    1 that nothing will reference any more",
-        "built on them no run of another plot",
-    ]
-    assert "Nothing was deleted" in err
-
-    assert prune(database, "--plot", SEED, "--yes") == 0
-    assert (
-        "deleted       2 runs, 89 scalar rows, 0 blob files, 1 param sets"
-        in say(capsys)[0]
-    )
-    assert count(conn, "SELECT COUNT(*) FROM runs WHERE plot = ?", SEED) == 0
-    assert snapshot(conn, cache) == before
-
-
-def test_after_the_scalars_the_plain_prune_takes_what_is_left(
-    conn, cache, database, seeded, capsys
-):
-    assert prune_ellipse(database, "--yes") == 0
-    say(capsys)
-
-    assert prune(database, "--plot", SEED, "--yes") == 0
-
-    assert (
-        "deleted       2 runs, 72 scalar rows, 0 blob files, 1 param sets"
-        in say(capsys)[0]
-    )
-    assert count(conn, "SELECT COUNT(*) FROM runs WHERE plot = ?", SEED) == 0
-    # The same names under the other plot were never the seed's to take.
-    assert count(conn, "SELECT COUNT(*) FROM scalars WHERE name = 'lx_f'") == 1
+    assert store.prune_scalars(conn, plan).scalars == 10

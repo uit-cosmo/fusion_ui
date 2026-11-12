@@ -1,10 +1,9 @@
-"""``fusion-ui`` -- the commands that run outside the browser.
+"""``fusion-ui``: the commands that run outside the browser.
 
 ``rescan`` is the one that goes on cron; ``status`` is the one to run after
-deploying; ``precompute`` (phase 04) warms the cache overnight, for
-several plots and on several workers since phase 06. ``prune`` deletes every
-stored result of one plot, or with ``--scalar`` only the scalars of some names
-under it, and counts them first.
+deploying; ``precompute`` fills the result cache in batch; ``prune`` deletes
+the stored results of one plot, or only some of its scalars, and counts them
+first.
 """
 
 import argparse
@@ -27,8 +26,7 @@ def cmd_init_db(args):
     conn = db.connect(path)
     version = db.init_db(conn)
     conn.close()
-    # The other half of the state this app owns. Empty until phase 02, but
-    # created here so a permissions problem shows up at deploy time.
+    # Created here so that a permissions problem shows up at deploy time.
     cache, error = _resolve("CACHE_DIR")
     if not error:
         shared.makedirs(cache)
@@ -57,8 +55,7 @@ def cmd_rescan(args):
 
 
 def _print_flushed(message):
-    # Flush every line: a fill can run for days, and a buffered "computing…"
-    # line is no use to someone tailing the log overnight. A closed pipe (tee
+    # Flushed, for whoever tails the log of a long fill. A closed pipe (tee
     # killed by the same Ctrl-C) must not turn into a traceback.
     try:
         print(message, flush=True)
@@ -78,12 +75,10 @@ def _selection_flags(args):
 
 
 def cmd_precompute(args):
-    """Run the plots' compute over every matching shot, warming the cache.
+    """Run the plots' compute over every matching shot, filling the cache.
 
-    Several plots run in dependency order within each shot; ``--workers``
-    spreads the shots over a pool of processes. ``fusion_ui.plots`` is
-    imported here, not at module top, so the plain maintenance commands stay
-    importable on a machine without the analysis packages installed.
+    ``fusion_ui.plots`` is imported here, not at module top, so that the other
+    commands work on a machine without the analysis packages.
     """
     import fusion_ui.plots  # noqa: F401 - importing the package registers specs
 
@@ -159,11 +154,7 @@ def cmd_precompute(args):
 
 
 def _precompute_plan(args, conn, keys, specs, params):
-    """The plan for ``precompute``, or the exit status when there is nothing to do.
-
-    Reads the ledger and the index, and records the parameter sets; opens no
-    data file.
-    """
+    """The plan for ``precompute``, or the exit status when there is nothing to do."""
     from fusion_ui.core import precompute
 
     shots = set(args.shot) or None
@@ -207,14 +198,10 @@ def _precompute_plan(args, conn, keys, specs, params):
 def cmd_prune(args):
     """Delete every stored result of one plot: blobs, runs, scalars, parameter sets.
 
-    Counts first and prints, and deletes only with ``--yes``; without it the
-    exit status is 1, so a script cannot mistake a count for a deletion. The key
-    need not be registered: this is how the results of a removed spec go. The
-    deletion is :func:`fusion_ui.core.store.prune`, whose docstring says in what
-    order, and why. Imports nothing of the analysis packages.
-
-    With ``--scalar NAME`` (repeatable) it deletes only the scalar rows of those
-    names under ``--plot``'s runs, in the same two steps (:func:`_prune_scalars`).
+    Counts first, and deletes only with ``--yes``; without it the exit status
+    is 1, so a script cannot mistake a count for a deletion. The key need not
+    be registered, which is how the results of a removed spec go. With
+    ``--scalar`` only those scalars go (:func:`_prune_scalars`).
     """
     conn = db.open_db(args.database)
     try:
@@ -250,13 +237,11 @@ def cmd_prune(args):
 
 
 def _prune_scalars(args, conn):
-    """``prune --plot KEY --scalar NAME ...``: the scalars of those names, counted first.
+    """``prune --plot KEY --scalar NAME ...``: only the scalar rows of those names.
 
-    The runs, their blobs, their other scalars and the same names under any other
-    plot key stay (:func:`fusion_ui.core.store.prune_scalars`). Without ``--yes``
-    it prints the counts, deletes nothing and exits 1, as the whole-plot prune
-    does. A name with no rows is counted as 0 and is not an error; a plot with no
-    runs at all is, since that is a mistyped key.
+    The runs, their blobs, their other scalars and the same names under any
+    other plot stay. A name with no rows is counted as 0 and is not an error; a
+    plot with no runs at all is, since that is a mistyped key.
     """
     plan = store.plan_prune_scalars(conn, args.plot, args.scalar)
     if plan.empty:
@@ -289,8 +274,7 @@ def _prune_scalars(args, conn):
 def cmd_backfill_dt(args):
     """Measure each phantom file's frame interval into ``shots.dt``.
 
-    Reads only the 1-D time axis per file, so a whole machine's phantom
-    collection takes seconds, not hours. Run on the machine that holds the
+    Reads only the time axis of each file. Run on the machine that holds the
     data; the browser's phantom-dt column reads what this leaves behind.
     """
     conn = db.open_db(args.database)
@@ -331,7 +315,7 @@ def cmd_status(args):
         print("index            empty — run `fusion-ui rescan`")
     else:
         print("index")
-        width = max(len(name) for name in catalog.DIAGNOSTICS)  # thomson_scattering is longer than the others
+        width = max(len(name) for name in catalog.DIAGNOSTICS)
         for row in rows:
             kind = "preprocessed" if row["preprocessed"] else "raw"
             print(
@@ -433,7 +417,7 @@ def build_parser():
         "plots",
         nargs="+",
         metavar="PLOT",
-        help="plot key, e.g. velocity_contour; several run in dependency order"
+        help="plot key, e.g. method_fields; several run in dependency order"
         " within each shot, so an upstream named with them is computed once",
     )
     precompute.add_argument(
