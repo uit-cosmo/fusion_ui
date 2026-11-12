@@ -817,7 +817,7 @@ def test_a_chosen_pixel_opens_the_pixel_level_below_the_grid(deployment):
     assert any("trajectory in R and Z" in c.value for c in app.caption)
     # The numbers are the stored ones.
     methods_table, blobs_table = (d.value for d in app.dataframe)
-    assert len(methods_table) == 7 and len(blobs_table) == 13
+    assert len(methods_table) == 7 and len(blobs_table) == 6
     conn = deployment.conn()
     digest = params_ui.hash_params(
         "method_fields", registry.get("method_fields").params()

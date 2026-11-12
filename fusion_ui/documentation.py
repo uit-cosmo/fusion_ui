@@ -59,15 +59,8 @@ SEED = seed.IMPORT_PLOT
 #: the seed. A test runs every registered spec's ``scalars`` and holds this to it; the seed's names are the
 #: fields of the seed record (``seed.RECORD_NAMES``) but the three of ``seed.NOT_IMPORTED``.
 OLDER_SOURCES = {
-    "two_dca": ("number_events",),
     "taud_psd": ("taud_psd", "lambda_psd"),
-    "velocity_contour": ("vx_c", "vy_c", "area_c"),
-    "fwhm_sizes": ("lr", "lz"),
-    "gaussian_sizes": ("lx_f", "ly_f", "theta_f"),
-    "velocity_2dca_tde": ("vx_2dca_tde", "vy_2dca_tde"),
     "velocity_tde": ("vx_tde", "vy_tde"),
-    "trajectories": ("vx_2dca_lsq", "vy_2dca_lsq", "vx_ccf_lsq", "vy_ccf_lsq"),
-    "two_sided_exp": ("tau_prime", "sigma_t", "l_prime", "sigma_sp"),
     "dead_pixels": ("dead", "psd_ratio", "number_dead"),
     SEED: (
         "vx_c",
@@ -312,13 +305,10 @@ def facts():
     from fusion_ui.core import loader, mlp
     from fusion_ui.plots import (
         thomson_profiles,
-        two_dca,
-        velocity_contour,
         velocity_tde,
     )
 
     radius = im.get_default_apd_method_params().preprocessing.radius
-    contour = velocity_contour.ContourVelocityParams()
     tde = velocity_tde.TdeVelocityParams()
     cuts = Cuts()
     return {
@@ -345,13 +335,6 @@ def facts():
         "loader.default_window": f"{loader.DEFAULT_WINDOW_SECONDS:g} s",
         "cuts.min_lags": _number(cuts.min_lags),
         "cuts.min_events": _number(cuts.min_events),
-        "older.two_dca_threshold": _number(
-            two_dca.TwoDcaSpecParams().two_dca.threshold
-        ),
-        "older.contour_level": _number(contour.contouring.threshold_factor),
-        "older.window_size": _number(contour.position_filter.window_size),
-        "older.mask_signal_factor": _number(contour.position_filter.mask_signal_factor),
-        "older.estimator": _number(contour.velocity.estimator),
         "older.tde_threshold": _number(tde.min_threshold),
         "older.tde_ccf_min_lag": _number(tde.ccf_min_lag),
         "thomson.margin": _number(thomson_profiles.MARGIN),

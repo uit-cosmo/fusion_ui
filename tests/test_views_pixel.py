@@ -872,13 +872,13 @@ def test_the_methods_table_has_every_methods_numbers(products):
 
 def test_the_blob_parameters_come_with_units_when_they_are_computed(products):
     _, blobs_table = numbers.numbers(bundle_of(products))
-    assert list(blobs_table["parameter"]) == list(ff.BLOB_NAMES)
+    assert list(blobs_table["parameter"]) == [n for n, _, _ in numbers.BLOB_PARAMETERS]
     assert blobs_table.set_index("parameter").loc["lr", "value"] == pytest.approx(
         products.blobs["lr"].values[4, 5]
     )
     assert blobs_table.set_index("parameter").loc["area", "unit"] == "m²"
     assert blobs_table.set_index("parameter").loc["taud", "unit"] == "s"
-    assert blobs_table.set_index("parameter").loc["theta_f", "unit"] == "rad"
+    assert "theta_f" not in set(blobs_table["parameter"])  # in the blob, not shown
     without = numbers.numbers(
         Bundle(fields=products.fields, bank=products.bank, pixel=(5, 4))
     )

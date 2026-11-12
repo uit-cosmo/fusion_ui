@@ -50,11 +50,13 @@ METHOD_FIELDS_NAMES = (
     "vr_max vz_max nlags_max vr_com vz_com nlags_com level_com vr_2dcc vz_2dcc nlags_2dcc number_events"
     " vr3_tde vz3_tde vr2_tde vz2_tde cc_tde vr3_catde vz3_catde vr2_catde vz2_catde"
 ).split()
-BLOB_PARAMETERS_NAMES = (
-    "level area lx_c ly_c theta_c lr lz lx_f ly_f theta_f taud_psd lambda_psd".split()
-)
+BLOB_PARAMETERS_NAMES = "area lr lz taud_psd lambda_psd".split()
 #: Scalar name -> the blob variable it is read from, for the scalars whose names differ.
 RENAMED = {"number_events": "nevents", "taud_psd": "taud", "lambda_psd": "lam"}
+
+
+#: The blob variables the app shows, in the order of its table.
+SHOWN = ["nevents", "area", "lr", "lz", "taud", "lam"]
 
 
 def variable_of(name):
@@ -402,18 +404,10 @@ def test_the_default_keys_are_stable():
 DEFAULT_HASHES = {
     "raw_frames": "f29f91e6ac616c2ee2980872c988504bb9de8c51",
     "dead_pixels": "c87bebadae3c0c04ac973bf608a4d6ea0571133b",
-    "stored_mask": "626cb4b048f79f5dc32209d0ac3e9cdd20b2fc98",
     "probe_trace": "1cb53206d761fb519becfafebedce0c54e020a7a",
     "thomson_profiles": "482534bb11949e3bff6fca56ff653e37328c9f89",
     "mlp_profiles": "ba6d655e1fa2aab4c5319fb35080e79b66e96928",
     "taud_psd": "7c56c709e582ced8ea0a30c3527804ba293b049c",
-    "two_dca": "4bd8190c48d36e19d376aa9ea2ebe9d9711c4772",
-    "velocity_contour": "021cdfba77e515bd7945ba277d9297da69c51734",
-    "fwhm_sizes": "98f558fa8c85b85fc7fb53e2a9e9e77e25dd3907",
-    "gaussian_sizes": "50b3384ff561d64cd0947a291ce795fcf54bad01",
-    "velocity_2dca_tde": "8138bc07cb4471d5af48ad04002f65cb6e4965ce",
-    "trajectories": "1df8d735e3ed74e0629148a7491a71ab72000fa5",
-    "two_sided_exp": "54a0ba03d55e42fbc36e8b5f719729a817c59d1c",
     "velocity_tde": "02e50d35120403814b240a9276ed7787032caa9a",
     "pixel_averages": "302e4217c137fa0d510a11f49500371362dfd4ae",
     "method_fields": "d190bcb9d4f6d4b56debefcbdd8fc1a98e16a7ba",
@@ -422,10 +416,9 @@ DEFAULT_HASHES = {
 
 
 def test_every_registered_specs_default_hash_is_the_one_before_the_move():
-    """All eighteen, not only the three products: the move to imaging_methods changed no field's name,
-    annotation or default."""
+    """Every spec, not only the three products: a stored result is found by its hash."""
     assert set(registry.REGISTRY) == set(DEFAULT_HASHES)
-    assert len(DEFAULT_HASHES) == 18
+    assert len(DEFAULT_HASHES) == 10
     found = {
         key: params_ui.hash_params(key, spec.params())[0]
         for key, spec in registry.REGISTRY.items()
@@ -899,14 +892,14 @@ def stored_rows(conn, run):
     }
 
 
-def test_there_are_twenty_and_twelve_names_as_g2_settled_them():
+def test_the_scalar_names_are_the_ones_written_out_here():
     assert (
         list(method_fields.SCALARS) == METHOD_FIELDS_NAMES
         and len(METHOD_FIELDS_NAMES) == 20
     )
     assert (
         list(blob_parameters.SCALARS) == BLOB_PARAMETERS_NAMES
-        and len(BLOB_PARAMETERS_NAMES) == 12
+        and len(BLOB_PARAMETERS_NAMES) == 5
     )
     assert not set(method_fields.SCALARS) & set(blob_parameters.SCALARS)
 
@@ -925,26 +918,19 @@ def test_there_are_twenty_and_twelve_names_as_g2_settled_them():
     # scalars; ``nevents`` is the bank's count, which blob_parameters leaves to method_fields.
     assert set(method_fields.SCALARS.values()) <= set(fx.FIELD_VARIABLES)
     assert "nevents" not in blob_parameters.SCALARS.values()
-    assert set(blob_parameters.SCALARS.values()) | {"nevents"} == set(fx.BLOB_VARIABLES)
+    assert set(blob_parameters.SCALARS.values()) < set(fx.BLOB_VARIABLES)
     # The API's names for the three are not scalar names.
     taken = set(method_fields.SCALARS) | set(blob_parameters.SCALARS)
     assert not taken & {"nevents", "taud", "lam"}
 
 
-def test_the_three_renamed_scalars_are_the_names_the_store_already_has():
-    """The point of renaming them: a number that two plots write under one name lines up on one axis. The
-    names are those ``two_dca`` and the ``taud_psd`` spec write, and the seeded ``density_scan`` rows carry
-    (``seed.RECORD_NAMES``).
-    """
-    from fusion_ui.plots import spectra, two_dca
+def test_the_duration_time_scalars_are_the_names_the_taud_psd_spec_writes():
+    """A number that two plots write under one name lines up on one multi-shot axis."""
+    from fusion_ui.plots import spectra
 
-    stand_in = xr.Dataset(
-        {"refx": 1, "refy": 2, "number_events": 7, "taud": 1e-5, "lam": 0.5}
-    )
-    written = {name for _, _, name in two_dca.scalars(stand_in)}
-    written |= {name for _, _, name in spectra.scalars(stand_in)}
-    assert written == set(RENAMED)
-
+    stand_in = xr.Dataset({"refx": 1, "refy": 2, "taud": 1e-5, "lam": 0.5})
+    written = {name for _, _, name in spectra.scalars(stand_in)}
+    assert written == {"taud_psd", "lambda_psd"} <= set(blob_parameters.SCALARS)
     assert set(RENAMED) <= set(seed.RECORD_NAMES)
 
 
@@ -988,24 +974,24 @@ def test_the_scalar_rows_in_the_ledger_are_the_mapping_with_failures_as_null(ful
     assert len(flat) == 20 and flat["number_events"] == 0.0 and flat["vr_com"] is None
 
 
-def test_blob_parameters_writes_twelve_names_and_not_the_event_count(sparse):
+def test_blob_parameters_writes_its_names_and_not_the_event_count(sparse):
     result = sparse.loaded["blob_parameters"]
     mapping = blob_parameters.scalars(result)
     live = live_pixels("sparse")
-    assert len(mapping) == len(live) * 12 == 36
+    assert len(mapping) == len(live) * 5 == 15
     assert {name for _, _, name in mapping} == set(BLOB_PARAMETERS_NAMES)
     assert {(x, y) for x, y, _ in mapping} == set(live)
     assert "number_events" not in {name for _, _, name in mapping}
 
     rows = stored_rows(sparse.conn, sparse.runs["blob_parameters"])
-    assert len(rows) == 36
+    assert len(rows) == 15
     assert {n for _, _, n in rows} == set(BLOB_PARAMETERS_NAMES)
     for (x, y, name), value in rows.items():
         expected = float(result[variable_of(name)].values[y, x])
         assert (value is None and np.isnan(expected)) or value == expected
     flat_x, flat_y = fx.FLAT
-    assert rows[(flat_x, flat_y, "lx_f")] is None  # no average to fit: tried and failed
-    assert rows[(1, 1, "lx_f")] is not None
+    assert rows[(flat_x, flat_y, "lr")] is None  # no average to fit: tried and failed
+    assert rows[(1, 1, "area")] is not None
 
 
 def test_the_renamed_scalars_equal_the_blobs_variables_at_every_live_pixel(
@@ -1183,7 +1169,7 @@ def test_blob_parameters_draws_one_map_per_parameter_marking_dead_and_failed(spa
     )
     assert_a_figure(figure)
     maps = [t for t in figure.data if isinstance(t, go.Heatmap)]
-    assert [t.meta["parameter"] for t in maps] == fx.BLOB_VARIABLES
+    assert [t.meta["parameter"] for t in maps] == SHOWN
     titles = [a.text for a in figure.layout.annotations]
     assert "area [m²]" in titles and "taud [s]" in titles and "nevents" in titles
     kinds = {t.name for t in figure.data if isinstance(t, go.Scatter)}
@@ -1201,7 +1187,7 @@ def test_the_renders_survive_a_blob_without_some_parameters(sparse):
     result = sparse.loaded["blob_parameters"].drop_vars(["taud", "lam"])
     figure = blob_parameters.SPEC.render(result, PARAMS["blob_parameters"](), target())
     assert_a_figure(figure)
-    assert len([t for t in figure.data if isinstance(t, go.Heatmap)]) == 11
+    assert len([t for t in figure.data if isinstance(t, go.Heatmap)]) == 4
 
 
 def test_the_fields_pages_builders_draw_the_real_products(full, sparse):
@@ -1251,8 +1237,8 @@ def test_the_fields_pages_builders_draw_the_real_products(full, sparse):
     centroid = methods.loc[methods["method"] == "2DCA centroid", "v_R [m/s]"]
     assert 250 < float(centroid.iloc[0]) < 1000
     with_blobs = numbers.numbers(blobs)
-    assert len(with_blobs) == 2 and len(with_blobs[1]) == 13
-    assert set(with_blobs[1]["parameter"]) == set(fx.BLOB_VARIABLES)
+    assert len(with_blobs) == 2 and len(with_blobs[1]) == len(SHOWN)
+    assert list(with_blobs[1]["parameter"]) == SHOWN
     # A live pixel without events is a sentence, not an exception; a dead one too.
     for pixel in (fx.FLAT, (0, 1)):
         silent = dataclasses.replace(bundle, pixel=pixel)
@@ -1480,7 +1466,7 @@ def test_the_single_shot_page_shows_the_bank_from_cache_and_computes_the_rest_of
             == before[(shot, "pixel_averages")]["id"]
         )
     assert len(stored_rows(tree.conn, after[(shot, "method_fields")])) == 3 * 20
-    assert len(stored_rows(tree.conn, after[(shot, "blob_parameters")])) == 3 * 12
+    assert len(stored_rows(tree.conn, after[(shot, "blob_parameters")])) == 3 * 5
 
 
 MULTI_SHOT_APP = str(REPO / "fusion_ui" / "app.py")

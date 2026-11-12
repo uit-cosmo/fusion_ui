@@ -8,17 +8,7 @@ import fusion_ui.plots  # noqa: F401 - registers every spec
 from fusion_ui.core import multipixel, precompute, registry, store
 from fusion_ui.plots import spectra
 
-CACHED_ELIGIBLE = {
-    "taud_psd",
-    "velocity_tde",
-    "two_dca",
-    "velocity_contour",
-    "fwhm_sizes",
-    "gaussian_sizes",
-    "velocity_2dca_tde",
-    "trajectories",
-    "two_sided_exp",
-}
+CACHED_ELIGIBLE = {"taud_psd", "velocity_tde"}
 
 
 def test_supported_matches_the_per_pixel_specs_and_the_live_trace():
@@ -35,18 +25,6 @@ def test_supported_matches_the_per_pixel_specs_and_the_live_trace():
     assert not multipixel.supported(registry.get("dead_pixels"))
 
 
-def test_nothing_built_on_a_batch_only_spec_runs_on_many_pixels(monkeypatch):
-    """N pixel runs could each have to start the batch compute in the page."""
-    import dataclasses
-
-    batch_only = dataclasses.replace(registry.get("two_dca"), batch_only=True)
-    monkeypatch.setitem(registry.REGISTRY, "two_dca", batch_only)
-    assert not multipixel.supported(batch_only)
-    # velocity_contour itself is an ordinary per-pixel spec, built on it.
-    assert not multipixel.supported(registry.get("velocity_contour"))
-    assert multipixel.supported(registry.get("taud_psd"))
-
-
 def test_with_pixel_stamps_a_top_level_pair_without_mutating():
     params = spectra.TaudPsdParams(refx=6, refy=6)
     stamped = multipixel.with_pixel(params, 2, 3)
@@ -54,21 +32,10 @@ def test_with_pixel_stamps_a_top_level_pair_without_mutating():
     assert (params.refx, params.refy) == (6, 6)
 
 
-def test_with_pixel_stamps_a_nested_pair_without_mutating():
-    spec = registry.get("velocity_contour")
-    params = spec.params()
-    before = (params.two_dca.refx, params.two_dca.refy)
-    stamped = multipixel.with_pixel(params, 1, 2)
-    assert (stamped.two_dca.refx, stamped.two_dca.refy) == (1, 2)
-    assert (params.two_dca.refx, params.two_dca.refy) == before
-
-
 def test_precompute_still_stamps_the_pixel_after_the_refactor():
     spec = registry.get("taud_psd")
     params = precompute.default_params(spec, pixel=(2, 3))
     assert (params.refx, params.refy) == (2, 3)
-    derived = precompute.default_params(registry.get("velocity_contour"), pixel=(1, 2))
-    assert (derived.two_dca.refx, derived.two_dca.refy) == (1, 2)
 
 
 def test_pixels_from_points_reads_customdata_deduplicates_and_sorts():
@@ -131,23 +98,6 @@ def test_estimate_counts_cached_pixels_from_the_ledger(conn, cache, target):
     assert est.eta_seconds == pytest.approx(15.0)
 
 
-def test_estimate_of_a_chained_spec_includes_its_upstream(conn, cache, target):
-    spec = registry.get("velocity_contour")
-    upstream = registry.get("two_dca")
-    params = multipixel.with_pixel(spec.params(), 1, 1)
-
-    _seed_ok(conn, target, upstream, spec.upstream_params(params), 21.0)
-    _seed_ok(conn, target, spec, params, 4.0)
-
-    # The pixel whose rows exist costs nothing further.
-    assert multipixel.estimate(conn, spec, target, spec.params(), [(1, 1)]).eta_seconds == 0.0
-
-    # A fresh pixel pays both links' medians, not just the downstream's.
-    est = multipixel.estimate(conn, spec, target, spec.params(), [(5, 5)])
-    assert est.to_compute == 1
-    assert est.eta_seconds == pytest.approx(25.0)
-
-
 def test_estimate_with_no_history_has_no_eta(conn, cache, target):
     spec = registry.get("taud_psd")
     est = multipixel.estimate(conn, spec, target, spec.params(), [(0, 0)])
@@ -186,7 +136,7 @@ def test_spectra_overlay_puts_every_pixel_on_one_log_axis(target):
     assert "2 pixels" in figure.layout.title.text
 
 
-def _contour_result(x, y, vx=400.0):
+def _tde_result(x, y, vx=400.0):
     return xr.Dataset(
         {
             "vx": float(vx + x),
@@ -199,23 +149,23 @@ def _contour_result(x, y, vx=400.0):
 
 
 def test_scalar_figure_falls_back_to_a_scalar_across_pixels(target):
-    spec = registry.get("velocity_contour")
+    spec = registry.get("velocity_tde")
     assert spec.overlay is None
-    items = [((0, 0), _contour_result(0, 0)), ((1, 2), _contour_result(1, 2))]
-    figure = multipixel.scalar_figure(items, spec, "vx_c")
+    items = [((0, 0), _tde_result(0, 0)), ((1, 2), _tde_result(1, 2))]
+    figure = multipixel.scalar_figure(items, spec, "vx_tde")
 
     assert len(figure.data) == 1
     assert list(figure.data[0].y) == pytest.approx([400.0, 401.0])
     assert figure.data[0].customdata[1] == [1, 2]
-    assert "vx_c" in figure.layout.title.text
+    assert "vx_tde" in figure.layout.title.text
 
 
 def test_scalar_data_skips_shot_level_scalars(target):
-    spec = registry.get("velocity_contour")
-    items = [((0, 0), _contour_result(0, 0))]
+    spec = registry.get("velocity_tde")
+    items = [((0, 0), _tde_result(0, 0))]
     data = multipixel.scalar_data(items, spec)
-    assert set(data) == {"vx_c", "vy_c", "area_c"}
-    assert data["vx_c"] == [(0, 0, 400.0)]
+    assert set(data) == {"vx_tde", "vy_tde"}
+    assert data["vx_tde"] == [(0, 0, 400.0)]
 
 
 # ---------------------------------------------------------------------------

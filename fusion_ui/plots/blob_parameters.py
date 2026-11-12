@@ -1,34 +1,25 @@
-"""The blob parameters at every pixel: size, shape, area and duration of the structure behind each average.
+"""The blob parameters at every pixel: size, area and duration of the structure behind each average.
 
-Thirteen numbers per live reference pixel, the ones ``cmod_scan`` has always reported, from the stored
-conditional average and the pixel's own series (what each is, and its unit, is
-``fusion_ui.views.numbers.BLOB_PARAMETERS``; they are named here as the blob's variables):
+``compute`` is ``imaging_methods.decorrelation.blobs``, returned unchanged (variable names as in the paper's
+``apd<shot>_blobs.nc``; R and Z in metres). It reads the stored conditional average and the pixel's own
+series, and takes about a minute a shot once the bank exists. The blob holds every variable the library
+computes; the app shows and stores the six of ``fusion_ui.views.numbers.BLOB_PARAMETERS``:
 
 - ``nevents``: the events the conditional average rests on;
-- ``level``: the contour level read off the average, as a fraction of its maximum;
-- ``area`` [m^2], ``lx_c`` and ``ly_c`` [m], ``theta_c`` [rad]: the contour at zero lag, and the ellipse fitted
-  to it;
+- ``area`` [m^2]: the area of the contour at zero lag;
 - ``lr`` and ``lz`` [m]: the FWHM along the reference's row and column;
-- ``lx_f`` and ``ly_f`` [m], ``theta_f`` [rad]: the penalised ellipse fit to the average;
 - ``taud`` [s] and ``lam``: the duration time and the asymmetry of the two-sided exponential pulse (in
   [0, 1]), fitted to the PSD of the pixel's own record.
 
-``compute`` is ``imaging_methods.decorrelation.blobs``, returned unchanged (variable names as in the paper's
-``apd<shot>_blobs.nc``; R and Z in metres; the ``units`` attribute reads "m, m^2, s, rad"). It takes about a
-minute a shot once the bank exists.
+**Settings.** ``averages`` selects the bank. ``neighbour_step`` sets the contour level the area is read at;
+it is the same knob as ``method_fields``'s ``tracking.neighbour_step`` but a separate parameter, so a
+change to one leaves the other's key alone. ``blobs`` holds the settings of the library's ellipse fit and
+of the duration time.
 
-**Settings.** ``averages`` selects the bank. ``neighbour_step`` is the one tracking setting these read (it sets
-the contour level), taken alone rather than the whole ``Tracking``: the contour level is all they share with
-the velocity fields, and moving the ``cond_av`` mask must not mint a new key for the same blob parameters. It
-is the same knob as ``method_fields``'s ``tracking.neighbour_step`` but a separate parameter, so a change to
-one leaves the other's key alone. ``blobs`` holds the ellipse fit's and the duration time's own settings.
-
-**Scalars** are twelve, written per *live* pixel as ``(x, y, name)`` (:data:`SCALARS`, each name written next
-to the variable it is read from): every variable except ``nevents``, which ``method_fields`` writes as
-``number_events``. Ten are named as their variables. ``taud`` and ``lam`` are written as ``taud_psd`` and
-``lambda_psd``, the names the ``taud_psd`` spec and the seeded rows already use for the same fit, so that
-they line up on one axis; the blob keeps the API's ``taud`` and ``lam``. A dead pixel gets no row, since it
-was never computed; a NaN at a live pixel is written as NULL, "tried and failed".
+**Scalars** are five, written per *live* pixel as ``(x, y, name)`` (:data:`SCALARS`): ``area``, ``lr``,
+``lz``, and ``taud`` and ``lam`` under the names ``taud_psd`` and ``lambda_psd``, which the ``taud_psd`` spec
+uses for the same fit, so that they line up on one axis. ``nevents`` is written by ``method_fields`` as
+``number_events``. A dead pixel gets no row; a NaN at a live pixel is written as NULL, "tried and failed".
 """
 
 from dataclasses import dataclass, field
@@ -62,23 +53,13 @@ from fusion_ui.views.geometry import grid_axes, pitch
 from fusion_ui.views.numbers import BLOB_PARAMETERS as TABLE
 from fusion_ui.views.overlays import Legend
 
-#: The twelve scalars this writes per live pixel: each name, as the store records it, next to the variable of
-#: the blob it is read from. Every blob parameter but ``nevents``, which ``method_fields`` writes. Written
-#: out rather than read off the API, for the reason ``method_fields.SCALARS`` gives. ``taud_psd`` and
-#: ``lambda_psd`` are not their variables' names: the blob keeps the API's ``taud`` and ``lam`` (the paper's
-#: code reads it by those), and the scalars take the names the ``taud_psd`` spec and the seeded rows use for
-#: the same fit.
+#: The scalars this writes per live pixel: each name, as the store records it, next to the variable of the
+#: blob it is read from. Written out rather than read off the API: a name is permanent once a batch has
+#: written it, so a variable the API gains must not turn into a scalar without someone choosing its name.
 SCALARS = {
-    "level": "level",
     "area": "area",
-    "lx_c": "lx_c",
-    "ly_c": "ly_c",
-    "theta_c": "theta_c",
     "lr": "lr",
     "lz": "lz",
-    "lx_f": "lx_f",
-    "ly_f": "ly_f",
-    "theta_f": "theta_f",
     "taud_psd": "taud",
     "lambda_psd": "lam",
 }
@@ -108,7 +89,7 @@ def upstream_params(params):
 
 
 def compute(ds, params, upstream):
-    """The thirteen blob parameters at every live pixel, from the stored bank and the record.
+    """The blob parameters at every live pixel, from the stored bank and the record.
 
     ``upstream`` is the ``pixel_averages`` result. The mask is the bank's own, with its source, and is
     not computed again.
@@ -124,7 +105,7 @@ def compute(ds, params, upstream):
 
 
 def scalars(result):
-    """The twelve :data:`SCALARS` at every live pixel, each read off its variable and written under its name."""
+    """The :data:`SCALARS` at every live pixel, each read off its variable and written under its name."""
     return live_scalars(result, SCALARS)
 
 
@@ -132,7 +113,7 @@ def scalars(result):
 # The view: one map per parameter, each on its own scale (they differ in kind and in unit).
 # ---------------------------------------------------------------------------
 
-COLUMNS = 4
+COLUMNS = 3
 
 
 def _label(name, unit):
@@ -248,9 +229,9 @@ SPEC = registry.register(
         upstream_params=upstream_params,
         preprocessed=True,
         description=(
-            "Size, shape, area and duration time of the structure at every live pixel: contour and"
-            " Gaussian-fit ellipses, FWHM along the row and column, the duration time from the PSD."
-            " Read off pixel_averages; emits twelve names per live pixel."
+            "Size, area and duration time of the structure at every live pixel: the FWHM along the"
+            " row and column, the area of the zero-lag contour, the duration time from the PSD."
+            " Read off pixel_averages; emits five names per live pixel."
         ),
     )
 )

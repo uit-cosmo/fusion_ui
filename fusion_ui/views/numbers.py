@@ -21,20 +21,12 @@ METHOD_COLUMNS = [
     "CC",
 ]
 
-#: The 13 blob parameters in the order ``apd<shot>_blobs.nc`` lists them: what each is, and its unit
-#: (the file's ``units`` attribute says "m, m^2, s, rad").
+#: The blob parameters the app shows, of those ``apd<shot>_blobs.nc`` holds: what each is, and its unit.
 BLOB_PARAMETERS = (
     ("nevents", "events the conditional average rests on", ""),
-    ("level", "contour level, as a fraction of the maximum", ""),
     ("area", "area of the zero-lag contour", "m²"),
-    ("lx_c", "ellipse fitted to the contour: size in x", "m"),
-    ("ly_c", "ellipse fitted to the contour: size in y", "m"),
-    ("theta_c", "ellipse fitted to the contour: tilt", "rad"),
     ("lr", "FWHM along the reference's row", "m"),
     ("lz", "FWHM along the reference's column", "m"),
-    ("lx_f", "Gaussian fit: size in x", "m"),
-    ("ly_f", "Gaussian fit: size in y", "m"),
-    ("theta_f", "Gaussian fit: tilt", "rad"),
     ("taud", "duration time, from the PSD", "s"),
     ("lam", "asymmetry of the two-sided exponential pulse", ""),
 )

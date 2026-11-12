@@ -1,24 +1,17 @@
 """What the multi-shot axis calls a stored scalar: the quantity and its unit.
 
 The store's names are permanent keys (``vr_com``); a person reading a scatter needs to know what the
-number is (``v_R, 2DCA centroid [m/s]``). :data:`LABELS` holds that for the 32 names the phase-06
-products write (``method_fields`` 20, ``blob_parameters`` 12). A name without an entry, which is every
-name an older spec or the seed writes alone, shows as its raw name: nothing is guessed for it.
+number is (``v_R, 2DCA centroid [m/s]``). :data:`LABELS` holds that for the names the products write
+(``method_fields`` and ``blob_parameters``). A name without an entry shows as its raw name: nothing is
+guessed for it.
 
 **Every label carries a unit, or says outright that it has none.** The unit is the last thing in the
-label, in square brackets, and one of :data:`UNITS`. A number with no unit (a count of events or lags,
-a fraction of a maximum, a correlation coefficient, an asymmetry between 0 and 1) says ``[no unit]``,
-so that a unit someone forgot cannot be mistaken for one that does not exist. The metres, seconds and
-radians are what the products store (R and Z in metres, lags in seconds). For the blob parameters they
-are also what ``fusion_ui.views.numbers.BLOB_PARAMETERS`` gives, which a test compares.
+label, in square brackets, and one of :data:`UNITS`. A number with no unit (a count, a fraction, a
+correlation coefficient) says ``[no unit]``, so that a unit someone forgot cannot be mistaken for one
+that does not exist.
 
-**Labels are per name, not per source.** Five of the 32 names are written by the seed as well as by a
-product (:data:`SHARED`), and the axis shows the same label whichever source is picked. Each of those is
-therefore worded by what the quantity is, never by the product that happens to write it, and carries
-the unit all its sources give it. G2 settled that they are the same estimators in the same units; the
-wording follows the older sources' own docstrings (``fwhm_sizes``, ``taud_psd`` and the seed's
-``density_scan``). The three Gaussian-fit names are worded the same way, for ``gaussian_sizes`` and
-``blob_parameters``, though they are no longer in :data:`SHARED` (see there).
+**Labels are per name, not per source** (:data:`SHARED`): the axis shows the same label whichever source
+is picked, so each is worded by what the quantity is, never by the spec that writes it.
 
 Nothing in this module touches Streamlit, the database or the filesystem.
 """
@@ -45,20 +38,14 @@ class Label:
         return f"{self.quantity} [{self.unit}]"
 
 
-#: The names that the seed writes as well as a phase-06 product, and which older sources those are: plot
-#: keys, and the seed's ``density_scan_import``. A test checks that each source named does write the name.
-#: A label here has to read true for every one of them.
-#:
-#: ``lx_f``, ``ly_f`` and ``theta_f`` are not here since the seed stopped writing them: its values under
-#: those names were the ellipse fitted to the contour, not the Gaussian fit, and are no longer imported
-#: (``fusion_ui.core.seed.NOT_IMPORTED``). Their label reads the Gaussian fit, which is what both
-#: ``gaussian_sizes`` and ``blob_parameters`` write under them.
+#: The names an older source writes as well as a product, and which sources those are: plot keys, and the
+#: retired seed's ``density_scan_import``. A label here has to read true for every one of them.
 SHARED = {
-    "number_events": ("two_dca", "density_scan_import"),
+    "number_events": ("density_scan_import",),
     "taud_psd": ("taud_psd", "density_scan_import"),
     "lambda_psd": ("taud_psd", "density_scan_import"),
-    "lr": ("fwhm_sizes", "density_scan_import"),
-    "lz": ("fwhm_sizes", "density_scan_import"),
+    "lr": ("density_scan_import",),
+    "lz": ("density_scan_import",),
 }
 
 #: The method names are the Fields page's panel titles (``fusion_ui.views.methods``), so that a point
@@ -80,8 +67,7 @@ LABELS = {
     "vr_2dcc": Label("v_R, 2DCC", "m/s"),
     "vz_2dcc": Label("v_Z, 2DCC", "m/s"),
     "nlags_2dcc": Label("number of lags the 2DCC slope rests on", NO_UNIT),
-    # The events the conditional average rests on: the count two_dca and the seed write at a reference
-    # pixel, and the blob's ``nevents``.
+    # The events the conditional average rests on: the blob's ``nevents``.
     "number_events": Label("number of events in the conditional average", NO_UNIT),
     # -- method_fields, time delay estimation off the record's cross-correlation, and on the
     # conditional average.
@@ -94,21 +80,11 @@ LABELS = {
     "vz3_catde": Label("v_Z, 3TDE on the conditional average", "m/s"),
     "vr2_catde": Label("v_R, 2TDE on the conditional average", "m/s"),
     "vz2_catde": Label("v_Z, 2TDE on the conditional average", "m/s"),
-    # -- blob_parameters, the structure behind each pixel's average. The contour is the one read at a
-    # level set per pixel, not at a fixed fraction of the maximum (velocity_contour's area_c).
-    "level": Label(
-        "contour level read off the average, fraction of its maximum", NO_UNIT
-    ),
+    # -- blob_parameters, the structure behind each pixel's average.
     "area": Label("area of the zero-lag contour", "m²"),
-    "lx_c": Label("ellipse fitted to the zero-lag contour, size in x", "m"),
-    "ly_c": Label("ellipse fitted to the zero-lag contour, size in y", "m"),
-    "theta_c": Label("ellipse fitted to the zero-lag contour, tilt", "rad"),
     # R varies along a row of the array and Z along a column: lr and lz are the FWHM in each direction.
     "lr": Label("radial FWHM of the conditional average", "m"),
     "lz": Label("poloidal FWHM of the conditional average", "m"),
-    "lx_f": Label("Gaussian fit to the conditional average, size in x", "m"),
-    "ly_f": Label("Gaussian fit to the conditional average, size in y", "m"),
-    "theta_f": Label("Gaussian fit to the conditional average, tilt", "rad"),
     # The two-sided exponential pulse fitted to the PSD of the pixel's own record.
     "taud_psd": Label("duration time τ_d from the PSD fit", "s"),
     "lambda_psd": Label("pulse asymmetry λ from the PSD fit, between 0 and 1", NO_UNIT),

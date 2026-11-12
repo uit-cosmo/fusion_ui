@@ -71,9 +71,6 @@ def test_default_params_sets_the_reference_pixel(indexed):
     spec = registry.get("taud_psd")
     params = precompute.default_params(spec, pixel=(2, 3))
     assert (params.refx, params.refy) == (2, 3)
-    # A nested refx/refy (the 2DCA-derived specs) is set too.
-    derived = precompute.default_params(registry.get("velocity_contour"), pixel=(1, 2))
-    assert (derived.two_dca.refx, derived.two_dca.refy) == (1, 2)
 
 
 def test_a_full_fill_computes_then_reads_the_cache(indexed):
