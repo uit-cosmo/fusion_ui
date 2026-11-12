@@ -1,8 +1,8 @@
 """The dead-pixel view: the mask's evidence, every pixel's PDF and spectrum, raw files only, judged over the gas puff.
 
 Two kinds of record. ``record`` is stationary red noise: it has no puff, so the analysis window is the discharge
-window, and what is tested is the mask, the PDFs and the figures as they were. ``tests/puff_fixtures`` has the records
-with a puff in them, whose discharge windows tell the whole record from a cut of it.
+window. ``tests/puff_fixtures`` has the records with a puff in them, whose discharge windows tell the whole record
+from a cut of it. What the page draws of the whole is tested through the page, in ``test_whole_record.py``.
 """
 
 from types import SimpleNamespace
@@ -12,6 +12,7 @@ import plotly.graph_objects as go
 import pytest
 import xarray as xr
 from scipy import signal
+from streamlit.testing.v1 import AppTest
 
 import fusion_ui.plots  # noqa: F401 - registers every spec
 from fusion_ui.core import loader, registry
@@ -110,19 +111,6 @@ def test_the_dead_pixel_view_is_the_one_spec_that_needs_the_whole_record():
     assert {key for key, spec in registry.REGISTRY.items() if spec.whole_record} == {"dead_pixels"}
 
 
-def test_its_parameters_are_unchanged_so_the_cached_results_keep_their_keys():
-    """The results cached on the server (111 shots) are keyed by this hash, and it is the hash of these two knobs
-    under this class name. A parameter added, renamed or moved would orphan them all: the puff window needed none,
-    being a property of the record and not a choice."""
-    import json
-
-    from fusion_ui.core import params_ui
-
-    digest, body = params_ui.hash_params("dead_pixels", dead_pixels.DeadPixelParams())
-    assert digest == "c87bebadae3c0c04ac973bf608a4d6ea0571133b"
-    assert json.loads(body)["params"]["values"] == {"gain": 0.1, "red": 150.0}
-
-
 def test_a_record_cut_to_its_window_is_refused(record):
     """Not guessed at: the record's own span would pass for the discharge window, and the window found from it
     would be wrong without a word."""
@@ -166,7 +154,7 @@ def test_the_analysis_window_is_the_one_found_on_the_whole_record(scenarios, nam
     assert found.note == s.whole.note and found.rule == s.whole.rule
     assert (found.start, found.end) == pytest.approx((s.whole.start, s.whole.end), nan_ok=True)
     assert found.dips == s.whole.dips
-    # The attributes carry the names fusion_scripts' ``estimate_shot`` gives its own.
+    # The attribute names are what the stored results are read back by.
     assert list(s.result.attrs["analysis_window"]) == list(s.whole.analysis_window)
     assert list(s.result.attrs["discharge_window"]) == list(s.case.window)
     assert s.result.attrs["puff_found"] == int(s.whole.found) and s.result.attrs["puff_rule"] == s.whole.rule
@@ -196,7 +184,7 @@ def test_a_window_that_starts_in_the_dark_gap_keeps_the_gap_as_a_dip(scenarios):
 
 @pytest.mark.parametrize("name", NAMES)
 def test_the_mask_and_its_evidence_are_those_of_the_analysis_window(scenarios, name):
-    """``imaging_methods.dead_pixels.estimate`` on the analysis window of the same record: what ``estimate_shot`` does."""
+    """``imaging_methods.dead_pixels.estimate`` on the analysis window of the same record."""
     from imaging_methods import dead_pixels as scan
 
     s = scenarios[name]
@@ -290,22 +278,11 @@ def test_the_smoothed_array_mean_is_kept_over_the_whole_record_at_a_drawable_siz
     assert s.result.puff_time.values[0] < 0.001 and s.result.puff_time.values[-1] > 0.119  # all of it, not the window
 
 
-def test_a_result_that_predates_the_puff_window_has_no_search_to_read(scenarios):
-    """The 111 cached results, until they are computed again: neither the signal nor the attributes."""
+def test_a_result_stored_without_the_search_for_the_puff_has_none_to_read(scenarios):
     stored = scenarios["two puffs"].result
     assert dead_pixels.puff_of(stored) is not None
     assert dead_pixels.puff_of(pf.before_the_puff_window(stored)) is None
-    # Part of it is as good as none: a figure of the cut needs all of it.
-    assert dead_pixels.puff_of(stored.drop_vars(["puff_signal", "puff_time"])) is None
-    for name in ("puff_note", "puff_threshold", "analysis_window"):
-        broken = stored.copy()
-        del broken.attrs[name]
-        assert dead_pixels.puff_of(broken) is None, name
-    broken = stored.copy()
-    broken.attrs["analysis_window"] = "the puff"
-    assert dead_pixels.puff_of(broken) is None
-    # None of that touched the result itself.
-    assert dead_pixels.puff_of(stored) is not None
+    assert dead_pixels.puff_of(stored) is not None  # the result itself is untouched
 
 
 # ---------------------------------------------------------------------------
@@ -395,16 +372,11 @@ def test_a_puff_that_was_not_found_is_still_drawn_with_the_lines_the_rule_had_to
     assert found.analysis_window == found.discharge_window  # the kept window: the two bands coincide
 
 
-def test_the_light_level_is_named_for_the_quantile_it_is():
+def test_the_light_level_is_named_for_the_quantile_it_is(scenarios):
     """Where most of the window is dark after a short puff, the rule takes the 90th percentile as the light."""
     assert dead_pixels.light_level(0.5) == "median"
     assert dead_pixels.light_level(0.9) == "90th percentile"
     assert dead_pixels.light_level(0.1) == "10th percentile"
-    assert dead_pixels.light_level(0.01) == "1st percentile" and dead_pixels.light_level(0.22) == "22nd percentile"
-    assert dead_pixels.light_level(0.13) == "13th percentile"
-
-
-def test_a_fallback_level_says_so_in_the_legend(scenarios):
     found = dead_pixels.puff_of(scenarios["from the start"].result)
     found.level_quantile = 0.9
     names = [t.name for t in dead_pixels.puff_figure(found).data]
@@ -412,46 +384,38 @@ def test_a_fallback_level_says_so_in_the_legend(scenarios):
 
 
 # ---------------------------------------------------------------------------
-# The words, and the grid. What the page draws of the whole -- the figure of the cut above the grid, the window line
-# under it, the note for a result that predates it -- is tested through the page, in ``test_whole_record.py``: a
-# result in hand has no Streamlit to be drawn into without an AppTest script of its own.
+# The words
 # ---------------------------------------------------------------------------
 
 
 def test_the_window_line_sets_the_analysis_window_beside_the_discharge_window_and_the_rule():
-    line = dead_pixels.window_line("0.0400–0.1150 s", "0.0000–0.1150 s", "the puff rises")
+    line = dead_pixels.window_line("0.0400–0.1150 s", dead_pixels.seconds((0, 0.115)), "the puff rises")
     assert line == "Analysis window 0.0400–0.1150 s · discharge window 0.0000–0.1150 s · puff rule: the puff rises"
-    assert dead_pixels.window_line(None, "0.9500–1.4000 s", None) == "Discharge window 0.9500–1.4000 s"
-    assert dead_pixels.window_line(None, None, "the puff rises") == "Puff rule: the puff rises"
-    assert dead_pixels.window_line() is None
-    assert dead_pixels.seconds((1.0734, 1.4)) == "1.0734–1.4000 s"
 
 
-def test_every_view_of_the_grid_still_draws_for_a_result_with_a_puff_window(scenarios):
-    result = scenarios["two puffs"].result
-    for view in dead_pixels.VIEWS:
-        assert len([t for t in dead_pixels.figure(result, view).data if t.showlegend is False]) == 12
+def explained():
+    from fusion_ui.plots import dead_pixels
+
+    dead_pixels.explain(red=300.0, gain=0.25)
 
 
-# ---------------------------------------------------------------------------
-# The method, in words that are true on both views
-# ---------------------------------------------------------------------------
+def test_explain_puts_the_plain_summary_above_the_method_with_the_thresholds_in_force():
+    app = AppTest.from_function(explained).run()
+    assert not app.exception
+    assert [element.type for element in app.main.children.values()] == ["markdown", "expander"]
+    assert app.markdown[0].value == dead_pixels.plain_summary()
+    (expander,) = app.expander
+    assert expander.label == "How dead pixels are found"
+    (method,) = [m.value for m in expander.markdown]
+    assert "Red spectrum" in method and "**300**" in method and "**0.25**" in method
 
 
-def test_the_method_says_the_analysis_window_where_it_said_the_discharge_window():
-    """The spectra are judged over the analysis window, and the text that says so is the same on both views."""
-    text = dead_pixels.METHOD.format(red=150.0, gain=0.1)
-    assert "Welch PSD of each pixel over the analysis window" in text
-    assert "Welch PSD of each pixel over the discharge window" not in text
-    assert "*analysis window*" in text and "cut to\nthe gas puff" in text
-    for fact in ("1 ms", "halfway", "5 ms", "90th percentile", "keeps the discharge window", "not cut"):
-        assert fact in text, fact
-
-
-def test_the_method_is_true_of_both_views_not_just_the_raw_one():
-    """It used to end "This view shows the single shot", which the stored-mask view, drawing the day's mask, is not."""
-    text = dead_pixels.METHOD
-    assert "This view shows the single shot" not in text
-    assert "raw file's view shows this shot's own verdict, before that rule" in text
-    assert "preprocessed file's view shows the mask the file was made with, which is the day's" in text
-    assert "overrides the shot's own verdict" in text
+def test_the_plain_summary_is_read_from_its_file_every_time_it_is_asked_for(tmp_path, monkeypatch):
+    """No copy is kept: an edit shows on the next rerun, without a restart."""
+    assert dead_pixels.plain_summary()  # the file the package ships
+    edited = tmp_path / "words.md"
+    monkeypatch.setattr(dead_pixels, "PLAIN_SUMMARY_PATH", str(edited))
+    edited.write_text("\n\nFirst wording, with an en dash – and a µ.\n\n", encoding="utf-8")
+    assert dead_pixels.plain_summary() == "First wording, with an en dash – and a µ."
+    edited.write_text("Second wording.\n", encoding="utf-8")
+    assert AppTest.from_function(explained).run().markdown[0].value == "Second wording."

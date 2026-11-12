@@ -1,15 +1,10 @@
-"""Every cached spec, through netCDF and back.
+"""Every cached single-shot spec, through netCDF and back.
 
-The gap this closes: ``store.compute_and_store`` returns the *in-memory*
-result on a cache miss, never the blob it just wrote. So a spec that stores
-something netCDF cannot represent -- a bool, an object array, a dimension the
-reload cannot reconstruct -- renders perfectly on the first click and breaks on
-every one after it, and no per-spec test catches that, because they all call
-``compute`` directly.
-
-This is deliberately parametrised over the registry rather than written once
-per spec: the next spec added gets the check for free, which is the only way a
-guard like this stays true.
+``store.compute_and_store`` returns the in-memory result on a cache miss, not
+the blob it just wrote. So a spec that stores something netCDF cannot hold (a
+bool, an object array) renders on the first click and breaks on every one
+after it, and a test that calls ``compute`` directly does not see it.
+Parametrised over the registry, so a new spec gets the check too.
 """
 
 import dataclasses
@@ -23,41 +18,28 @@ from fusion_ui.core import loader, registry, store
 
 CENTRE = 4  # the reference pixel on the 9x9 blob fixture
 
-#: Specs whose render needs a Streamlit runtime (a slider, a click target) and
-#: so cannot be called from a plain test. The round trip of their *result* is
-#: still checked; only the drawing is skipped.
-DRAWS_INTO_STREAMLIT = {"two_dca", "dead_pixels"}
+#: Its render draws into Streamlit, so only the round trip of its result is
+#: checked here.
+DRAWS_INTO_STREAMLIT = {"dead_pixels"}
 
-#: Live specs have no blob to round trip, and the probe specs want an ASP file
-#: rather than the imaging fixture. The three decorrelation products want a
-#: preprocessed record with its dead-pixel mask stored (this fixture has none),
-#: and the bank under the other two is batch only. Their round trip is
-#: ``tests/test_products.py``'s: the stored blob equals the API's, bit for bit.
-SKIP = {
-    "raw_frames",
-    "probe_trace",
-    "pixel_averages",
-    "method_fields",
-    "blob_parameters",
-}
+#: The three products want a preprocessed record with its dead-pixel mask
+#: stored, and their round trip is ``tests/test_products.py``'s.
+PRODUCTS = {"pixel_averages", "method_fields", "blob_parameters"}
 
 
 def cached_imaging_specs():
     return [
         spec
         for key, spec in sorted(registry.REGISTRY.items())
-        if spec.cached and key not in SKIP and "apd" in spec.diagnostics
+        if spec.cached and key not in PRODUCTS and "apd" in spec.diagnostics
     ]
 
 
 def at_centre(params):
-    """Point whatever reference-pixel fields this spec has at the blob."""
-    for holder in (params, getattr(params, "two_dca", None)):
-        if holder is None:
-            continue
-        for axis, value in (("refx", CENTRE), ("refy", CENTRE)):
-            if hasattr(holder, axis):
-                setattr(holder, axis, value)
+    """Point the reference pixel, where the spec has one, at the blob."""
+    for axis in ("refx", "refy"):
+        if hasattr(params, axis):
+            setattr(params, axis, CENTRE)
     return params
 
 
@@ -92,19 +74,14 @@ def cache(monkeypatch, tmp_path):
 def test_a_stored_result_survives_the_cache_and_still_renders(
     spec, conn, cache, blobs, target
 ):
-    """Compute it, then ask the store for it *again*.
-
-    The second call is the one that matters: it finds the ledger row, reads the
-    blob back off disk, and hands ``render`` a dataset that has been through
-    netCDF encoding. That is what the page does on every visit after the first.
-    """
+    """Compute it, then ask the store for it again: the second call reads the
+    blob back off disk, as the page does on every visit after the first."""
     params = at_centre(spec.params())
     if not spec.accepts(target.preprocessed):
         target = dataclasses.replace(target, preprocessed=not target.preprocessed)
 
-    # What the page and precompute hand a spec that declares it needs the whole
-    # record (``loader.input_for``): the record as it is, with the discharge window
-    # it would have been cut to. The fixture is the record, all of it.
+    # A whole-record spec is handed the record with its discharge window, as
+    # ``loader.input_for`` does. The fixture is the record, all of it.
     record = (
         loader.whole_record(blobs, target.t_start, target.t_end)
         if spec.whole_record

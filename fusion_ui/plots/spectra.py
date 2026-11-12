@@ -1,14 +1,9 @@
-"""Duration time from a power spectral density fit.
+"""Duration time from a power spectral density fit: the Welch spectrum of one
+pixel, fitted with the two-sided-exponential FPP model.
 
-The first *cached* spec, and the pattern every later analysis copies: a
-``compute`` that returns a small derived ``xr.Dataset``, a ``render`` that only
-reads it, and a ``scalars`` that says what belongs in the multi-shot store.
-None of the three touches Streamlit, the database or the filesystem -- the
-store does all of that.
-
-Ported from ``density_scan/utils.py:get_taud_from_psd``, so a value computed
-here is directly comparable with the ``taud_psd`` / ``lambda_psd`` rows the
-``density_scan_import`` seed writes for the same shot and pixel.
+A cached spec computed straight off the frames, and the one to copy for
+another: ``compute`` returns a small derived ``xr.Dataset``, ``render`` only
+reads it, and ``scalars`` says what goes to the multi-shot store.
 """
 
 from dataclasses import dataclass, field
@@ -24,9 +19,8 @@ from fusion_ui.core import loader, registry
 
 
 def _apd_taud_defaults():
-    # nperseg = 2e3 rather than TaudEstimationParams' own 1e3: this is what
-    # density_scan ran, and matching it is what makes a fresh number and a
-    # seeded one comparable.
+    # The APD defaults, with nperseg = 2e3 where TaudEstimationParams' own
+    # default is 1e3.
     return im.get_default_apd_method_params().taud_estimation
 
 
@@ -43,11 +37,7 @@ class TaudPsdParams:
 
 
 def choices(ds, path, chosen):
-    """Pixel indices, bounded by the array that was actually opened.
-
-    A free number input would let someone ask for pixel 40 of a 9x10 array and
-    get an ``IndexError`` recorded as a failed run.
-    """
+    """Pixel indices, bounded by the array that was opened."""
     if path == "refx":
         return tuple(range(ds.sizes["x"]))
     if path == "refy":
@@ -55,15 +45,9 @@ def choices(ds, path, chosen):
     return None
 
 
-def _image_variable(ds):
-    """Alias for :func:`fusion_ui.core.loader.image_variable`, kept for
-    backwards compatibility."""
-    return loader.image_variable(ds)
-
-
 def compute(ds, params):
     """Welch PSD of one pixel, plus the two-sided-exponential FPP fit to it."""
-    series = ds[_image_variable(ds)].isel(x=int(params.refx), y=int(params.refy)).values
+    series = ds[loader.image_variable(ds)].isel(x=int(params.refx), y=int(params.refy)).values
     dt = im.get_dt(ds)
     settings = params.taud_estimation
 
@@ -74,9 +58,7 @@ def compute(ds, params):
         series, dt, cutoff=settings.cutoff, nperseg=settings.nperseg
     )
     # The plotted spectrum has to be the one that was fitted, so it comes from
-    # the estimator rather than from a second Welch call here that could drift
-    # out of step with its normalisation. Private for now; worth promoting
-    # upstream, not worth blocking on.
+    # the estimator's own (private) method, not from a second Welch call here.
     omega, psd = estimator._get_second_order_statistic(
         series, dt, settings.cutoff, nperseg=settings.nperseg
     )
@@ -130,9 +112,8 @@ def render(result, params, target):
 def overlay(items, params, target):
     """Every selected pixel's PSD and its fit on one log-log axis.
 
-    One colour per pixel from a cycle, the fit dashed, both under one
-    ``legendgroup`` -- so clicking the legend hides the pair -- with the
-    duration time in the legend name. Mirrors :func:`render`.
+    One colour per pixel, the fit dashed, both under one ``legendgroup`` so
+    that a click on the legend hides the pair.
     """
     from plotly.colors import qualitative
 
@@ -177,9 +158,7 @@ def overlay(items, params, target):
 
 
 def scalars(result):
-    """Written at the pixel, not at the shot: which pixel was fitted is the
-    whole content of the number, and it is how the seeded density_scan rows are
-    laid out too."""
+    """Written at the pixel that was fitted."""
     x, y = int(result["refx"]), int(result["refy"])
     return {
         (x, y, "taud_psd"): float(result["taud"]),
